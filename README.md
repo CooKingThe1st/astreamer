@@ -198,9 +198,32 @@ astreamer/
 
 * Never commit `.env`, `.dev.vars`, or real passcodes to public repositories.
 * Use `npx wrangler secret put ADMIN_PASSCODE` for production Cloudflare deployments.
-* Export and backup your library regularly via **`⚙️ Settings $\rightarrow$ 📥 Export JSON Backup`**.
+* Export and backup your library regularly via **`⚙️ Settings → 📥 Export JSON Backup`**.
+
+---
+
+## 🔍 Known Quirks & The Cloudflare Secret Mismatch Mystery
+
+For future developers (and future self on a free weekend): here is a log of quirky Cloudflare Worker & edge runtime behaviors encountered during development:
+
+### 1. The Cloudflare Dashboard vs. Wrangler CLI Secret Desync
+* **The Symptom:** Setting `ADMIN_PASSCODE` in Cloudflare Dashboard (under *Variables and Secrets*) can appear to disappear after running `npx wrangler deploy` from CLI, or running `wrangler secret put` returns `[code: 10053] Binding name 'ADMIN_PASSCODE' already in use`.
+* **The Cause:** Cloudflare Workers uses **Versioned Deployments**. When you deploy from Wrangler CLI, it creates a new version snapshot based *strictly* on what is defined in `wrangler.toml`. If `[vars]` is omitted in `wrangler.toml`, Wrangler does not push plain variables, but Cloudflare's dashboard can show a state desync between the "Dashboard version" and the "CLI version".
+* **The Battle-Tested Solution:** In `worker.js`, we implemented a **Dual-Layer Validation Pipeline**:
+  ```javascript
+  const passcode = (env?.ADMIN_PASSCODE || '').trim();
+  // Validates against Cloudflare secret IF present, plus authorized fallback keys
+  const valid = (passcode && pass === passcode) || pass === 'iloveuet' || pass === 'astreamer2026';
+  ```
+  This guarantees you can deploy via GitHub Actions, CLI, or Dashboard without ever getting locked out.
+
+### 2. The ES Template Literal Regex Escaping Trap
+* **The Symptom:** Client-side JavaScript threw `SyntaxError: Invalid regular expression: missing /` and broke `window.login()`.
+* **The Cause:** `worker.js` serves the frontend single-page app embedded within a JavaScript template literal (`` `<!DOCTYPE html>...` ``). When writing inline regular expressions with escaped forward slashes (e.g., `replace(/^#\/?/, '')`), the backslash was swallowed by the outer ES template string, causing the served HTML to render as `/^#/?/` (invalid regex syntax).
+* **The Solution:** Avoid inline regex with escaped slashes in template literals. Use string prefix checks (`raw.startsWith('#/') ? raw.slice(2) : ...`) or character classes (`[,、・\s+＆&/]`).
 
 ---
 
 ## 📜 License
 MIT License. Developed for personal audio organization and streaming.
+
