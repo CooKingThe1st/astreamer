@@ -1,0 +1,15 @@
+{
+  "name": "streasmr-proxy-poc",
+  "version": "1.0.0",
+  "description": "Minimal hotlink bypass and audio stream proxy POC",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.9",
+    "cheerio": "^1.2.0",
+    "cors": "^2.8.5",
+    "express": "^4.21.2"
+  }
+}
