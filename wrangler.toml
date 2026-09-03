@@ -3,7 +3,7 @@ main = "worker.js"
 compatibility_date = "2024-04-01"
 
 [vars]
-ADMIN_PASSCODE = "iloveuet"
+ADMIN_PASSCODE = "your_admin_passcode_here"
 
 [[kv_namespaces]]
 binding = "ASTREAMER_KV"

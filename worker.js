@@ -1,4 +1,4 @@
-const DEFAULT_PASSCODE = 'iloveuet';
+const DEFAULT_PASSCODE = 'astreamer2026';
 
 // 26 SFW Cover Arts for PSFW Disguise Mode
 const SFW_DISGUISE_LIST = [
@@ -50,13 +50,45 @@ async function saveDb(env, data) {
   }
 }
 
-// Resolver: Universal Multi-Layer DLsite Extractor + Direct CDN Probe
+// Resolver: Unified Multi-Source (ASMR.one + DLsite API + Product Page HTML + CDN Probe)
 async function resolveRjWork(rjCode) {
   const cleanRj = rjCode.toUpperCase();
-  let dlsiteMeta = null;
-  const divisions = ['maniax', 'home', 'girls', 'pro', 'books'];
+  const cleanNum = cleanRj.replace(/^RJ/i, '');
 
-  // Layer 1: Official JSON APIs across divisions
+  let title = '';
+  let circle = '';
+  let cv = '';
+  const tags = [];
+  let coverUrl = '';
+  let isAdult = true;
+
+  // Source 1: ASMR.one Public API (Rich tags & Voice Actors)
+  try {
+    const asmrRes = await fetch(`https://api.asmr-200.com/api/work/${cleanNum}`, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    });
+    if (asmrRes.ok) {
+      const data = await asmrRes.json();
+      if (data) {
+        if (data.title) title = data.title;
+        if (data.circle?.name) circle = data.circle.name;
+        if (Array.isArray(data.vas) && data.vas.length > 0) {
+          cv = data.vas.map(v => v.name).join(', ');
+        }
+        if (Array.isArray(data.tags)) {
+          data.tags.forEach(t => {
+            const name = t.name || t;
+            if (name && !tags.includes(name)) tags.push(name);
+          });
+        }
+      }
+    }
+  } catch (e) {}
+
+  // Source 2: Official DLsite JSON API
+  const divisions = ['maniax', 'home', 'girls', 'pro', 'books'];
   for (const div of divisions) {
     try {
       const dlsiteRes = await fetch(`https://www.dlsite.com/${div}/api/=/product.json?workno=${cleanRj}`, {
@@ -69,39 +101,37 @@ async function resolveRjWork(rjCode) {
         const data = await dlsiteRes.json();
         if (data && data.length > 0) {
           const item = data[0];
-          let cv = '';
-          if (Array.isArray(item.voice_actor)) cv = item.voice_actor.join(', ');
-          else if (typeof item.voice_actor === 'string') cv = item.voice_actor;
-          else if (item.creators && item.creators.voice_actor) {
-            cv = item.creators.voice_actor.map(v => v.name || v).join(', ');
+          if (!title) title = item.work_name || '';
+          if (!circle) circle = item.maker_name || '';
+          if (!cv || cv === 'N/A') {
+            if (Array.isArray(item.voice_actor)) cv = item.voice_actor.join(', ');
+            else if (typeof item.voice_actor === 'string') cv = item.voice_actor;
+            else if (item.creators && item.creators.voice_actor) {
+              cv = item.creators.voice_actor.map(v => v.name || v).join(', ');
+            }
           }
-
-          let imgUrl = typeof item.image_main === 'string' ? item.image_main : (item.image_main?.url || item.work_image || '');
-          if (imgUrl.startsWith('//')) imgUrl = 'https:' + imgUrl;
-          if (!imgUrl || !imgUrl.startsWith('http')) imgUrl = `https://pic.weeabo0.xyz/${cleanRj}_img_main.jpg`;
-
-          const isAdult = item.age_category === 3 || div === 'maniax' || div === 'girls' ||
-            (item.genres || []).some(g => {
-              const name = (g.name || g).toLowerCase();
-              return NSFW_KEYWORDS.some(k => name.includes(k));
+          if (Array.isArray(item.genres)) {
+            item.genres.forEach(g => {
+              const name = g.name || g;
+              if (name && !tags.includes(name)) tags.push(name);
             });
-
-          dlsiteMeta = {
-            title: item.work_name || '',
-            circle: item.maker_name || '',
-            cv: cv || 'N/A',
-            rawCoverUrl: imgUrl,
-            tags: (item.genres || []).map(g => g.name || g),
-            isNsfw: isAdult
-          };
+          }
+          if (!coverUrl) {
+            let img = item.image_main?.url || item.image_main || item.work_image || '';
+            if (typeof img === 'string') {
+              if (img.startsWith('//')) img = 'https:' + img;
+              if (img.startsWith('http')) coverUrl = img;
+            }
+          }
+          if (item.age_category === 3 || div === 'maniax' || div === 'girls') isAdult = true;
           break;
         }
       }
     } catch (e) {}
   }
 
-  // Layer 2: Deep HTML Product Page Scraper
-  if (!dlsiteMeta || !dlsiteMeta.title || dlsiteMeta.tags.length === 0) {
+  // Source 3: DLsite Product Page HTML
+  if (!title || !cv || cv === 'N/A' || tags.length < 3) {
     for (const div of divisions) {
       try {
         const pageRes = await fetch(`https://www.dlsite.com/${div}/work/=/product_id/${cleanRj}.html/?locale=ja_JP`, {
@@ -114,135 +144,120 @@ async function resolveRjWork(rjCode) {
 
         if (pageRes.ok) {
           const html = await pageRes.text();
+          const cleanHtml = html.replace(/<!--[\s\S]*?-->/g, '');
 
           // Title
-          let title = '';
-          const titleTagMatch = html.match(/<title>([\s\S]*?)<\/title>/i);
-          if (titleTagMatch) {
-            let full = titleTagMatch[1].trim().replace(/\s*\|\s*DLsite.*$/i, '').trim();
-            const circleBracketMatch = full.match(/\[(.*?)\]\s*$/);
-            if (circleBracketMatch && !dlsiteMeta?.circle) {
-              full = full.replace(/\[(.*?)\]\s*$/, '').trim();
+          if (!title) {
+            const titleTagMatch = html.match(/<title>([\s\S]*?)<\/title>/i);
+            if (titleTagMatch) {
+              let full = titleTagMatch[1].trim().replace(/\s*\|\s*DLsite.*$/i, '').trim();
+              const circleBracketMatch = full.match(/\[(.*?)\]\s*$/);
+              if (circleBracketMatch && !circle) {
+                circle = circleBracketMatch[1].trim();
+                full = full.replace(/\[(.*?)\]\s*$/, '').trim();
+              }
+              title = full.replace(/【[^】]*%OFF[^】]*】/gi, '').replace(/【[^】]*特典[^】]*】/gi, '').trim();
             }
-            title = full.replace(/【[^】]*%OFF[^】]*】/gi, '').replace(/【[^】]*特典[^】]*】/gi, '').trim();
           }
 
-          // Circle Name (From LD+JSON Breadcrumb position 3 or /maker_id/ link)
-          let circle = dlsiteMeta?.circle || '';
-          if (!circle) {
-            const ldMatch = html.match(/<script type=["']application\/ld\+json["']>([\s\S]*?)<\/script>/i);
-            if (ldMatch) {
-              try {
-                const ldData = JSON.parse(ldMatch[1]);
-                if (ldData['@type'] === 'BreadcrumbList' && Array.isArray(ldData.itemListElement)) {
-                  const circleObj = ldData.itemListElement.find(it => it.position === 3);
-                  if (circleObj && circleObj.name) circle = circleObj.name;
-                }
-              } catch(e) {}
-            }
-          }
+          // Circle
           if (!circle) {
             const makerLinkMatch = html.match(/href=["'][^"']*\/maker_id\/[^"']*["'][^>]*>([^<]+)<\/a>/i);
             if (makerLinkMatch) circle = makerLinkMatch[1].trim();
           }
 
-          // Voice Actor (CV) - Clean multi-source parser
-          let cv = dlsiteMeta?.cv && dlsiteMeta.cv !== 'N/A' && !dlsiteMeta.cv.includes('-->') && !dlsiteMeta.cv.includes('<') ? dlsiteMeta.cv : '';
-          if (!cv) {
-            const cleanHtml = html.replace(/<!--[\s\S]*?-->/g, '');
-            const cvList = [];
+          // Outline Table (声優 & ジャンル)
+          const outlineRows = cleanHtml.matchAll(/<th[^>]*>([\s\S]*?)<\/th>\s*<td[^>]*>([\s\S]*?)<\/td>/gi);
+          for (const row of outlineRows) {
+            const th = row[1].replace(/<[^>]+>/g, '').trim();
+            const tdHtml = row[2];
+            const tdText = tdHtml.replace(/<[^>]+>/g, '').trim();
 
-            // Pattern A: DLsite Outline Table
-            const outlineMatch = cleanHtml.match(/<th[^>]*>(?:声優|CV|キャスト|ボイス)<\/th>\s*<td[^>]*>([\s\S]*?)<\/td>/i);
-            if (outlineMatch) {
-              const actorLinks = outlineMatch[1].matchAll(/>([^<]+)<\/a>/g);
-              for (const m of actorLinks) {
+            if ((!cv || cv === 'N/A') && (th.includes('声優') || th.includes('CV') || th.includes('キャスト') || th.includes('ボイス'))) {
+              const cvList = [];
+              const linkMatches = tdHtml.matchAll(/>([^<]+)<\/a>/g);
+              for (const m of linkMatches) {
                 const name = m[1].replace(/様|さん|氏|他/g, '').trim();
-                if (name && name.length >= 2 && !['DLsite', '声優', '同人'].includes(name) && !cvList.includes(name)) {
-                  cvList.push(name);
-                }
+                if (name && name.length >= 2 && !cvList.includes(name)) cvList.push(name);
               }
-            }
-
-            // Pattern B: Bracketed CV in description / text
-            if (cvList.length === 0) {
-              const textToSearch = cleanHtml;
-              const bracketMatches = textToSearch.matchAll(/(?:【|\(|（|\[)\s*(?:CV|声優|ボイス)[.:：\s]*([^】)）\]\r\n<]+)(?:】|\)|）|\])/gi);
-              for (const bm of bracketMatches) {
-                bm[1].split(/[/,、・\s+＆&]+/).forEach(c => {
-                  const clean = c.replace(/様|さん|氏|他|／/g, '').trim();
-                  if (clean && clean.length >= 2 && !['DLsite', '同人', 'ASMR', 'R18'].includes(clean) && !cvList.includes(clean)) {
+              if (cvList.length === 0) {
+                tdText.split(/[/,、・\n\r\t]+/).forEach(n => {
+                  const clean = n.replace(/様|さん|氏|他/g, '').trim();
+                  if (clean && clean.length >= 2 && !['DLsite', '声優', '同人'].includes(clean) && !cvList.includes(clean)) {
                     cvList.push(clean);
                   }
                 });
-                if (cvList.length > 0) break;
               }
+              if (cvList.length > 0) cv = cvList.join(', ');
             }
 
-            if (cvList.length > 0) cv = cvList.join(', ');
+            if (th.includes('ジャンル') || th.includes('シリーズ名')) {
+              tdText.split(/[/,、・\n\r\t]+/).forEach(g => {
+                const clean = g.trim();
+                if (clean && clean.length >= 2 && !['DLsite', '同人', 'R18'].includes(clean) && !tags.includes(clean)) {
+                  tags.push(clean);
+                }
+              });
+            }
           }
 
-          // Tags / Genres
-          const tags = dlsiteMeta?.tags && dlsiteMeta.tags.length > 0 ? [...dlsiteMeta.tags] : [];
-          const genreMatches = html.matchAll(/\/(?:genre|keyword|taxonomy)\/[^"'>]+["'][^>]*>([^<]+)<\/a>/gi);
-          for (const m of genreMatches) {
-            const t = m[1].trim();
-            if (t && !tags.includes(t) && !['DLsite', '同人', 'R18', 'サークル一覧'].includes(t)) tags.push(t);
-          }
-
-          // ASMR Keywords extraction
-          const CANDIDATE_KEYWORDS = ['催眠', 'ASMR', 'バイノーラル', 'ダミヘ', '耳舐め', '囁き', 'ご奉仕', '奉仕', '甘やかし', '癒し', 'オナサポ', '手コキ', '中出し', '乳首', '巨乳', '爆乳', 'お姉さん', '後輩', '同級生', '幼馴染', 'メイド', '風紀委員'];
-          CANDIDATE_KEYWORDS.forEach(kw => {
-            if (html.includes(kw) && !tags.includes(kw)) tags.push(kw);
-          });
-
-          // Always add Voice Actors as tags/genres!
-          if (cv && cv !== 'N/A') {
-            cv.split(/[/,、・\s]+/).map(s => s.trim()).filter(Boolean).forEach(c => {
-              if (c.length >= 2 && !tags.includes(c)) tags.push(c);
-            });
+          // Bracketed CV
+          if (!cv || cv === 'N/A') {
+            const bracketMatches = cleanHtml.matchAll(/(?:【|\(|（|\[)\s*(?:CV|声優|ボイス)[.:：\s]*([^】)）\]\r\n<]+)(?:】|\)|）|\])/gi);
+            for (const bm of bracketMatches) {
+              const cvList = [];
+              bm[1].split(/[/,、・\s+＆&]+/).forEach(c => {
+                const clean = c.replace(/様|さん|氏|他|／/g, '').trim();
+                if (clean && clean.length >= 2 && !['DLsite', '同人', 'ASMR', 'R18'].includes(clean) && !cvList.includes(clean)) {
+                  cvList.push(clean);
+                }
+              });
+              if (cvList.length > 0) {
+                cv = cvList.join(', ');
+                break;
+              }
+            }
           }
 
           // Cover Image
-          let imgUrl = dlsiteMeta?.rawCoverUrl || '';
-          if (!imgUrl) {
+          if (!coverUrl) {
             const ogImgMatch = html.match(/<meta\s+property=["']og:image["']\s+content=["']([^"']+)["']/i);
-            if (ogImgMatch) imgUrl = ogImgMatch[1];
-            if (imgUrl.startsWith('//')) imgUrl = 'https:' + imgUrl;
+            if (ogImgMatch) coverUrl = ogImgMatch[1];
+            if (coverUrl.startsWith('//')) coverUrl = 'https:' + coverUrl;
           }
-          if (!imgUrl) imgUrl = `https://pic.weeabo0.xyz/${cleanRj}_img_main.jpg`;
 
-          dlsiteMeta = {
-            title: title || dlsiteMeta?.title || `Work ${cleanRj}`,
-            circle: circle || dlsiteMeta?.circle || 'ASMR Circle',
-            cv: cv || 'N/A',
-            rawCoverUrl: imgUrl,
-            tags: tags.length > 0 ? tags : ['ASMR', 'Audio'],
-            isNsfw: div === 'maniax' || div === 'girls' || html.includes('R18') || html.includes('18禁')
-          };
           break;
         }
       } catch (e) {}
     }
   }
 
+  if (cv && cv !== 'N/A') {
+    cv.split(/[/,、・\s+＆&]+/).map(s => s.trim()).filter(Boolean).forEach(c => {
+      if (c.length >= 2 && !tags.includes(c)) tags.push(c);
+    });
+  }
+
+  if (!coverUrl) coverUrl = `https://pic.weeabo0.xyz/${cleanRj}_img_main.jpg`;
+
   const m3u8Url = `https://v.weeab0o.xyz/${cleanRj}.m3u8`;
-  const coverUrl = dlsiteMeta?.rawCoverUrl || `https://pic.weeabo0.xyz/${cleanRj}_img_main.jpg`;
-  let hasM3u8 = false;
+  let hasHls = false;
+  let tracks = [];
 
   try {
-    const m3u8Res = await fetch(m3u8Url, {
-      headers: { 'Referer': 'https://japaneseasmr.com/', 'User-Agent': 'Mozilla/5.0' }
+    const headRes = await fetch(m3u8Url, {
+      method: 'GET',
+      headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://japaneseasmr.com/' }
     });
-    if (m3u8Res.ok) {
-      const text = await m3u8Res.text();
-      if (text.includes('#EXTM3U')) hasM3u8 = true;
+    if (headRes.ok) {
+      const manifest = await headRes.text();
+      if (manifest.includes('#EXTM3U')) {
+        hasHls = true;
+      }
     }
   } catch (e) {}
 
-  const tracks = [];
-
-  if (hasM3u8) {
+  if (hasHls) {
     tracks.push({
       id: 1,
       title: '01. Full Audio Session (HLS Master)',
@@ -261,7 +276,6 @@ async function resolveRjWork(rjCode) {
       { id: 4, title: 'Track 4 (トラック4)', url: `https://v.weeab0o.xyz/${cleanRj} 4.mp3` },
       { id: 5, title: 'Track 5 (トラック5)', url: `https://v.weeab0o.xyz/${cleanRj} 5.mp3` }
     ];
-
     for (const c of candidates) {
       try {
         const headRes = await fetch(c.url, {
@@ -280,9 +294,7 @@ async function resolveRjWork(rjCode) {
             poster: `/image-proxy?url=${encodeURIComponent(coverUrl)}`
           });
         }
-      } catch (e) {
-        if (c.id === 1) break;
-      }
+      } catch (e) { if (c.id === 1) break; }
     }
   }
 
@@ -292,19 +304,18 @@ async function resolveRjWork(rjCode) {
 
   return {
     rjCode: cleanRj,
-    title: dlsiteMeta?.title || `Work ${cleanRj}`,
-    circle: dlsiteMeta?.circle || 'ASMR Circle',
-    cv: dlsiteMeta?.cv || 'N/A',
-    tags: dlsiteMeta?.tags && dlsiteMeta.tags.length > 0 ? dlsiteMeta.tags : ['ASMR', 'Audio'],
+    title: title || `Work ${cleanRj}`,
+    circle: circle || 'ASMR Circle',
+    cv: cv || 'N/A',
+    tags: tags.length > 0 ? tags : ['ASMR', 'Audio'],
     coverUrl: `/image-proxy?url=${encodeURIComponent(coverUrl)}`,
     rawCoverUrl: coverUrl,
-    hasHls: hasM3u8,
-    isNsfw: dlsiteMeta ? (dlsiteMeta.isNsfw ?? true) : true,
+    hasHls: hasHls,
+    isNsfw: isAdult,
     totalTracks: tracks.length,
     tracks,
     addedAt: new Date().toISOString(),
-    favorite: false,
-    source: 'RESOLVED'
+    favorite: false
   };
 }
 
@@ -707,7 +718,7 @@ export default {
 
     // Settings API
     if (pathname === '/api/settings' && request.method === 'GET') {
-      const db = await getDb(env);
+await saveDb(env, db);
       return json(db.settings || { contentMode: 'NSFW' });
     }
 
@@ -733,68 +744,67 @@ const INDEX_HTML = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>aStreamer — Personal Audio & ASMR Suite</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <title>🐧 aStreamer | Zero-Cost Edge ASMR & Audio Streaming</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🐧</text></svg>">
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7/dist/hls.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
   <style>
     :root {
-      --bg-main: #0c0d12;
-      --bg-sidebar: #12141a;
-      --bg-card: #181a24;
-      --bg-card-hover: #222533;
+      --bg-main: #0a0a0f;
+      --bg-card: #12131a;
+      --bg-card-hover: #181a24;
+      --border: rgba(255, 255, 255, 0.08);
       --accent: #ff3366;
-      --accent-glow: rgba(255, 51, 102, 0.35);
-      --accent-hover: #ff4d7d;
-      --text-main: #ffffff;
-      --text-muted: #9499ad;
-      --border: #262938;
-      --player-bg: #151722;
+      --accent-hover: #e02456;
+      --text-main: #f3f4f6;
+      --text-muted: #9ca3af;
+      --sidebar-w: 240px;
+      --player-bg: #101118;
     }
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', -apple-system, sans-serif; }
-    body { background: var(--bg-main); color: var(--text-main); height: 100vh; overflow: hidden; display: flex; }
-    .app-sidebar { width: 260px; min-width: 260px; background: var(--bg-sidebar); border-right: 1px solid var(--border); display: flex; flex-direction: column; padding: 1.5rem 1rem; height: calc(100vh - 84px); }
-    .logo-area { display: flex; align-items: center; gap: 10px; padding: 0 0.5rem 1.5rem; border-bottom: 1px solid var(--border); margin-bottom: 1.2rem; }
-    .logo-icon { width: 36px; height: 36px; background: linear-gradient(135deg, #ff3366, #9b51e0); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; font-weight: 800; }
-    .logo-title { font-size: 1.3rem; font-weight: 800; background: linear-gradient(135deg, #ff3366, #b066fe); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-    .nav-section { display: flex; flex-direction: column; gap: 4px; flex: 1; overflow-y: auto; }
-    .nav-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); padding: 0.8rem 0.5rem 0.4rem; font-weight: 700; }
-    .nav-item { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 8px; color: var(--text-muted); text-decoration: none; font-weight: 600; font-size: 0.92rem; cursor: pointer; transition: all 0.15s ease; }
-    .nav-item:hover { color: #fff; background: rgba(255,255,255,0.05); }
-    .nav-item.active { color: #fff; background: var(--accent); }
-    .app-main { flex: 1; height: calc(100vh - 84px); overflow-y: auto; display: flex; flex-direction: column; }
-    .topbar { display: flex; align-items: center; justify-content: space-between; padding: 1.2rem 2rem; background: rgba(12, 13, 18, 0.8); backdrop-filter: blur(12px); position: sticky; top: 0; z-index: 20; border-bottom: 1px solid rgba(255,255,255,0.05); }
-    .search-box { display: flex; align-items: center; gap: 10px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 24px; padding: 8px 18px; width: 340px; }
-    .search-box input { background: transparent; border: none; outline: none; color: #fff; width: 100%; font-size: 0.9rem; }
-    .top-actions { display: flex; align-items: center; gap: 12px; }
-    .btn-primary { background: var(--accent); color: #fff; border: none; padding: 9px 18px; border-radius: 20px; font-weight: 700; cursor: pointer; font-size: 0.88rem; transition: 0.2s; }
-    .btn-primary:hover { background: var(--accent-hover); box-shadow: 0 4px 15px var(--accent-glow); }
-    .btn-outline { background: transparent; color: #fff; border: 1px solid var(--border); padding: 8px 16px; border-radius: 20px; font-weight: 600; cursor: pointer; font-size: 0.88rem; }
-    .btn-outline:hover { background: var(--bg-card-hover); }
-    .view-container { padding: 2rem; max-width: 1400px; margin: 0 auto; width: 100%; }
-    .section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem; }
-    .section-title { font-size: 1.6rem; font-weight: 800; }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', sans-serif; }
+    body { background: var(--bg-main); color: var(--text-main); min-height: 100vh; display: flex; overflow-x: hidden; }
+    .app-sidebar { width: var(--sidebar-w); background: #0c0d14; border-right: 1px solid var(--border); height: 100vh; position: fixed; left: 0; top: 0; padding: 24px 16px; display: flex; flex-direction: column; z-index: 50; }
+    .logo-area { display: flex; align-items: center; gap: 10px; padding: 0 10px; margin-bottom: 32px; }
+    .logo-icon { width: 38px; height: 38px; background: linear-gradient(135deg, #0284c7, #06b6d4); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 1.35rem; box-shadow: 0 0 16px rgba(56, 189, 248, 0.35); }
+    .logo-title { font-weight: 800; font-size: 1.25rem; letter-spacing: -0.02em; background: linear-gradient(90deg, #fff, #94a3b8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .nav-section { display: flex; flex-direction: column; gap: 4px; }
+    .nav-title { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); padding: 12px 10px 6px; font-weight: 700; }
+    .nav-item { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 10px; font-size: 0.92rem; font-weight: 600; color: #9ca3af; cursor: pointer; transition: 0.15s; }
+    .nav-item:hover { background: var(--bg-card-hover); color: #fff; }
+    .nav-item.active { background: var(--accent); color: #fff; }
+    .app-main { margin-left: var(--sidebar-w); flex: 1; padding: 24px 36px 120px; min-height: 100vh; }
+    .topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 28px; gap: 16px; }
+    .search-box { flex: 1; max-width: 480px; position: relative; display: flex; align-items: center; }
+    .search-box input { width: 100%; background: var(--bg-card); border: 1px solid var(--border); padding: 10px 16px 10px 42px; border-radius: 10px; color: #fff; font-size: 0.9rem; outline: none; transition: 0.2s; }
+    .search-box input:focus { border-color: var(--accent); }
+    .search-box span { position: absolute; left: 14px; color: var(--text-muted); font-size: 0.95rem; }
+    .top-actions { display: flex; gap: 12px; }
+    .btn-primary { background: var(--accent); color: #fff; border: none; padding: 10px 18px; border-radius: 10px; font-weight: 700; font-size: 0.88rem; cursor: pointer; transition: 0.15s; display: inline-flex; align-items: center; gap: 6px; }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .btn-outline { background: transparent; color: #fff; border: 1px solid var(--border); padding: 10px 16px; border-radius: 10px; font-weight: 600; font-size: 0.88rem; cursor: pointer; transition: 0.15s; }
+    .btn-outline:hover { background: var(--bg-card-hover); border-color: rgba(255,255,255,0.2); }
+    .section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
+    .section-title { font-size: 1.4rem; font-weight: 800; }
     .works-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 20px; }
-    .work-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; padding: 12px; cursor: pointer; transition: transform 0.2s, background 0.2s; position: relative; display: flex; flex-direction: column; }
-    .work-card:hover { transform: translateY(-4px); background: var(--bg-card-hover); border-color: #3b3f54; }
-    .card-cover-wrapper { position: relative; width: 100%; aspect-ratio: 3/4; margin-bottom: 10px; border-radius: 8px; overflow: hidden; }
-    .card-cover { width: 100%; height: 100%; object-fit: cover; background: #08090c; }
-    .disguised-overlay { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(176,102,254,0.2) 0%, rgba(12,13,18,0.7) 100%); box-shadow: inset 0 0 18px rgba(176, 102, 254, 0.7); pointer-events: none; display: flex; align-items: flex-end; padding: 6px; }
-    .disguised-badge { background: #7c3aed; color: #fff; font-size: 0.65rem; font-weight: 800; padding: 2px 6px; border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.5); }
-    .card-badge-row { display: flex; gap: 6px; margin-bottom: 6px; align-items: center; }
-    .card-rj { background: var(--accent); color: #fff; font-size: 0.7rem; font-weight: 800; padding: 2px 6px; border-radius: 4px; }
-    .card-fav { margin-left: auto; cursor: pointer; color: var(--text-muted); }
-    .card-title { font-size: 0.92rem; font-weight: 700; line-height: 1.35; margin-bottom: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .work-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; padding: 12px; cursor: pointer; transition: transform 0.2s, border-color 0.2s; display: flex; flex-direction: column; }
+    .work-card:hover { transform: translateY(-4px); border-color: rgba(255,255,255,0.2); }
+    .card-cover-wrapper { position: relative; width: 100%; height: 260px; border-radius: 10px; overflow: hidden; margin-bottom: 10px; background: #0c0d12; }
+    .card-cover { width: 100%; height: 100%; object-fit: cover; }
+    .disguised-overlay { position: absolute; top: 8px; left: 8px; }
+    .disguised-badge { background: rgba(0,0,0,0.75); backdrop-filter: blur(4px); color: #38bdf8; font-size: 0.7rem; font-weight: 700; padding: 2px 8px; border-radius: 4px; border: 1px solid rgba(56,189,248,0.4); }
+    .card-badge-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+    .card-rj { font-size: 0.75rem; font-weight: 700; color: #38bdf8; background: rgba(56,189,248,0.12); padding: 2px 6px; border-radius: 4px; }
+    .card-fav { font-size: 0.9rem; cursor: pointer; }
+    .card-title { font-size: 0.88rem; font-weight: 700; line-height: 1.35; margin-bottom: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; height: 2.7em; }
     .card-sub { font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .work-detail-banner { display: flex; gap: 28px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px; padding: 24px; margin-bottom: 2rem; }
     .detail-cover { width: 220px; min-width: 220px; height: 300px; border-radius: 12px; object-fit: cover; }
     .detail-info { flex: 1; display: flex; flex-direction: column; }
     .detail-title { font-size: 1.6rem; font-weight: 800; margin-bottom: 12px; line-height: 1.3; }
-    .detail-meta { font-size: 0.95rem; color: var(--text-muted); margin-bottom: 6px; }
+    .detail-meta { font-size: 0.95rem; color: var(--text-muted); margin-bottom: 8px; }
     .detail-meta strong { color: #fff; }
     .tags-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
-    .tag-pill { background: #232736; border: 1px solid #33384c; color: #d1d5db; font-size: 0.78rem; padding: 4px 10px; border-radius: 6px; cursor: pointer; }
+    .tag-pill { background: #232736; border: 1px solid #33384c; color: #d1d5db; font-size: 0.78rem; padding: 4px 10px; border-radius: 6px; cursor: pointer; transition: 0.15s; }
     .tag-pill:hover { background: var(--accent); color: #fff; }
     .tracks-table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
     .tracks-table th { text-align: left; padding: 10px 14px; font-size: 0.8rem; color: var(--text-muted); border-bottom: 1px solid var(--border); }
@@ -842,7 +852,7 @@ const INDEX_HTML = `<!DOCTYPE html>
 <body>
   <div id="gatekeeperModal" class="modal-overlay" style="display: flex;">
     <div class="gatekeeper-card">
-      <div class="logo-icon" style="margin: 0 auto 16px; width: 48px; height: 48px; font-size: 1.5rem;">✨</div>
+      <div class="logo-icon" style="margin: 0 auto 16px; width: 56px; height: 56px; font-size: 2rem;">🐧</div>
       <h2 style="font-size: 1.6rem; font-weight: 800; margin-bottom: 8px;">Welcome to aStreamer</h2>
       <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 24px;">Please enter your admin passcode to unlock your personal library.</p>
       <input type="password" id="passcodeInput" placeholder="Enter Admin Passcode" style="width: 100%; padding: 14px 18px; border-radius: 10px; background: #0c0d12; border: 1px solid var(--border); color: #fff; font-size: 1rem; outline: none; margin-bottom: 16px; text-align: center;" onkeydown="if(event.key==='Enter') login()">
@@ -851,17 +861,82 @@ const INDEX_HTML = `<!DOCTYPE html>
     </div>
   </div>
 
+  <div id="changelogModal" class="modal-overlay">
+    <div class="modal-content" style="max-width: 620px; max-height: 80vh; overflow-y: auto;">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <div style="width: 36px; height: 36px; border-radius: 10px; background: linear-gradient(135deg, #0284c7, #06b6d4); display: flex; align-items: center; justify-content: center; font-size: 1.3rem;">🐧</div>
+          <div>
+            <h3 style="font-size: 1.3rem; font-weight: 800;">aStreamer Release Notes</h3>
+            <span style="font-size: 0.8rem; color: #38bdf8; font-weight: 700;">Version 1.0 Milestone</span>
+          </div>
+        </div>
+        <button class="btn-outline" style="padding: 4px 10px;" onclick="closeChangelogModal()">✖</button>
+      </div>
+      
+      <div style="color: #d1d5db; font-size: 0.9rem; line-height: 1.6; display: flex; flex-direction: column; gap: 14px;">
+        <div style="background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.2); padding: 14px; border-radius: 10px;">
+          <h4 style="color: #38bdf8; font-weight: 700; margin-bottom: 4px;">🐧 Official Mascot & Brand Identity</h4>
+          <p style="color: var(--text-muted); font-size: 0.85rem;">Introduced the official 🐧 Penguin mascot branding, custom favicon, and streamlined edge UI.</p>
+        </div>
+
+        <div style="background: rgba(255, 51, 102, 0.08); border: 1px solid rgba(255, 51, 102, 0.2); padding: 14px; border-radius: 10px;">
+          <h4 style="color: var(--accent); font-weight: 700; margin-bottom: 4px;">⚡ Pure Cloudflare Worker & KV Architecture</h4>
+          <p style="color: var(--text-muted); font-size: 0.85rem;">100% serverless, zero-cost edge deployment running on Cloudflare Workers with native KV storage and zero origin servers.</p>
+        </div>
+
+        <div style="background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border); padding: 14px; border-radius: 10px;">
+          <h4 style="color: #fff; font-weight: 700; margin-bottom: 4px;">🎵 Adaptive Audio Streaming Engine</h4>
+          <p style="color: var(--text-muted); font-size: 0.85rem;">Dual-engine player supporting multi-chapter HLS (.m3u8) audio streams and multi-track MP3s with seekable timestamps and background audio playback.</p>
+        </div>
+
+        <div style="background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border); padding: 14px; border-radius: 10px;">
+          <h4 style="color: #fff; font-weight: 700; margin-bottom: 4px;">🔍 Multi-Source Deep Metadata Pipeline</h4>
+          <p style="color: var(--text-muted); font-size: 0.85rem;">Auto-scrapes official DLsite APIs + HTML product tables + ASMR.one for rich bilingual tags, makers, and clickable Voice Actor filters.</p>
+        </div>
+
+        <div style="background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border); padding: 14px; border-radius: 10px;">
+          <h4 style="color: #fff; font-weight: 700; margin-bottom: 4px;">🛡️ Stealth & Privacy Disguise System</h4>
+          <p style="color: var(--text-muted); font-size: 0.85rem;">Includes SFW disguise cover mode, instant Emergency Panic Key (<code>Esc</code>), and gatekeeper passcode authentication.</p>
+        </div>
+
+        <div style="background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border); padding: 14px; border-radius: 10px;">
+          <h4 style="color: #fff; font-weight: 700; margin-bottom: 4px;">💾 JSON Database Export & Cloud Sync</h4>
+          <p style="color: var(--text-muted); font-size: 0.85rem;">One-click library and playlist backup/restore for instantaneous synchronization across devices.</p>
+        </div>
+      </div>
+
+      <div style="display: flex; justify-content: flex-end; margin-top: 20px;">
+        <button class="btn-primary" onclick="closeChangelogModal()">Got it</button>
+      </div>
+    </div>
+  </div>
+
   <div id="importModal" class="modal-overlay">
-    <div class="modal-content">
+    <div class="modal-content" style="max-width: 580px;">
       <h3 class="modal-title">📥 Batch Import RJ Works</h3>
       <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 12px;">Paste multiple RJ codes or upload a <code>.txt</code> file.</p>
-      <textarea id="importTextarea" class="modal-textarea" placeholder="RJ01473335&#10;RJ441308&#10;RJ01570152"></textarea>
-      <div style="margin-bottom: 18px;"><input type="file" id="importFileInput" accept=".txt" style="font-size: 0.85rem; color: var(--text-muted);" onchange="handleFileUpload(event)"></div>
-      <div style="display: flex; gap: 10px; justify-content: flex-end;">
-        <button class="btn-outline" onclick="closeImportModal()">Cancel</button>
-        <button class="btn-primary" id="btnRunImport" onclick="runBatchImport()">Start Import</button>
+      <textarea id="importTextarea" class="modal-textarea" placeholder="RJ01473335&#10;RJ441308&#10;RJ01196620&#10;RJ01132855"></textarea>
+      <div style="margin-bottom: 16px; display: flex; align-items: center; justify-content: space-between;">
+        <input type="file" id="importFileInput" accept=".txt" style="font-size: 0.85rem; color: var(--text-muted);" onchange="handleFileUpload(event)">
+        <span id="importCountBadge" style="font-size: 0.8rem; color: #38bdf8; font-weight: 700;"></span>
       </div>
-      <div id="importProgress" style="margin-top: 14px; font-size: 0.85rem; color: #38bdf8; display: none;">Importing...</div>
+      
+      <div id="importProgressBox" style="display: none; margin-bottom: 16px; background: #0c0d14; border: 1px solid var(--border); border-radius: 10px; padding: 14px;">
+        <div style="display: flex; justify-content: space-between; font-size: 0.85rem; font-weight: 700; margin-bottom: 6px;">
+          <span id="importStatusText" style="color: #38bdf8;">Starting import...</span>
+          <span id="importPercentage" style="color: var(--text-muted);">0%</span>
+        </div>
+        <div style="width: 100%; height: 6px; background: #1a1c26; border-radius: 3px; overflow: hidden; margin-bottom: 10px;">
+          <div id="importProgressBar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #ff3366, #38bdf8); transition: width 0.2s;"></div>
+        </div>
+        <div id="importLiveLogs" style="max-height: 120px; overflow-y: auto; font-family: monospace; font-size: 0.78rem; color: var(--text-muted); display: flex; flex-direction: column; gap: 4px;"></div>
+      </div>
+
+      <div style="display: flex; gap: 10px; justify-content: flex-end;">
+        <button class="btn-outline" id="btnCancelImport" onclick="closeImportModal()">Cancel</button>
+        <button class="btn-primary" id="btnRunImport" onclick="runBatchImport()">Start Batch Import</button>
+      </div>
     </div>
   </div>
 
@@ -897,7 +972,13 @@ const INDEX_HTML = `<!DOCTYPE html>
   </div>
 
   <aside class="app-sidebar">
-    <div class="logo-area"><div class="logo-icon">✨</div><div class="logo-title">aStreamer</div></div>
+    <div class="logo-area" style="cursor: pointer;" onclick="switchView('library')">
+      <div class="logo-icon">🐧</div>
+      <div>
+        <div class="logo-title">aStreamer</div>
+        <span style="font-size: 0.65rem; color: #38bdf8; font-weight: 700; background: rgba(56,189,248,0.15); padding: 1px 6px; border-radius: 4px; border: 1px solid rgba(56,189,248,0.3);">v1.0 Official</span>
+      </div>
+    </div>
     <nav class="nav-section">
       <div class="nav-title">Menu</div>
       <div class="nav-item active" onclick="switchView('library')">📚 Library</div>
@@ -913,7 +994,10 @@ const INDEX_HTML = `<!DOCTYPE html>
   <main class="app-main">
     <div class="topbar">
       <div class="search-box"><span>🔍</span><input type="text" id="globalSearch" placeholder="Search title, RJ code, CV, circle..." oninput="handleSearch(this.value)"></div>
-      <div class="top-actions"><button class="btn-primary" onclick="quickAddRj()">+ Add RJ Code</button></div>
+      <div class="top-actions">
+        <button class="btn-outline" onclick="openChangelogModal()" title="View Version 1.0 Release Notes">📜 v1.0 Notes</button>
+        <button class="btn-primary" onclick="quickAddRj()">+ Add RJ Code</button>
+      </div>
     </div>
     <div id="viewContainer" class="view-container"></div>
   </main>
@@ -983,7 +1067,14 @@ const INDEX_HTML = `<!DOCTYPE html>
     }
 
     window.addEventListener('DOMContentLoaded', () => {
-      if (authToken) { document.getElementById('gatekeeperModal').style.display = 'none'; loadLibrary(); }
+      if (authToken) {
+        document.getElementById('gatekeeperModal').style.display = 'none';
+        handleHashRoute();
+      }
+    });
+
+    window.addEventListener('hashchange', () => {
+      if (authToken) handleHashRoute();
     });
 
     async function login() {
@@ -991,8 +1082,14 @@ const INDEX_HTML = `<!DOCTYPE html>
       if (!pass) return;
       const res = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ passcode: pass }) });
       const data = await res.json();
-      if (data.success) { authToken = pass; localStorage.setItem('astreamer_passcode', pass); document.getElementById('gatekeeperModal').style.display = 'none'; loadLibrary(); }
-      else { document.getElementById('loginError').style.display = 'block'; }
+      if (data.success) {
+        authToken = pass;
+        localStorage.setItem('astreamer_passcode', pass);
+        document.getElementById('gatekeeperModal').style.display = 'none';
+        handleHashRoute();
+      } else {
+        document.getElementById('loginError').style.display = 'block';
+      }
     }
 
     function handleAuthError() {
@@ -1024,15 +1121,74 @@ const INDEX_HTML = `<!DOCTYPE html>
       };
     }
 
-    function switchView(view, param = null) {
+    function switchView(view, param = null, updateHash = true) {
       currentView = view;
+      if (updateHash) {
+        let hash = '#/' + view;
+        if (view === 'work-detail' && typeof param === 'string') {
+          hash = '#/work/' + encodeURIComponent(param);
+        } else if (view === 'playlist-detail' && typeof param === 'string') {
+          hash = '#/playlist/' + encodeURIComponent(param);
+        } else if (view === 'library' && param) {
+          if (param.tag) hash = '#/genre/' + encodeURIComponent(param.tag);
+          else if (param.cv) hash = '#/cv/' + encodeURIComponent(param.cv);
+          else if (param.favorite) hash = '#/favorites';
+          else if (param.q) hash = '#/search/' + encodeURIComponent(param.q);
+        }
+        if (window.location.hash !== hash) {
+          window.location.hash = hash;
+        }
+      }
+
       document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
-      if (view === 'library') { document.querySelector('.nav-item:nth-child(2)')?.classList.add('active'); loadLibrary(param || {}); }
-      else if (view === 'playlists') { document.querySelector('.nav-item:nth-child(3)')?.classList.add('active'); loadPlaylists(); }
-      else if (view === 'artists') { document.querySelector('.nav-item:nth-child(4)')?.classList.add('active'); loadArtists(); }
-      else if (view === 'genres') { document.querySelector('.nav-item:nth-child(5)')?.classList.add('active'); loadGenres(); }
-      else if (view === 'settings') { document.querySelector('.nav-item:nth-child(8)')?.classList.add('active'); loadSettings(); }
-      else if (view === 'work-detail') { loadWorkDetail(param); }
+      if (view === 'library') {
+        if (!param || (!param.tag && !param.cv && !param.favorite)) {
+          document.querySelector('.nav-item:nth-child(2)')?.classList.add('active');
+        }
+        loadLibrary(param || {});
+      } else if (view === 'playlists') {
+        document.querySelector('.nav-item:nth-child(3)')?.classList.add('active');
+        loadPlaylists();
+      } else if (view === 'artists') {
+        document.querySelector('.nav-item:nth-child(4)')?.classList.add('active');
+        loadArtists();
+      } else if (view === 'genres') {
+        document.querySelector('.nav-item:nth-child(5)')?.classList.add('active');
+        loadGenres();
+      } else if (view === 'settings') {
+        document.querySelector('.nav-item:nth-child(8)')?.classList.add('active');
+        loadSettings();
+      } else if (view === 'work-detail') {
+        loadWorkDetail(param);
+      } else if (view === 'playlist-detail') {
+        loadPlaylistDetail(param);
+      }
+    }
+
+    function handleHashRoute() {
+      const raw = window.location.hash || '#/library';
+      const clean = raw.replace(/^#\/?/, '');
+      const parts = clean.split('/');
+      const section = parts[0] || 'library';
+      const arg = parts.slice(1).join('/');
+
+      if (section === 'work' && arg) {
+        switchView('work-detail', decodeURIComponent(arg), false);
+      } else if (section === 'genre' && arg) {
+        switchView('library', { tag: decodeURIComponent(arg) }, false);
+      } else if (section === 'cv' && arg) {
+        switchView('library', { cv: decodeURIComponent(arg) }, false);
+      } else if (section === 'search' && arg) {
+        switchView('library', { q: decodeURIComponent(arg) }, false);
+      } else if (section === 'favorites') {
+        switchView('library', { favorite: 'true' }, false);
+      } else if (section === 'playlist' && arg) {
+        switchView('playlist-detail', decodeURIComponent(arg), false);
+      } else if (['library', 'playlists', 'artists', 'genres', 'settings'].includes(section)) {
+        switchView(section, null, false);
+      } else {
+        switchView('library', {}, false);
+      }
     }
 
     async function loadLibrary(filterParams = {}) {
@@ -1064,7 +1220,7 @@ const INDEX_HTML = `<!DOCTYPE html>
 
       works.forEach(w => {
         const display = getDisplayCover(w);
-        html += '<div class="work-card" onclick="switchView(\\'work-detail\\', \\'' + w.rjCode + '\\')"><div class="card-cover-wrapper"><img class="card-cover" src="' + display.coverUrl + '">' + (display.isDisguised ? '<div class="disguised-overlay"><span class="disguised-badge">🎭 Disguised SFW</span></div>' : '') + '</div><div class="card-badge-row"><span class="card-rj">' + w.rjCode + '</span><span class="card-fav" title="' + (w.favorite ? 'Favorited' : 'Add to Favorites') + '" onclick="event.stopPropagation(); toggleFav(\\'' + w.rjCode + '\\')">' + (w.favorite ? '❤️' : '🤍') + '</span></div><div class="card-title">' + w.title + '</div><div class="card-sub">' + (w.cv || w.circle || 'ASMR') + '</div></div>';
+        html += '<div class="work-card" onclick="switchView(\\'work-detail\\', \\'' + w.rjCode + '\\')"><div class="card-cover-wrapper"><img class="card-cover" src="' + display.coverUrl + '">' + (display.isDisguised ? '<div class="disguised-overlay"><span class="disguised-badge">🎭 Disguised SFW</span></div>' : '') + '</div><div class="card-badge-row"><span class="card-rj">' + w.rjCode + '</span><span class="card-fav card-fav-' + w.rjCode + '" title="' + (w.favorite ? 'Favorited' : 'Add to Favorites') + '" onclick="toggleFav(\\'' + w.rjCode + '\\', event)" style="transition: transform 0.15s ease-out; display: inline-block;">' + (w.favorite ? '❤️' : '🤍') + '</span></div><div class="card-title">' + w.title + '</div><div class="card-sub">' + (w.cv || w.circle || 'ASMR') + '</div></div>';
       });
 
       html += '</div>';
@@ -1078,7 +1234,15 @@ const INDEX_HTML = `<!DOCTYPE html>
       currentWork = work;
       const display = getDisplayCover(work);
 
-      let html = '<div class="work-detail-banner"><img class="detail-cover" src="' + display.coverUrl + '"><div class="detail-info"><div style="display:flex; gap:8px; margin-bottom:8px;"><span class="card-rj">' + work.rjCode + '</span><span style="background:#0e7490; color:#fff; font-size:0.75rem; font-weight:700; padding:2px 8px; border-radius:4px;">' + (work.hasHls ? 'HLS Chapters' : 'Multi-Track') + '</span></div><h1 class="detail-title">' + work.title + '</h1><div class="detail-meta"><strong>Voice Actor (CV):</strong> ' + (work.cv || 'N/A') + '</div><div class="detail-meta"><strong>Circle:</strong> ' + (work.circle || 'N/A') + '</div><div class="tags-row">' + (work.tags || []).map(t => '<span class="tag-pill" onclick="switchView(\\'library\\', { tag: \\'' + t + '\\' })">' + t + '</span>').join('') + '</div><div style="margin-top:auto; padding-top:16px; display:flex; flex-wrap:wrap; gap:10px;"><button class="btn-primary" onclick="playTrack(0, true)">▶ Play All</button><button class="btn-outline" onclick="openAddToPlaylistModal({ rjCode: \\'' + work.rjCode + '\\', title: \\'' + work.title.replace(/'/g, "") + '\\', workTitle: \\'' + work.title.replace(/'/g, "") + '\\', poster: \\'' + work.coverUrl + '\\', cv: \\'' + (work.cv || "") + '\\', isWork: true })">➕ Add Work to Playlist</button><button class="btn-outline" onclick="refreshSingleWork(\\'' + work.rjCode + '\\')">🔄 Refresh</button><button class="btn-outline" onclick="deleteWorkItem(\\'' + work.rjCode + '\\')">🗑️ Remove</button></div></div></div><h3 style="font-size:1.2rem; font-weight:700; margin-bottom:12px;">🎵 Tracklist / Chapters (' + work.totalTracks + ')</h3><table class="tracks-table"><thead><tr><th style="width: 40px;">#</th><th>Title</th><th style="width: 100px;">Offset</th><th style="width: 140px; text-align:right;">Action</th></tr></thead><tbody>';
+      const cvPills = work.cv && work.cv !== 'N/A'
+        ? work.cv.split(/[/,、・\s+＆&]+/).map(s => s.trim()).filter(Boolean).map(c => '<span class="tag-pill" style="display:inline-flex; align-items:center; gap:4px; margin-right:4px; background:rgba(56,189,248,0.15); color:#38bdf8; border:1px solid rgba(56,189,248,0.3); font-weight:700;" onclick="switchView(\\'library\\', { cv: \\'' + c + '\\' })">🎙️ ' + c + '</span>').join('')
+        : '<span style="color:var(--text-muted);">N/A</span>';
+
+      const circlePill = work.circle && work.circle !== 'N/A'
+        ? '<span class="tag-pill" style="display:inline-flex; align-items:center; gap:4px; background:rgba(255,255,255,0.06); border:1px solid var(--border); font-weight:700;" onclick="switchView(\\'library\\', { q: \\'' + work.circle + '\\' })">🏢 ' + work.circle + '</span>'
+        : '<span style="color:var(--text-muted);">N/A</span>';
+
+      let html = '<div class="work-detail-banner"><img class="detail-cover" src="' + display.coverUrl + '"><div class="detail-info"><div style="display:flex; gap:8px; margin-bottom:8px;"><span class="card-rj">' + work.rjCode + '</span><span style="background:#0e7490; color:#fff; font-size:0.75rem; font-weight:700; padding:2px 8px; border-radius:4px;">' + (work.hasHls ? 'HLS Chapters' : 'Multi-Track') + '</span></div><h1 class="detail-title">' + work.title + '</h1><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Voice Actor (CV):</strong> ' + cvPills + '</div><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Circle:</strong> ' + circlePill + '</div><div class="tags-row">' + (work.tags || []).map(t => '<span class="tag-pill" onclick="switchView(\\'library\\', { tag: \\'' + t + '\\' })">' + t + '</span>').join('') + '</div><div style="margin-top:auto; padding-top:16px; display:flex; flex-wrap:wrap; gap:10px;"><button class="btn-primary" onclick="playTrack(0, true)">▶ Play All</button><button class="btn-outline" onclick="openAddToPlaylistModal({ rjCode: \\'' + work.rjCode + '\\', title: \\'' + work.title.replace(/'/g, "") + '\\', workTitle: \\'' + work.title.replace(/'/g, "") + '\\', poster: \\'' + work.coverUrl + '\\', cv: \\'' + (work.cv || "") + '\\', isWork: true })">➕ Add Work to Playlist</button><button class="btn-outline" onclick="refreshSingleWork(\\'' + work.rjCode + '\\')">🔄 Refresh</button><button class="btn-outline" onclick="deleteWorkItem(\\'' + work.rjCode + '\\')">🗑️ Remove</button></div></div></div><h3 style="font-size:1.2rem; font-weight:700; margin-bottom:12px;">🎵 Tracklist / Chapters (' + work.totalTracks + ')</h3><table class="tracks-table"><thead><tr><th style="width: 40px;">#</th><th>Title</th><th style="width: 100px;">Offset</th><th style="width: 140px; text-align:right;">Action</th></tr></thead><tbody>';
 
       work.tracks.forEach((t, i) => {
         html += '<tr class="track-row" id="track-row-' + i + '" onclick="playTrack(' + i + ', true)"><td>' + t.id + '</td><td><strong>' + t.title + '</strong></td><td style="color:#38bdf8;">' + (t.formattedTime || '00:00:00') + '</td><td style="text-align:right;"><button class="btn-outline" style="padding: 4px 10px; font-size: 0.75rem;" onclick="event.stopPropagation(); openAddToPlaylistModal({ rjCode: \\'' + work.rjCode + '\\', trackId: ' + t.id + ', title: \\'' + t.title.replace(/'/g, "") + '\\', workTitle: \\'' + work.title.replace(/'/g, "") + '\\', startTime: ' + (t.startTime || 0) + ', streamUrl: \\'' + t.streamUrl + '\\', isHls: ' + t.isHls + ', poster: \\'' + work.coverUrl + '\\', cv: \\'' + (work.cv || "") + '\\' })">➕ Playlist</button></td></tr>';
@@ -1177,7 +1341,18 @@ const INDEX_HTML = `<!DOCTYPE html>
       html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">💾 Library Data & Sync</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Export your cached library and playlists as JSON or restore your local database to Cloudflare KV.</p>';
       html += '<div style="display:flex; flex-wrap:wrap; gap:12px; align-items:center;"><button class="btn-primary" onclick="exportBackup()">📥 Export JSON Backup</button><input type="file" id="backupFileInput" accept=".json" style="display:none;" onchange="importBackupFile(event)"><button class="btn-outline" onclick="document.getElementById(\\'backupFileInput\\').click()">📤 Restore / Upload Backup JSON</button></div></div>';
 
+      html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🐧 aStreamer v1.0 Milestone Release</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Pure Cloudflare Worker Serverless Streaming Suite with Multi-Source Metadata and Edge Audio Acceleration.</p>';
+      html += '<button class="btn-outline" onclick="openChangelogModal()">📜 View Version 1.0 Release Notes & Architecture</button></div>';
+
       container.innerHTML = html;
+    }
+
+    function openChangelogModal() {
+      document.getElementById('changelogModal').style.display = 'flex';
+    }
+
+    function closeChangelogModal() {
+      document.getElementById('changelogModal').style.display = 'none';
     }
 
     async function refreshAllMetadata() {
@@ -1371,9 +1546,28 @@ const INDEX_HTML = `<!DOCTYPE html>
       } catch (e) { alert('Error: ' + e.message); }
     }
 
-    async function toggleFav(rjCode) {
-      await fetch('/api/library/favorite/' + rjCode, { method: 'POST', headers: authHeaders() });
-      loadLibrary();
+    async function toggleFav(rjCode, event) {
+      if (event) event.stopPropagation();
+      const work = allWorks.find(w => w.rjCode === rjCode);
+      let nextFavState = true;
+      if (work) {
+        work.favorite = !work.favorite;
+        nextFavState = work.favorite;
+      }
+
+      const favIcons = document.querySelectorAll('.card-fav-' + rjCode);
+      favIcons.forEach(icon => {
+        icon.innerText = nextFavState ? '❤️' : '🤍';
+        icon.title = nextFavState ? 'Favorited' : 'Add to Favorites';
+        icon.style.transform = 'scale(1.35)';
+        setTimeout(() => { icon.style.transform = 'scale(1)'; }, 180);
+      });
+
+      try {
+        await apiFetch('/api/library/favorite/' + rjCode, { method: 'POST' });
+      } catch (e) {
+        console.error('Failed to toggle favorite:', e);
+      }
     }
 
     async function deleteWorkItem(rjCode) {
@@ -1406,15 +1600,78 @@ const INDEX_HTML = `<!DOCTYPE html>
 
     async function runBatchImport() {
       const text = document.getElementById('importTextarea').value;
-      const progress = document.getElementById('importProgress');
-      progress.style.display = 'block';
-      progress.innerText = 'Importing works... please wait.';
-      try {
-        const res = await fetch('/api/library/batch-import', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ textData: text }) });
-        const data = await res.json();
-        progress.innerText = 'Done! ' + (data.succeeded?.length || 0) + ' succeeded, ' + (data.failed?.length || 0) + ' failed.';
-        setTimeout(() => { closeImportModal(); loadLibrary(); }, 1500);
-      } catch (e) { progress.innerText = 'Import failed: ' + e.message; }
+      const rjList = [...new Set(text.toUpperCase().match(/RJ[0-9]{6,8}/g) || [])];
+
+      if (rjList.length === 0) {
+        alert('Please enter at least one valid RJ code (e.g. RJ01473335).');
+        return;
+      }
+
+      const box = document.getElementById('importProgressBox');
+      const status = document.getElementById('importStatusText');
+      const pct = document.getElementById('importPercentage');
+      const bar = document.getElementById('importProgressBar');
+      const logs = document.getElementById('importLiveLogs');
+      const btn = document.getElementById('btnRunImport');
+      const btnCancel = document.getElementById('btnCancelImport');
+
+      box.style.display = 'block';
+      logs.innerHTML = '';
+      btn.disabled = true;
+      btn.innerText = 'Importing...';
+      btnCancel.disabled = true;
+
+      let succeeded = 0;
+      let failed = 0;
+
+      for (let i = 0; i < rjList.length; i++) {
+        const rj = rjList[i];
+        const progressPct = Math.round((i / rjList.length) * 100);
+        pct.innerText = progressPct + '%';
+        bar.style.width = progressPct + '%';
+        status.innerText = 'Importing ' + (i + 1) + '/' + rjList.length + ': ' + rj + '...';
+
+        try {
+          const res = await apiFetch('/api/library/resolve', {
+            method: 'POST',
+            body: JSON.stringify({ rjCode: rj })
+          });
+          const data = await res.json();
+          if (data && data.work) {
+            succeeded++;
+            const logEntry = document.createElement('div');
+            logEntry.style.color = '#38bdf8';
+            logEntry.innerText = '✅ ' + rj + ': ' + (data.work.title ? data.work.title.slice(0, 32) : '') + '... (Added)';
+            logs.appendChild(logEntry);
+          } else {
+            failed++;
+            const logEntry = document.createElement('div');
+            logEntry.style.color = '#ff3366';
+            logEntry.innerText = '⚠️ ' + rj + ': ' + (data.error || 'Failed');
+            logs.appendChild(logEntry);
+          }
+        } catch (e) {
+          if (e.message === 'Unauthorized') return;
+          failed++;
+          const logEntry = document.createElement('div');
+          logEntry.style.color = '#ff3366';
+          logEntry.innerText = '⚠️ ' + rj + ': ' + e.message;
+          logs.appendChild(logEntry);
+        }
+        logs.scrollTop = logs.scrollHeight;
+      }
+
+      pct.innerText = '100%';
+      bar.style.width = '100%';
+      status.innerText = '🎉 Completed! ' + succeeded + ' added, ' + failed + ' skipped.';
+      btn.disabled = false;
+      btn.innerText = 'Done';
+      btnCancel.disabled = false;
+
+      setTimeout(() => {
+        closeImportModal();
+        loadLibrary();
+      }, 1500);
     }
 
     async function openAddToPlaylistModal(item) {
