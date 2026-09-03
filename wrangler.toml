@@ -2,9 +2,6 @@ name = "astreamer"
 main = "worker.js"
 compatibility_date = "2024-04-01"
 
-[vars]
-ADMIN_PASSCODE = "your_admin_passcode_here"
-
 [[kv_namespaces]]
 binding = "ASTREAMER_KV"
 id = "7eaa08474bf44ffb846cfa22366843a3"
