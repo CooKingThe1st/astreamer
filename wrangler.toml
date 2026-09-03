@@ -8,3 +8,7 @@ ADMIN_PASSCODE = "iloveuet"
 [[kv_namespaces]]
 binding = "ASTREAMER_KV"
 id = "7eaa08474bf44ffb846cfa22366843a3"
+
+routes = [
+  { pattern = "astreamer.site", custom_domain = true }
+]
