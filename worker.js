@@ -1191,7 +1191,7 @@ const INDEX_HTML = `<!DOCTYPE html>
 
     function handleHashRoute() {
       const raw = window.location.hash || '#/library';
-      const clean = raw.replace(/^#\/?/, '');
+      const clean = raw.startsWith('#/') ? raw.slice(2) : (raw.startsWith('#') ? raw.slice(1) : raw);
       const parts = clean.split('/');
       const section = parts[0] || 'library';
       const arg = parts.slice(1).join('/');
@@ -1230,21 +1230,30 @@ const INDEX_HTML = `<!DOCTYPE html>
       }
     }
 
-    function renderLibraryGrid(works, filterParams = {}) {
+    window.navWork = function(rj) { switchView('work-detail', rj); };
+    window.navGenre = function(tag) { switchView('library', { tag: tag }); };
+    window.navCv = function(cv) { switchView('library', { cv: cv }); };
+    window.navCircle = function(q) { switchView('library', { q: q }); };
+    window.navPlaylist = function(id) { switchView('playlist-detail', id); };
+    window.navFavs = function() { switchView('library', { favorite: 'true' }); };
+    window.navAll = function() { switchView('library'); };
+
+    function renderLibraryGrid(works, filterParams) {
+      filterParams = filterParams || {};
       const container = document.getElementById('viewContainer');
       let filterHeader = '';
       const modeBadge = contentMode === 'PSFW' ? '<span class="disguised-badge" style="margin-left: 8px;">🎭 PSFW Disguise Mode Active</span>' : (contentMode === 'SFW' ? '<span style="background:#0e7490; color:#fff; font-size:0.75rem; font-weight:700; padding:2px 8px; border-radius:4px; margin-left:8px;">🛡️ SFW Filter Active</span>' : '');
 
-      if (filterParams.tag) filterHeader = '<div style="background: rgba(255,51,102,0.12); border: 1px solid var(--accent); padding: 10px 18px; border-radius: 10px; margin-bottom: 1.5rem; display: flex; align-items: center; justify-content: space-between;"><span>🏷️ Filtered by Genre: <strong>' + filterParams.tag + '</strong> (' + works.length + ' works)</span><button class="btn-outline" style="padding: 4px 12px; font-size: 0.8rem;" onclick="loadLibrary()">✖ Clear Filter</button></div>';
-      else if (filterParams.cv) filterHeader = '<div style="background: rgba(56,189,248,0.12); border: 1px solid #38bdf8; padding: 10px 18px; border-radius: 10px; margin-bottom: 1.5rem; display: flex; align-items: center; justify-content: space-between;"><span>🎙️ Filtered by Voice Actor: <strong>' + filterParams.cv + '</strong> (' + works.length + ' works)</span><button class="btn-outline" style="padding: 4px 12px; font-size: 0.8rem;" onclick="loadLibrary()">✖ Clear Filter</button></div>';
-      else if (filterParams.favorite) filterHeader = '<div style="background: rgba(255,51,102,0.12); border: 1px solid var(--accent); padding: 10px 18px; border-radius: 10px; margin-bottom: 1.5rem; display: flex; align-items: center; justify-content: space-between;"><span>❤️ Showing <strong>Favorites</strong> (' + works.length + ' works)</span><button class="btn-outline" style="padding: 4px 12px; font-size: 0.8rem;" onclick="loadLibrary()">✖ Show All</button></div>';
+      if (filterParams.tag) filterHeader = '<div style="background: rgba(255,51,102,0.12); border: 1px solid var(--accent); padding: 10px 18px; border-radius: 10px; margin-bottom: 1.5rem; display: flex; align-items: center; justify-content: space-between;"><span>🏷️ Filtered by Genre: <strong>' + filterParams.tag + '</strong> (' + works.length + ' works)</span><button class="btn-outline" style="padding: 4px 12px; font-size: 0.8rem;" onclick="navAll()">✖ Clear Filter</button></div>';
+      else if (filterParams.cv) filterHeader = '<div style="background: rgba(56,189,248,0.12); border: 1px solid #38bdf8; padding: 10px 18px; border-radius: 10px; margin-bottom: 1.5rem; display: flex; align-items: center; justify-content: space-between;"><span>🎙️ Filtered by Voice Actor: <strong>' + filterParams.cv + '</strong> (' + works.length + ' works)</span><button class="btn-outline" style="padding: 4px 12px; font-size: 0.8rem;" onclick="navAll()">✖ Clear Filter</button></div>';
+      else if (filterParams.favorite) filterHeader = '<div style="background: rgba(255,51,102,0.12); border: 1px solid var(--accent); padding: 10px 18px; border-radius: 10px; margin-bottom: 1.5rem; display: flex; align-items: center; justify-content: space-between;"><span>❤️ Showing <strong>Favorites</strong> (' + works.length + ' works)</span><button class="btn-outline" style="padding: 4px 12px; font-size: 0.8rem;" onclick="navAll()">✖ Show All</button></div>';
 
-      let html = filterHeader + '<div class="section-header"><h1 class="section-title">📚 Library (' + works.length + ') ' + modeBadge + '</h1><div><button class="btn-outline" onclick="loadLibrary({ favorite: \\'true\\' })">❤️ Favorites</button><button class="btn-outline" onclick="loadLibrary()" style="margin-left: 8px;">All</button></div></div><div class="works-grid">';
+      let html = filterHeader + '<div class="section-header"><h1 class="section-title">📚 Library (' + works.length + ') ' + modeBadge + '</h1><div><button class="btn-outline" onclick="navFavs()">❤️ Favorites</button><button class="btn-outline" onclick="navAll()" style="margin-left: 8px;">All</button></div></div><div class="works-grid">';
       if (works.length === 0) html += '<div style="grid-column: 1/-1; padding: 3rem; text-align: center; color: var(--text-muted);">No works found.</div>';
 
-      works.forEach(w => {
+      works.forEach(function(w) {
         const display = getDisplayCover(w);
-        html += '<div class="work-card" onclick="switchView(\\'work-detail\\', \\'' + w.rjCode + '\\')"><div class="card-cover-wrapper"><img class="card-cover" src="' + display.coverUrl + '">' + (display.isDisguised ? '<div class="disguised-overlay"><span class="disguised-badge">🎭 Disguised SFW</span></div>' : '') + '</div><div class="card-badge-row"><span class="card-rj">' + w.rjCode + '</span><span class="card-fav card-fav-' + w.rjCode + '" title="' + (w.favorite ? 'Favorited' : 'Add to Favorites') + '" onclick="toggleFav(\\'' + w.rjCode + '\\', event)" style="transition: transform 0.15s ease-out; display: inline-block;">' + (w.favorite ? '❤️' : '🤍') + '</span></div><div class="card-title">' + w.title + '</div><div class="card-sub">' + (w.cv || w.circle || 'ASMR') + '</div></div>';
+        html += '<div class="work-card" onclick="navWork(' + JSON.stringify(w.rjCode) + ')"><div class="card-cover-wrapper"><img class="card-cover" src="' + display.coverUrl + '">' + (display.isDisguised ? '<div class="disguised-overlay"><span class="disguised-badge">🎭 Disguised SFW</span></div>' : '') + '</div><div class="card-badge-row"><span class="card-rj">' + w.rjCode + '</span><span class="card-fav card-fav-' + w.rjCode + '" title="' + (w.favorite ? 'Favorited' : 'Add to Favorites') + '" onclick="toggleFav(' + JSON.stringify(w.rjCode) + ', event)" style="transition: transform 0.15s ease-out; display: inline-block;">' + (w.favorite ? '❤️' : '🤍') + '</span></div><div class="card-title">' + w.title + '</div><div class="card-sub">' + (w.cv || w.circle || 'ASMR') + '</div></div>';
       });
 
       html += '</div>';
@@ -1253,23 +1262,33 @@ const INDEX_HTML = `<!DOCTYPE html>
 
     async function loadWorkDetail(rjCode) {
       const container = document.getElementById('viewContainer');
-      const work = allWorks.find(w => w.rjCode === rjCode) || await (await fetch('/api/library?q=' + rjCode)).json().then(res => res[0]);
+      const work = allWorks.find(function(w) { return w.rjCode === rjCode; }) || await (await fetch('/api/library?q=' + rjCode)).json().then(function(res) { return res[0]; });
       if (!work) { container.innerHTML = '<div style="padding:2rem;">Work not found</div>'; return; }
       currentWork = work;
       const display = getDisplayCover(work);
 
-      const cvPills = work.cv && work.cv !== 'N/A'
-        ? work.cv.split(/[/,、・\s+＆&]+/).map(s => s.trim()).filter(Boolean).map(c => '<span class="tag-pill" style="display:inline-flex; align-items:center; gap:4px; margin-right:4px; background:rgba(56,189,248,0.15); color:#38bdf8; border:1px solid rgba(56,189,248,0.3); font-weight:700;" onclick="switchView(\\'library\\', { cv: \\'' + c + '\\' })">🎙️ ' + c + '</span>').join('')
+      const cvList = work.cv && work.cv !== 'N/A'
+        ? work.cv.split(/[\/,、・\s+＆&]+/).map(function(s) { return s.trim(); }).filter(Boolean)
+        : [];
+      
+      const cvPills = cvList.length > 0
+        ? cvList.map(function(c) {
+            return '<span class="tag-pill" style="display:inline-flex; align-items:center; gap:4px; margin-right:4px; background:rgba(56,189,248,0.15); color:#38bdf8; border:1px solid rgba(56,189,248,0.3); font-weight:700;" onclick="navCv(' + JSON.stringify(c) + ')">🎙️ ' + c + '</span>';
+          }).join('')
         : '<span style="color:var(--text-muted);">N/A</span>';
 
       const circlePill = work.circle && work.circle !== 'N/A'
-        ? '<span class="tag-pill" style="display:inline-flex; align-items:center; gap:4px; background:rgba(255,255,255,0.06); border:1px solid var(--border); font-weight:700;" onclick="switchView(\\'library\\', { q: \\'' + work.circle + '\\' })">🏢 ' + work.circle + '</span>'
+        ? '<span class="tag-pill" style="display:inline-flex; align-items:center; gap:4px; background:rgba(255,255,255,0.06); border:1px solid var(--border); font-weight:700;" onclick="navCircle(' + JSON.stringify(work.circle) + ')">🏢 ' + work.circle + '</span>'
         : '<span style="color:var(--text-muted);">N/A</span>';
 
-      let html = '<div class="work-detail-banner"><img class="detail-cover" src="' + display.coverUrl + '"><div class="detail-info"><div style="display:flex; gap:8px; margin-bottom:8px;"><span class="card-rj">' + work.rjCode + '</span><span style="background:#0e7490; color:#fff; font-size:0.75rem; font-weight:700; padding:2px 8px; border-radius:4px;">' + (work.hasHls ? 'HLS Chapters' : 'Multi-Track') + '</span></div><h1 class="detail-title">' + work.title + '</h1><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Voice Actor (CV):</strong> ' + cvPills + '</div><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Circle:</strong> ' + circlePill + '</div><div class="tags-row">' + (work.tags || []).map(t => '<span class="tag-pill" onclick="switchView(\\'library\\', { tag: \\'' + t + '\\' })">' + t + '</span>').join('') + '</div><div style="margin-top:auto; padding-top:16px; display:flex; flex-wrap:wrap; gap:10px;"><button class="btn-primary" onclick="playTrack(0, true)">▶ Play All</button><button class="btn-outline" onclick="openAddToPlaylistModal({ rjCode: \\'' + work.rjCode + '\\', title: \\'' + work.title.replace(/'/g, "") + '\\', workTitle: \\'' + work.title.replace(/'/g, "") + '\\', poster: \\'' + work.coverUrl + '\\', cv: \\'' + (work.cv || "") + '\\', isWork: true })">➕ Add Work to Playlist</button><button class="btn-outline" onclick="refreshSingleWork(\\'' + work.rjCode + '\\')">🔄 Refresh</button><button class="btn-outline" onclick="deleteWorkItem(\\'' + work.rjCode + '\\')">🗑️ Remove</button></div></div></div><h3 style="font-size:1.2rem; font-weight:700; margin-bottom:12px;">🎵 Tracklist / Chapters (' + work.totalTracks + ')</h3><table class="tracks-table"><thead><tr><th style="width: 40px;">#</th><th>Title</th><th style="width: 100px;">Offset</th><th style="width: 140px; text-align:right;">Action</th></tr></thead><tbody>';
+      const tagPills = (work.tags || []).map(function(t) {
+        return '<span class="tag-pill" onclick="navGenre(' + JSON.stringify(t) + ')">' + t + '</span>';
+      }).join('');
 
-      work.tracks.forEach((t, i) => {
-        html += '<tr class="track-row" id="track-row-' + i + '" onclick="playTrack(' + i + ', true)"><td>' + t.id + '</td><td><strong>' + t.title + '</strong></td><td style="color:#38bdf8;">' + (t.formattedTime || '00:00:00') + '</td><td style="text-align:right;"><button class="btn-outline" style="padding: 4px 10px; font-size: 0.75rem;" onclick="event.stopPropagation(); openAddToPlaylistModal({ rjCode: \\'' + work.rjCode + '\\', trackId: ' + t.id + ', title: \\'' + t.title.replace(/'/g, "") + '\\', workTitle: \\'' + work.title.replace(/'/g, "") + '\\', startTime: ' + (t.startTime || 0) + ', streamUrl: \\'' + t.streamUrl + '\\', isHls: ' + t.isHls + ', poster: \\'' + work.coverUrl + '\\', cv: \\'' + (work.cv || "") + '\\' })">➕ Playlist</button></td></tr>';
+      let html = '<div class="work-detail-banner"><img class="detail-cover" src="' + display.coverUrl + '"><div class="detail-info"><div style="display:flex; gap:8px; margin-bottom:8px;"><span class="card-rj">' + work.rjCode + '</span><span style="background:#0e7490; color:#fff; font-size:0.75rem; font-weight:700; padding:2px 8px; border-radius:4px;">' + (work.hasHls ? 'HLS Chapters' : 'Multi-Track') + '</span></div><h1 class="detail-title">' + work.title + '</h1><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Voice Actor (CV):</strong> ' + cvPills + '</div><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Circle:</strong> ' + circlePill + '</div><div class="tags-row">' + tagPills + '</div><div style="margin-top:auto; padding-top:16px; display:flex; flex-wrap:wrap; gap:10px;"><button class="btn-primary" onclick="playTrack(0, true)">▶ Play All</button><button class="btn-outline" onclick="openAddToPlaylistModal({ rjCode: ' + JSON.stringify(work.rjCode) + ', title: ' + JSON.stringify(work.title) + ', workTitle: ' + JSON.stringify(work.title) + ', poster: ' + JSON.stringify(work.coverUrl) + ', cv: ' + JSON.stringify(work.cv || '') + ', isWork: true })">➕ Add Work to Playlist</button><button class="btn-outline" onclick="refreshSingleWork(' + JSON.stringify(work.rjCode) + ')">🔄 Refresh</button><button class="btn-outline" onclick="deleteWorkItem(' + JSON.stringify(work.rjCode) + ')">🗑️ Remove</button></div></div></div><h3 style="font-size:1.2rem; font-weight:700; margin-bottom:12px;">🎵 Tracklist / Chapters (' + work.totalTracks + ')</h3><table class="tracks-table"><thead><tr><th style="width: 40px;">#</th><th>Title</th><th style="width: 100px;">Offset</th><th style="width: 140px; text-align:right;">Action</th></tr></thead><tbody>';
+
+      work.tracks.forEach(function(t, i) {
+        html += '<tr class="track-row" id="track-row-' + i + '" onclick="playTrack(' + i + ', true)"><td>' + t.id + '</td><td><strong>' + t.title + '</strong></td><td style="color:#38bdf8;">' + (t.formattedTime || '00:00:00') + '</td><td style="text-align:right;"><button class="btn-outline" style="padding: 4px 10px; font-size: 0.75rem;" onclick="event.stopPropagation(); openAddToPlaylistModal({ rjCode: ' + JSON.stringify(work.rjCode) + ', trackId: ' + t.id + ', title: ' + JSON.stringify(t.title) + ', workTitle: ' + JSON.stringify(work.title) + ', startTime: ' + (t.startTime || 0) + ', streamUrl: ' + JSON.stringify(t.streamUrl) + ', isHls: ' + t.isHls + ', poster: ' + JSON.stringify(work.coverUrl) + ', cv: ' + JSON.stringify(work.cv || '') + ' })">➕ Playlist</button></td></tr>';
       });
 
       html += '</tbody></table>';
@@ -1280,7 +1299,9 @@ const INDEX_HTML = `<!DOCTYPE html>
       const container = document.getElementById('viewContainer');
       const tags = await (await fetch('/api/tags')).json();
       let html = '<div class="section-header"><h1 class="section-title">🏷️ Genres & Tags</h1></div><div class="tag-cloud">';
-      tags.forEach(t => { html += '<div class="tag-cloud-item" onclick="switchView(\\'library\\', { tag: \\'' + t.name + '\\' })"><span>' + t.name + '</span><span class="tag-count">' + t.count + '</span></div>'; });
+      tags.forEach(function(t) {
+        html += '<div class="tag-cloud-item" onclick="navGenre(' + JSON.stringify(t.name) + ')"><span>' + t.name + '</span><span class="tag-count">' + t.count + '</span></div>';
+      });
       html += '</div>';
       container.innerHTML = html;
     }
@@ -1289,7 +1310,9 @@ const INDEX_HTML = `<!DOCTYPE html>
       const container = document.getElementById('viewContainer');
       const artists = await (await fetch('/api/artists')).json();
       let html = '<div class="section-header"><h1 class="section-title">🎙️ Voice Actors (CV)</h1></div><div class="tag-cloud">';
-      artists.forEach(a => { html += '<div class="tag-cloud-item" onclick="switchView(\\'library\\', { cv: \\'' + a.name + '\\' })"><span>' + a.name + '</span><span class="tag-count">' + a.count + ' works</span></div>'; });
+      artists.forEach(function(a) {
+        html += '<div class="tag-cloud-item" onclick="navCv(' + JSON.stringify(a.name) + ')"><span>' + a.name + '</span><span class="tag-count">' + a.count + ' works</span></div>';
+      });
       html += '</div>';
       container.innerHTML = html;
     }
@@ -1299,8 +1322,8 @@ const INDEX_HTML = `<!DOCTYPE html>
       const playlists = await (await fetch('/api/playlists')).json();
       let html = '<div class="section-header"><h1 class="section-title">📜 Your Playlists</h1><button class="btn-primary" onclick="openPlaylistModal()">+ New Playlist</button></div><div class="works-grid">';
       if (playlists.length === 0) html += '<div style="grid-column: 1/-1; padding: 3rem; text-align: center; color: var(--text-muted);">No playlists yet.</div>';
-      playlists.forEach(p => {
-        html += '<div class="work-card" onclick="loadPlaylistDetail(\\'' + p.id + '\\')"><img class="card-cover" src="' + (p.coverUrl || 'data:image/svg+xml,<svg xmlns=\\'http://www.w3.org/2000/svg\\' width=\\'200\\' height=\\'260\\'><rect width=\\'200\\' height=\\'260\\' fill=\\'%23181a24\\'/></svg>') + '"><div class="card-title">' + p.name + '</div><div class="card-sub">' + (p.items?.length || 0) + ' tracks</div></div>';
+      playlists.forEach(function(p) {
+        html += '<div class="work-card" onclick="navPlaylist(' + JSON.stringify(p.id) + ')"><img class="card-cover" src="' + (p.coverUrl || '') + '"><div class="card-title">' + p.name + '</div><div class="card-sub">' + (p.items && p.items.length ? p.items.length : 0) + ' tracks</div></div>';
       });
       html += '</div>';
       container.innerHTML = html;
@@ -1309,16 +1332,16 @@ const INDEX_HTML = `<!DOCTYPE html>
     async function loadPlaylistDetail(plId) {
       const container = document.getElementById('viewContainer');
       const playlists = await (await fetch('/api/playlists')).json();
-      const pl = playlists.find(p => p.id === plId);
+      const pl = playlists.find(function(p) { return p.id === plId; });
       if (!pl) { loadPlaylists(); return; }
 
-      let html = '<div class="work-detail-banner"><img class="detail-cover" src="' + (pl.coverUrl || '') + '"><div class="detail-info"><span class="card-rj" style="width:fit-content; margin-bottom:8px;">PLAYLIST</span><h1 class="detail-title">' + pl.name + '</h1><div class="detail-meta">' + (pl.description || 'Custom playlist') + '</div><div class="detail-meta"><strong>Tracks:</strong> ' + (pl.items?.length || 0) + '</div><div style="margin-top:auto; padding-top:16px; display:flex; gap:10px;">' + (pl.items?.length > 0 ? '<button class="btn-primary" onclick="playPlaylistItem(0, \\'' + pl.id + '\\')">▶ Play All</button>' : '') + '<button class="btn-outline" onclick="deletePlaylistAction(\\'' + pl.id + '\\')">🗑️ Delete Playlist</button><button class="btn-outline" onclick="switchView(\\'playlists\\')">← Back to Playlists</button></div></div></div><h3 style="font-size:1.2rem; font-weight:700; margin-bottom:12px;">🎵 Playlist Tracks (' + (pl.items?.length || 0) + ')</h3><table class="tracks-table"><thead><tr><th style="width: 40px;">#</th><th>Title</th><th>From Work</th><th style="width: 100px; text-align:right;">Action</th></tr></thead><tbody>';
+      let html = '<div class="work-detail-banner"><img class="detail-cover" src="' + (pl.coverUrl || '') + '"><div class="detail-info"><span class="card-rj" style="width:fit-content; margin-bottom:8px;">PLAYLIST</span><h1 class="detail-title">' + pl.name + '</h1><div class="detail-meta">' + (pl.description || 'Custom playlist') + '</div><div class="detail-meta"><strong>Tracks:</strong> ' + (pl.items ? pl.items.length : 0) + '</div><div style="margin-top:auto; padding-top:16px; display:flex; gap:10px;">' + (pl.items && pl.items.length > 0 ? '<button class="btn-primary" onclick="playPlaylistItem(0, ' + JSON.stringify(pl.id) + ')">▶ Play All</button>' : '') + '<button class="btn-outline" onclick="deletePlaylistAction(' + JSON.stringify(pl.id) + ')">🗑️ Delete Playlist</button><button class="btn-outline" onclick="switchView(&quot;playlists&quot;)">← Back to Playlists</button></div></div></div><h3 style="font-size:1.2rem; font-weight:700; margin-bottom:12px;">🎵 Playlist Tracks (' + (pl.items ? pl.items.length : 0) + ')</h3><table class="tracks-table"><thead><tr><th style="width: 40px;">#</th><th>Title</th><th>From Work</th><th style="width: 100px; text-align:right;">Action</th></tr></thead><tbody>';
 
       if (!pl.items || pl.items.length === 0) {
         html += '<tr><td colspan="4" style="text-align:center; padding:2rem; color:var(--text-muted);">Playlist is empty. Add tracks from any work in your Library!</td></tr>';
       } else {
-        pl.items.forEach((item, index) => {
-          html += '<tr class="track-row" onclick="playPlaylistItem(' + index + ', \\'' + pl.id + '\\')"><td>' + (index + 1) + '</td><td><strong>' + item.title + '</strong></td><td style="color:var(--text-muted);">' + (item.workTitle || item.rjCode) + '</td><td style="text-align:right;"><button class="btn-outline" style="padding:4px 8px; font-size:0.75rem;" onclick="event.stopPropagation(); removePlaylistItem(\\'' + pl.id + '\\', ' + index + ')">🗑️</button></td></tr>';
+        pl.items.forEach(function(item, index) {
+          html += '<tr class="track-row" onclick="playPlaylistItem(' + index + ', ' + JSON.stringify(pl.id) + ')"><td>' + (index + 1) + '</td><td><strong>' + item.title + '</strong></td><td style="color:var(--text-muted);">' + (item.workTitle || item.rjCode) + '</td><td style="text-align:right;"><button class="btn-outline" style="padding:4px 8px; font-size:0.75rem;" onclick="event.stopPropagation(); removePlaylistItem(' + JSON.stringify(pl.id) + ', ' + index + ')">🗑️</button></td></tr>';
         });
       }
       html += '</tbody></table>';
@@ -1354,16 +1377,16 @@ const INDEX_HTML = `<!DOCTYPE html>
       let html = '<div class="section-header"><h1 class="section-title">⚙️ App Settings</h1></div>';
       
       html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🛡️ Content Privacy & Disguise Mode</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 18px;">Control how adult (NSFW) cover art and tags are presented on your screen.</p>';
-      html += '<div class="settings-option ' + (contentMode === 'NSFW' ? 'selected' : '') + '" onclick="setContentMode(\\'NSFW\\')"><input type="radio" name="contentMode" value="NSFW" class="settings-radio" ' + (contentMode === 'NSFW' ? 'checked' : '') + '><div><div class="settings-label">🌶️ NSFW (Full Adult - Default)</div><div class="settings-desc">Show all original high-resolution cover arts, adult tags, and uncensored catalog.</div></div></div>';
-      html += '<div class="settings-option ' + (contentMode === 'PSFW' ? 'selected' : '') + '" onclick="setContentMode(\\'PSFW\\')"><input type="radio" name="contentMode" value="PSFW" class="settings-radio" ' + (contentMode === 'PSFW' ? 'checked' : '') + '><div><div class="settings-label">🎭 PSFW (Pseudo-SFW / Disguise Covers)</div><div class="settings-desc">Full audio remains playable, but adult cover arts are disguised with glowing stylized SFW artwork.</div></div></div>';
-      html += '<div class="settings-option ' + (contentMode === 'SFW' ? 'selected' : '') + '" onclick="setContentMode(\\'SFW\\')"><input type="radio" name="contentMode" value="SFW" class="settings-radio" ' + (contentMode === 'SFW' ? 'checked' : '') + '><div><div class="settings-label">🛡️ SFW (Strict Safe For Work)</div><div class="settings-desc">Hide all adult works and NSFW tags completely from the library and tag cloud.</div></div></div>';
+      html += '<div class="settings-option ' + (contentMode === 'NSFW' ? 'selected' : '') + '" onclick="setContentMode(&quot;NSFW&quot;)"><input type="radio" name="contentMode" value="NSFW" class="settings-radio" ' + (contentMode === 'NSFW' ? 'checked' : '') + '><div><div class="settings-label">🌶️ NSFW (Full Adult - Default)</div><div class="settings-desc">Show all original high-resolution cover arts, adult tags, and uncensored catalog.</div></div></div>';
+      html += '<div class="settings-option ' + (contentMode === 'PSFW' ? 'selected' : '') + '" onclick="setContentMode(&quot;PSFW&quot;)"><input type="radio" name="contentMode" value="PSFW" class="settings-radio" ' + (contentMode === 'PSFW' ? 'checked' : '') + '><div><div class="settings-label">🎭 PSFW (Pseudo-SFW / Disguise Covers)</div><div class="settings-desc">Full audio remains playable, but adult cover arts are disguised with glowing stylized SFW artwork.</div></div></div>';
+      html += '<div class="settings-option ' + (contentMode === 'SFW' ? 'selected' : '') + '" onclick="setContentMode(&quot;SFW&quot;)"><input type="radio" name="contentMode" value="SFW" class="settings-radio" ' + (contentMode === 'SFW' ? 'checked' : '') + '><div><div class="settings-label">🛡️ SFW (Strict Safe For Work)</div><div class="settings-desc">Hide all adult works and NSFW tags completely from the library and tag cloud.</div></div></div>';
       html += '</div>';
 
       html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🔄 Re-fetch & Update Metadata</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Re-scan DLsite for all existing works to fix missing titles, circle names, and tags.</p>';
       html += '<div style="display:flex; gap:12px; align-items:center;"><button class="btn-primary" id="btnRefreshAll" onclick="refreshAllMetadata()">🔄 Re-Fetch All Metadata</button><span id="refreshStatus" style="font-size:0.85rem; color:#38bdf8; display:none;"></span></div></div>';
 
       html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">💾 Library Data & Sync</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Export your cached library and playlists as JSON or restore your local database to Cloudflare KV.</p>';
-      html += '<div style="display:flex; flex-wrap:wrap; gap:12px; align-items:center;"><button class="btn-primary" onclick="exportBackup()">📥 Export JSON Backup</button><input type="file" id="backupFileInput" accept=".json" style="display:none;" onchange="importBackupFile(event)"><button class="btn-outline" onclick="document.getElementById(\\'backupFileInput\\').click()">📤 Restore / Upload Backup JSON</button></div></div>';
+      html += '<div style="display:flex; flex-wrap:wrap; gap:12px; align-items:center;"><button class="btn-primary" onclick="exportBackup()">📥 Export JSON Backup</button><input type="file" id="backupFileInput" accept=".json" style="display:none;" onchange="importBackupFile(event)"><button class="btn-outline" onclick="document.getElementById(&quot;backupFileInput&quot;).click()">📤 Restore / Upload Backup JSON</button></div></div>';
 
       html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🐧 aStreamer v1.0 Milestone Release</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Pure Cloudflare Worker Serverless Streaming Suite with Multi-Source Metadata and Edge Audio Acceleration.</p>';
       html += '<button class="btn-outline" onclick="openChangelogModal()">📜 View Version 1.0 Release Notes & Architecture</button></div>';
