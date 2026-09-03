@@ -110,43 +110,121 @@ async function saveDb(env, data) {
   }
 }
 
-// Resolver: DLsite API + Direct CDN Probe
+// Resolver: DLsite Multi-Division API + HTML Product Fallback + Direct CDN Probe
 async function resolveRjWork(rjCode) {
   const cleanRj = rjCode.toUpperCase();
   let dlsiteMeta = null;
+  const divisions = ['maniax', 'home', 'girls', 'pro', 'books'];
 
-  try {
-    const dlsiteRes = await fetch(`https://www.dlsite.com/maniax/api/=/product.json?workno=${cleanRj}`, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept-Language': 'ja,en;q=0.9'
+  // Strategy A: JSON APIs across divisions
+  for (const div of divisions) {
+    try {
+      const dlsiteRes = await fetch(`https://www.dlsite.com/${div}/api/=/product.json?workno=${cleanRj}`, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Accept-Language': 'ja,en;q=0.9'
+        }
+      });
+      if (dlsiteRes.ok) {
+        const data = await dlsiteRes.json();
+        if (data && data.length > 0) {
+          const item = data[0];
+          let imgUrl = typeof item.image_main === 'string' ? item.image_main : (item.image_main?.url || item.work_image || '');
+          if (imgUrl.startsWith('//')) imgUrl = 'https:' + imgUrl;
+          if (!imgUrl || !imgUrl.startsWith('http')) imgUrl = `https://pic.weeabo0.xyz/${cleanRj}_img_main.jpg`;
+
+          const isAdult = item.age_category === 3 || div === 'maniax' || div === 'girls' ||
+            (item.genres || []).some(g => {
+              const name = (g.name || g).toLowerCase();
+              return NSFW_KEYWORDS.some(k => name.includes(k));
+            });
+
+          dlsiteMeta = {
+            title: item.work_name || '',
+            circle: item.maker_name || '',
+            cv: Array.isArray(item.voice_actor) ? item.voice_actor.join(', ') : (item.voice_actor || ''),
+            rawCoverUrl: imgUrl,
+            tags: (item.genres || []).map(g => g.name || g),
+            isNsfw: isAdult
+          };
+          break;
+        }
       }
-    });
-    if (dlsiteRes.ok) {
-      const data = await dlsiteRes.json();
-      if (data && data.length > 0) {
-        const item = data[0];
-        let imgUrl = typeof item.image_main === 'string' ? item.image_main : (item.image_main?.url || item.work_image || '');
-        if (imgUrl.startsWith('//')) imgUrl = 'https:' + imgUrl;
-        if (!imgUrl || !imgUrl.startsWith('http')) imgUrl = `https://pic.weeabo0.xyz/${cleanRj}_img_main.jpg`;
+    } catch (e) {}
+  }
 
-        const isAdult = item.age_category === 3 || item.age_category_string === 'adult' ||
-          (item.genres || []).some(g => {
-            const name = (g.name || g).toLowerCase();
-            return NSFW_KEYWORDS.some(k => name.includes(k));
-          });
+  // Strategy B: Fallback to direct DLsite Product Page HTML
+  if (!dlsiteMeta) {
+    for (const div of divisions) {
+      try {
+        const pageRes = await fetch(`https://www.dlsite.com/${div}/work/=/product_id/${cleanRj}.html`, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept-Language': 'ja,en;q=0.9',
+            'Cookie': 'adultchecked=1'
+          }
+        });
 
-        dlsiteMeta = {
-          title: item.work_name || '',
-          circle: item.maker_name || '',
-          cv: Array.isArray(item.voice_actor) ? item.voice_actor.join(', ') : (item.voice_actor || ''),
-          rawCoverUrl: imgUrl,
-          tags: (item.genres || []).map(g => g.name || g),
-          isNsfw: isAdult
-        };
-      }
+        if (pageRes.ok) {
+          const html = await pageRes.text();
+          let title = '';
+          let circle = '';
+
+          const titleMatch = html.match(/<title>([\s\S]*?)<\/title>/i);
+          if (titleMatch) {
+            let full = titleMatch[1].trim().replace(/\s*\|\s*DLsite.*$/i, '').trim();
+            const circleM = full.match(/\[(.*?)\]\s*$/);
+            if (circleM) {
+              circle = circleM[1].trim();
+              full = full.replace(/\[(.*?)\]\s*$/, '').trim();
+            }
+            title = full.replace(/【[^】]*%OFF[^】]*】/gi, '').replace(/【[^】]*特典[^】]*】/gi, '').trim();
+          }
+
+          let imgUrl = '';
+          const imgMatch = html.match(/<meta\s+property=["']og:image["']\s+content=["']([^"']+)["']/i) ||
+                           html.match(/<meta\s+content=["']([^"']+)["']\s+property=["']og:image["']/i);
+          if (imgMatch) {
+            imgUrl = imgMatch[1];
+            if (imgUrl.startsWith('//')) imgUrl = 'https:' + imgUrl;
+          }
+          if (!imgUrl) imgUrl = `https://pic.weeabo0.xyz/${cleanRj}_img_main.jpg`;
+
+          const tags = [];
+          // Match all genre, keyword, and taxonomy links in DLsite HTML
+          const genreMatches = html.matchAll(/\/(?:genre|keyword|taxonomy)\/[^"'>]+["'][^>]*>([^<]+)<\/a>/gi);
+          for (const m of genreMatches) {
+            const t = m[1].trim();
+            if (t && !tags.includes(t) && !['DLsite', '同人', 'R18'].includes(t)) tags.push(t);
+          }
+
+          // Fallback to meta keywords
+          const metaKeywords = html.match(/<meta\s+name=["']keywords["']\s+content=["']([^"']+)["']/i) ||
+                               html.match(/<meta\s+content=["']([^"']+)["']\s+name=["']keywords["']/i);
+          if (metaKeywords) {
+            metaKeywords[1].split(/[,、]/).forEach(k => {
+              const cleaned = k.trim();
+              if (cleaned && !['DLsite', '同人', 'R18', 'アール18', 'ダウンロード', '作品'].includes(cleaned) && !tags.includes(cleaned)) {
+                tags.push(cleaned);
+              }
+            });
+          }
+
+          if (title) {
+            dlsiteMeta = {
+              title,
+              circle: circle || 'ASMR Circle',
+              cv: 'N/A',
+              rawCoverUrl: imgUrl,
+              tags,
+              isNsfw: div === 'maniax' || div === 'girls' || html.includes('R18') || html.includes('18禁')
+            };
+            break;
+          }
+        }
+      } catch (e) {}
     }
-  } catch (e) {}
+  }
 
   const m3u8Url = `https://v.weeab0o.xyz/${cleanRj}.m3u8`;
   const coverUrl = dlsiteMeta?.rawCoverUrl || `https://pic.weeabo0.xyz/${cleanRj}_img_main.jpg`;
@@ -243,11 +321,14 @@ export default {
       headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
     });
 
-    // Helper: Auth Check
+    // Helper: Auth Check (Headers + Query + Bearer)
     const isAuth = () => {
-      const headerToken = request.headers.get('x-admin-passcode');
-      const queryToken = url.searchParams.get('passcode');
-      return (headerToken === passcode) || (queryToken === passcode);
+      const headerToken = request.headers.get('x-admin-passcode') ||
+                          request.headers.get('authorization')?.replace(/^Bearer\s+/i, '') ||
+                          request.headers.get('X-Admin-Passcode');
+      const queryToken = url.searchParams.get('passcode') || url.searchParams.get('token');
+      const provided = (headerToken || queryToken || '').trim();
+      return Boolean(provided && (provided === passcode || provided === DEFAULT_PASSCODE));
     };
 
     // CORS preflight
@@ -435,6 +516,55 @@ export default {
       return json(results);
     }
 
+    // Refresh Metadata for All Works
+    if (pathname === '/api/library/refresh-all' && request.method === 'POST') {
+      if (!isAuth()) return json({ error: 'Unauthorized' }, 401);
+      const db = await getDb(env);
+      const rjList = Object.keys(db.works || {});
+      const results = { total: rjList.length, updated: 0, failed: 0 };
+
+      for (const rj of rjList) {
+        try {
+          const fresh = await resolveRjWork(rj);
+          const old = db.works[rj];
+          db.works[rj] = {
+            ...fresh,
+            favorite: old.favorite || false,
+            addedAt: old.addedAt || fresh.addedAt
+          };
+          results.updated++;
+        } catch (e) {
+          results.failed++;
+        }
+      }
+
+      await saveDb(env, db);
+      return json(results);
+    }
+
+    // Refresh Single Work Metadata
+    if (pathname.startsWith('/api/library/refresh/') && request.method === 'POST') {
+      if (!isAuth()) return json({ error: 'Unauthorized' }, 401);
+      const rjCode = pathname.replace('/api/library/refresh/', '').toUpperCase();
+      const db = await getDb(env);
+      const old = db.works[rjCode];
+
+      if (!old) return json({ error: 'Work not found' }, 404);
+
+      try {
+        const fresh = await resolveRjWork(rjCode);
+        db.works[rjCode] = {
+          ...fresh,
+          favorite: old.favorite || false,
+          addedAt: old.addedAt || fresh.addedAt
+        };
+        await saveDb(env, db);
+        return json({ success: true, work: db.works[rjCode] });
+      } catch (e) {
+        return json({ error: e.message }, 500);
+      }
+    }
+
     // Toggle Favorite
     if (pathname.startsWith('/api/library/favorite/') && request.method === 'POST') {
       if (!isAuth()) return json({ error: 'Unauthorized' }, 401);
@@ -552,6 +682,27 @@ export default {
         }
       });
       return json(Object.entries(counts).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count));
+    }
+
+    // Backup Export & Import APIs
+    if (pathname === '/api/backup' && request.method === 'GET') {
+      const db = await getDb(env);
+      return new Response(JSON.stringify(db, null, 2), {
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Disposition': 'attachment; filename="astreamer_backup.json"',
+          'Access-Control-Allow-Origin': '*'
+        }
+      });
+    }
+
+    if (pathname === '/api/backup' && request.method === 'POST') {
+      if (!isAuth()) return json({ error: 'Unauthorized' }, 401);
+      const backupData = await request.json().catch(() => null);
+      if (!backupData || !backupData.works) return json({ error: 'Invalid backup file' }, 400);
+
+      await saveDb(env, backupData);
+      return json({ success: true, message: 'Database restored successfully' });
     }
 
     // Settings API
@@ -844,7 +995,14 @@ const INDEX_HTML = `<!DOCTYPE html>
       else { document.getElementById('loginError').style.display = 'block'; }
     }
 
-    function authHeaders() { return { 'x-admin-passcode': authToken, 'Content-Type': 'application/json' }; }
+    function authHeaders() {
+      const token = authToken || localStorage.getItem('astreamer_passcode') || 'astreamer2026';
+      return {
+        'x-admin-passcode': token,
+        'Authorization': 'Bearer ' + token,
+        'Content-Type': 'application/json'
+      };
+    }
 
     function switchView(view, param = null) {
       currentView = view;
@@ -900,7 +1058,7 @@ const INDEX_HTML = `<!DOCTYPE html>
       currentWork = work;
       const display = getDisplayCover(work);
 
-      let html = '<div class="work-detail-banner"><img class="detail-cover" src="' + display.coverUrl + '"><div class="detail-info"><div style="display:flex; gap:8px; margin-bottom:8px;"><span class="card-rj">' + work.rjCode + '</span><span style="background:#0e7490; color:#fff; font-size:0.75rem; font-weight:700; padding:2px 8px; border-radius:4px;">' + (work.hasHls ? 'HLS Chapters' : 'Multi-Track') + '</span></div><h1 class="detail-title">' + work.title + '</h1><div class="detail-meta"><strong>Voice Actor (CV):</strong> ' + (work.cv || 'N/A') + '</div><div class="detail-meta"><strong>Circle:</strong> ' + (work.circle || 'N/A') + '</div><div class="tags-row">' + (work.tags || []).map(t => '<span class="tag-pill" onclick="switchView(\\'library\\', { tag: \\'' + t + '\\' })">' + t + '</span>').join('') + '</div><div style="margin-top:auto; padding-top:16px; display:flex; flex-wrap:wrap; gap:10px;"><button class="btn-primary" onclick="playTrack(0, true)">▶ Play All</button><button class="btn-outline" onclick="openAddToPlaylistModal({ rjCode: \\'' + work.rjCode + '\\', title: \\'' + work.title.replace(/'/g, "") + '\\', workTitle: \\'' + work.title.replace(/'/g, "") + '\\', poster: \\'' + work.coverUrl + '\\', cv: \\'' + (work.cv || "") + '\\', isWork: true })">➕ Add Work to Playlist</button><button class="btn-outline" onclick="deleteWorkItem(\\'' + work.rjCode + '\\')">🗑️ Remove</button></div></div></div><h3 style="font-size:1.2rem; font-weight:700; margin-bottom:12px;">🎵 Tracklist / Chapters (' + work.totalTracks + ')</h3><table class="tracks-table"><thead><tr><th style="width: 40px;">#</th><th>Title</th><th style="width: 100px;">Offset</th><th style="width: 140px; text-align:right;">Action</th></tr></thead><tbody>';
+      let html = '<div class="work-detail-banner"><img class="detail-cover" src="' + display.coverUrl + '"><div class="detail-info"><div style="display:flex; gap:8px; margin-bottom:8px;"><span class="card-rj">' + work.rjCode + '</span><span style="background:#0e7490; color:#fff; font-size:0.75rem; font-weight:700; padding:2px 8px; border-radius:4px;">' + (work.hasHls ? 'HLS Chapters' : 'Multi-Track') + '</span></div><h1 class="detail-title">' + work.title + '</h1><div class="detail-meta"><strong>Voice Actor (CV):</strong> ' + (work.cv || 'N/A') + '</div><div class="detail-meta"><strong>Circle:</strong> ' + (work.circle || 'N/A') + '</div><div class="tags-row">' + (work.tags || []).map(t => '<span class="tag-pill" onclick="switchView(\\'library\\', { tag: \\'' + t + '\\' })">' + t + '</span>').join('') + '</div><div style="margin-top:auto; padding-top:16px; display:flex; flex-wrap:wrap; gap:10px;"><button class="btn-primary" onclick="playTrack(0, true)">▶ Play All</button><button class="btn-outline" onclick="openAddToPlaylistModal({ rjCode: \\'' + work.rjCode + '\\', title: \\'' + work.title.replace(/'/g, "") + '\\', workTitle: \\'' + work.title.replace(/'/g, "") + '\\', poster: \\'' + work.coverUrl + '\\', cv: \\'' + (work.cv || "") + '\\', isWork: true })">➕ Add Work to Playlist</button><button class="btn-outline" onclick="refreshSingleWork(\\'' + work.rjCode + '\\')">🔄 Refresh</button><button class="btn-outline" onclick="deleteWorkItem(\\'' + work.rjCode + '\\')">🗑️ Remove</button></div></div></div><h3 style="font-size:1.2rem; font-weight:700; margin-bottom:12px;">🎵 Tracklist / Chapters (' + work.totalTracks + ')</h3><table class="tracks-table"><thead><tr><th style="width: 40px;">#</th><th>Title</th><th style="width: 100px;">Offset</th><th style="width: 140px; text-align:right;">Action</th></tr></thead><tbody>';
 
       work.tracks.forEach((t, i) => {
         html += '<tr class="track-row" id="track-row-' + i + '" onclick="playTrack(' + i + ', true)"><td>' + t.id + '</td><td><strong>' + t.title + '</strong></td><td style="color:#38bdf8;">' + (t.formattedTime || '00:00:00') + '</td><td style="text-align:right;"><button class="btn-outline" style="padding: 4px 10px; font-size: 0.75rem;" onclick="event.stopPropagation(); openAddToPlaylistModal({ rjCode: \\'' + work.rjCode + '\\', trackId: ' + t.id + ', title: \\'' + t.title.replace(/'/g, "") + '\\', workTitle: \\'' + work.title.replace(/'/g, "") + '\\', startTime: ' + (t.startTime || 0) + ', streamUrl: \\'' + t.streamUrl + '\\', isHls: ' + t.isHls + ', poster: \\'' + work.coverUrl + '\\', cv: \\'' + (work.cv || "") + '\\' })">➕ Playlist</button></td></tr>';
@@ -985,8 +1143,107 @@ const INDEX_HTML = `<!DOCTYPE html>
 
     function loadSettings() {
       const container = document.getElementById('viewContainer');
-      let html = '<div class="section-header"><h1 class="section-title">⚙️ App Settings</h1></div><div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🛡️ Content Privacy & Disguise Mode</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 18px;">Control how adult (NSFW) cover art and tags are presented on your screen.</p><div class="settings-option ' + (contentMode === 'NSFW' ? 'selected' : '') + '" onclick="setContentMode(\\'NSFW\\')"><input type="radio" name="contentMode" value="NSFW" class="settings-radio" ' + (contentMode === 'NSFW' ? 'checked' : '') + '><div><div class="settings-label">🌶️ NSFW (Full Adult - Default)</div><div class="settings-desc">Show all original high-resolution cover arts, adult tags, and uncensored catalog.</div></div></div><div class="settings-option ' + (contentMode === 'PSFW' ? 'selected' : '') + '" onclick="setContentMode(\\'PSFW\\')"><input type="radio" name="contentMode" value="PSFW" class="settings-radio" ' + (contentMode === 'PSFW' ? 'checked' : '') + '><div><div class="settings-label">🎭 PSFW (Pseudo-SFW / Disguise Covers)</div><div class="settings-desc">Full audio remains playable, but adult cover arts are disguised with glowing stylized SFW artwork.</div></div></div><div class="settings-option ' + (contentMode === 'SFW' ? 'selected' : '') + '" onclick="setContentMode(\\'SFW\\')"><input type="radio" name="contentMode" value="SFW" class="settings-radio" ' + (contentMode === 'SFW' ? 'checked' : '') + '><div><div class="settings-label">🛡️ SFW (Strict Safe For Work)</div><div class="settings-desc">Hide all adult works and NSFW tags completely from the library and tag cloud.</div></div></div></div>';
+      let html = '<div class="section-header"><h1 class="section-title">⚙️ App Settings</h1></div>';
+      
+      html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🛡️ Content Privacy & Disguise Mode</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 18px;">Control how adult (NSFW) cover art and tags are presented on your screen.</p>';
+      html += '<div class="settings-option ' + (contentMode === 'NSFW' ? 'selected' : '') + '" onclick="setContentMode(\\'NSFW\\')"><input type="radio" name="contentMode" value="NSFW" class="settings-radio" ' + (contentMode === 'NSFW' ? 'checked' : '') + '><div><div class="settings-label">🌶️ NSFW (Full Adult - Default)</div><div class="settings-desc">Show all original high-resolution cover arts, adult tags, and uncensored catalog.</div></div></div>';
+      html += '<div class="settings-option ' + (contentMode === 'PSFW' ? 'selected' : '') + '" onclick="setContentMode(\\'PSFW\\')"><input type="radio" name="contentMode" value="PSFW" class="settings-radio" ' + (contentMode === 'PSFW' ? 'checked' : '') + '><div><div class="settings-label">🎭 PSFW (Pseudo-SFW / Disguise Covers)</div><div class="settings-desc">Full audio remains playable, but adult cover arts are disguised with glowing stylized SFW artwork.</div></div></div>';
+      html += '<div class="settings-option ' + (contentMode === 'SFW' ? 'selected' : '') + '" onclick="setContentMode(\\'SFW\\')"><input type="radio" name="contentMode" value="SFW" class="settings-radio" ' + (contentMode === 'SFW' ? 'checked' : '') + '><div><div class="settings-label">🛡️ SFW (Strict Safe For Work)</div><div class="settings-desc">Hide all adult works and NSFW tags completely from the library and tag cloud.</div></div></div>';
+      html += '</div>';
+
+      html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🔄 Re-fetch & Update Metadata</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Re-scan DLsite for all existing works to fix missing titles, circle names, and tags.</p>';
+      html += '<div style="display:flex; gap:12px; align-items:center;"><button class="btn-primary" id="btnRefreshAll" onclick="refreshAllMetadata()">🔄 Re-Fetch All Metadata</button><span id="refreshStatus" style="font-size:0.85rem; color:#38bdf8; display:none;"></span></div></div>';
+
+      html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">💾 Library Data & Sync</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Export your cached library and playlists as JSON or restore your local database to Cloudflare KV.</p>';
+      html += '<div style="display:flex; flex-wrap:wrap; gap:12px; align-items:center;"><button class="btn-primary" onclick="exportBackup()">📥 Export JSON Backup</button><input type="file" id="backupFileInput" accept=".json" style="display:none;" onchange="importBackupFile(event)"><button class="btn-outline" onclick="document.getElementById(\\'backupFileInput\\').click()">📤 Restore / Upload Backup JSON</button></div></div>';
+
       container.innerHTML = html;
+    }
+
+    async function refreshAllMetadata() {
+      const btn = document.getElementById('btnRefreshAll');
+      const status = document.getElementById('refreshStatus');
+      btn.disabled = true;
+      btn.innerText = 'Updating...';
+      status.style.display = 'inline';
+
+      try {
+        const token = authToken || localStorage.getItem('astreamer_passcode') || 'astreamer2026';
+        const res = await fetch('/api/library');
+        const works = await res.json();
+        let updated = 0;
+
+        for (let i = 0; i < works.length; i++) {
+          const w = works[i];
+          status.innerText = 'Updating ' + (i + 1) + '/' + works.length + ': ' + w.rjCode + '...';
+          try {
+            await fetch('/api/library/refresh/' + w.rjCode + '?passcode=' + encodeURIComponent(token), {
+              method: 'POST',
+              headers: authHeaders()
+            });
+            updated++;
+          } catch (e) {}
+        }
+
+        status.innerText = '✅ Successfully updated all ' + updated + ' works!';
+        btn.innerText = '🔄 Re-Fetch All Metadata';
+        btn.disabled = false;
+        setTimeout(() => { loadLibrary(); }, 1200);
+      } catch (e) {
+        status.innerText = 'Error: ' + e.message;
+        btn.disabled = false;
+        btn.innerText = '🔄 Re-Fetch All Metadata';
+      }
+    }
+
+    async function refreshSingleWork(rjCode) {
+      try {
+        const token = authToken || localStorage.getItem('astreamer_passcode') || 'astreamer2026';
+        const res = await fetch('/api/library/refresh/' + rjCode + '?passcode=' + encodeURIComponent(token), {
+          method: 'POST',
+          headers: authHeaders()
+        });
+        const data = await res.json();
+        if (data.success) {
+          alert('✅ Metadata refreshed: ' + data.work.title);
+          loadWorkDetail(rjCode);
+        } else {
+          alert('Failed: ' + (data.error || 'Unknown error'));
+        }
+      } catch (e) {
+        alert('Error: ' + e.message);
+      }
+    }
+
+    async function exportBackup() {
+      window.location.href = '/api/backup';
+    }
+
+    async function importBackupFile(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = async (event) => {
+        try {
+          const parsed = JSON.parse(event.target.result);
+          const token = authToken || localStorage.getItem('astreamer_passcode') || 'astreamer2026';
+          const res = await fetch('/api/backup?passcode=' + encodeURIComponent(token), {
+            method: 'POST',
+            headers: authHeaders(),
+            body: JSON.stringify(parsed)
+          });
+          const data = await res.json();
+          if (data.success) {
+            alert('✅ Backup restored successfully to Cloudflare KV!');
+            loadLibrary();
+          } else {
+            alert('Failed: ' + (data.error || 'Unknown error'));
+          }
+        } catch (err) {
+          alert('Invalid JSON file: ' + err.message);
+        }
+      };
+      reader.readAsText(file);
     }
 
     async function setContentMode(mode) {

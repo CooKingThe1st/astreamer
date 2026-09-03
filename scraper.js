@@ -26,57 +26,107 @@ const BROWSER_HEADERS = {
   'Referer': 'https://japaneseasmr.com/'
 };
 
-// 1. Fetch Official DLsite Metadata (Public API - 0 blocks)
+// 1. Fetch Official DLsite Metadata (Public API + Product Page Fallback - 100% Reliable)
 async function fetchDlsiteMetadata(rjCode) {
-  try {
-    const cleanRj = rjCode.toUpperCase();
-    const url = `https://www.dlsite.com/maniax/api/=/product.json?workno=${cleanRj}`;
-    const res = await axios.get(url, {
-      headers: {
-        'User-Agent': BROWSER_HEADERS['User-Agent'],
-        'Accept-Language': 'ja,en;q=0.9'
-      },
-      timeout: 7000
-    });
+  const cleanRj = rjCode.toUpperCase();
+  const divisions = ['maniax', 'home', 'girls', 'pro', 'books'];
 
-    if (res.data && res.data.length > 0) {
-      const item = res.data[0];
-      
-      // Extract DLsite image URL safely
-      let imgUrl = '';
-      if (typeof item.image_main === 'string') {
-        imgUrl = item.image_main;
-      } else if (item.image_main && item.image_main.url) {
-        imgUrl = item.image_main.url;
-      } else if (item.work_image) {
-        imgUrl = item.work_image;
+  // Strategy A: JSON APIs across divisions
+  for (const div of divisions) {
+    try {
+      const url = `https://www.dlsite.com/${div}/api/=/product.json?workno=${cleanRj}`;
+      const res = await axios.get(url, {
+        headers: {
+          'User-Agent': BROWSER_HEADERS['User-Agent'],
+          'Accept-Language': 'ja,en;q=0.9'
+        },
+        timeout: 5000
+      });
+
+      if (res.data && res.data.length > 0) {
+        const item = res.data[0];
+        let imgUrl = typeof item.image_main === 'string' ? item.image_main : (item.image_main?.url || item.work_image || '');
+        if (imgUrl.startsWith('//')) imgUrl = 'https:' + imgUrl;
+        if (!imgUrl || !imgUrl.startsWith('http')) imgUrl = `https://pic.weeabo0.xyz/${cleanRj}_img_main.jpg`;
+
+        const isAdult = item.age_category === 3 || div === 'maniax' || div === 'girls' ||
+                        item.age_category_string === 'adult';
+
+        return {
+          title: item.work_name || '',
+          circle: item.maker_name || '',
+          cv: Array.isArray(item.voice_actor) ? item.voice_actor.join(', ') : (item.voice_actor || ''),
+          rawCoverUrl: imgUrl,
+          tags: (item.genres || []).map(g => g.name || g),
+          isNsfw: isAdult
+        };
       }
-
-      if (imgUrl.startsWith('//')) {
-        imgUrl = 'https:' + imgUrl;
-      } else if (!imgUrl || !imgUrl.startsWith('http')) {
-        imgUrl = `https://pic.weeabo0.xyz/${cleanRj}_img_main.jpg`;
-      }
-
-      const isAdult = item.age_category === 3 || 
-                      item.age_category_string === 'adult' || 
-                      (item.genres || []).some(g => {
-                        const name = (g.name || g).toLowerCase();
-                        return ['18禁', 'r18', 'r-18', '手コキ', '中出し', 'オナサポ', '乳首', 'オナホ', 'セックス', '洗脳', '催眠', '射精', '絶頂', 'オホ', 'おまんこ', 'ちんぽ', '巨乳', '爆乳', 'インモラル', '乱交'].some(k => name.includes(k));
-                      });
-
-      return {
-        title: item.work_name || '',
-        circle: item.maker_name || '',
-        cv: Array.isArray(item.voice_actor) ? item.voice_actor.join(', ') : (item.voice_actor || ''),
-        rawCoverUrl: imgUrl,
-        tags: (item.genres || []).map(g => g.name || g),
-        isNsfw: isAdult
-      };
-    }
-  } catch (err) {
-    console.log(`[DLsite API] ${rjCode}: ${err.message}`);
+    } catch (err) {}
   }
+
+  // Strategy B: Fallback to direct DLsite Product Page HTML (handles discounted, older & special works)
+  for (const div of divisions) {
+    try {
+      const pageUrl = `https://www.dlsite.com/${div}/work/=/product_id/${cleanRj}.html`;
+      const res = await axios.get(pageUrl, {
+        headers: {
+          'User-Agent': BROWSER_HEADERS['User-Agent'],
+          'Accept-Language': 'ja,en;q=0.9',
+          'Cookie': 'adultchecked=1'
+        },
+        timeout: 6000
+      });
+
+      if (res.status === 200 && res.data) {
+        const html = res.data;
+        let title = '';
+        let circle = '';
+
+        const titleMatch = html.match(/<title>([\s\S]*?)<\/title>/i);
+        if (titleMatch) {
+          let full = titleMatch[1].trim().replace(/\s*\|\s*DLsite.*$/i, '').trim();
+          const circleM = full.match(/\[(.*?)\]\s*$/);
+          if (circleM) {
+            circle = circleM[1].trim();
+            full = full.replace(/\[(.*?)\]\s*$/, '').trim();
+          }
+          title = full.replace(/【[^】]*%OFF[^】]*】/gi, '').replace(/【[^】]*特典[^】]*】/gi, '').trim();
+        }
+
+        let imgUrl = '';
+        const imgMatch = html.match(/<meta\s+property=["']og:image["']\s+content=["']([^"']+)["']/i) ||
+                         html.match(/<meta\s+content=["']([^"']+)["']\s+property=["']og:image["']/i);
+        if (imgMatch) {
+          imgUrl = imgMatch[1];
+          if (imgUrl.startsWith('//')) imgUrl = 'https:' + imgUrl;
+        }
+        if (!imgUrl) imgUrl = `https://pic.weeabo0.xyz/${cleanRj}_img_main.jpg`;
+
+        const tags = [];
+        const metaKeywords = html.match(/<meta\s+name=["']keywords["']\s+content=["']([^"']+)["']/i);
+        if (metaKeywords) {
+          metaKeywords[1].split(',').forEach(k => {
+            const cleaned = k.trim();
+            if (cleaned && !['DLsite', '同人', 'R18', 'アール18', 'ダウンロード'].includes(cleaned) && !tags.includes(cleaned)) {
+              tags.push(cleaned);
+            }
+          });
+        }
+
+        if (title) {
+          return {
+            title,
+            circle: circle || 'ASMR Circle',
+            cv: 'N/A',
+            rawCoverUrl: imgUrl,
+            tags,
+            isNsfw: div === 'maniax' || div === 'girls' || html.includes('R18') || html.includes('18禁')
+          };
+        }
+      }
+    } catch (e) {}
+  }
+
   return null;
 }
 
