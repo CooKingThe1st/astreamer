@@ -1,0 +1,11 @@
+name = "astreamer"
+main = "worker.js"
+compatibility_date = "2024-04-01"
+
+[vars]
+ADMIN_PASSCODE = "astreamer2026"
+
+# Run `npx wrangler kv namespace create ASTREAMER_KV` and paste the generated id below
+# [[kv_namespaces]]
+# binding = "ASTREAMER_KV"
+# id = "YOUR_KV_NAMESPACE_ID"
