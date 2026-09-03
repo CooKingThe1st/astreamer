@@ -146,38 +146,36 @@ async function resolveRjWork(rjCode) {
             if (makerLinkMatch) circle = makerLinkMatch[1].trim();
           }
 
-          // Voice Actor (CV) - Comprehensive extraction across all patterns
-          let cv = dlsiteMeta?.cv && dlsiteMeta.cv !== 'N/A' ? dlsiteMeta.cv : '';
+          // Voice Actor (CV) - Clean multi-source parser
+          let cv = dlsiteMeta?.cv && dlsiteMeta.cv !== 'N/A' && !dlsiteMeta.cv.includes('-->') && !dlsiteMeta.cv.includes('<') ? dlsiteMeta.cv : '';
           if (!cv) {
+            const cleanHtml = html.replace(/<!--[\s\S]*?-->/g, '');
             const cvList = [];
-            const cvPatterns = [
-              /【\s*CV[.:：\s]*([^】]+)】/i,
-              /\(\s*CV[.:：\s]*([^)]+)\)/i,
-              /（\s*CV[.:：\s]*([^）]+)）/i,
-              /\[\s*CV[.:：\s]*([^\]]+)\]/i,
-              /CV[.:：\s]+([^\r\n<()「」【】（）]{2,60})/i,
-              /(?:声優|ボイス|キャスト)[.:：\s]+([^\r\n<()「」【】（）]{2,60})/i
-            ];
 
-            for (const p of cvPatterns) {
-              const m = html.match(p);
-              if (m && m[1]) {
-                m[1].split(/[/,、・\s+＆&]+/).forEach(c => {
+            // Pattern A: DLsite Outline Table
+            const outlineMatch = cleanHtml.match(/<th[^>]*>(?:声優|CV|キャスト|ボイス)<\/th>\s*<td[^>]*>([\s\S]*?)<\/td>/i);
+            if (outlineMatch) {
+              const actorLinks = outlineMatch[1].matchAll(/>([^<]+)<\/a>/g);
+              for (const m of actorLinks) {
+                const name = m[1].replace(/様|さん|氏|他/g, '').trim();
+                if (name && name.length >= 2 && !['DLsite', '声優', '同人'].includes(name) && !cvList.includes(name)) {
+                  cvList.push(name);
+                }
+              }
+            }
+
+            // Pattern B: Bracketed CV in description / text
+            if (cvList.length === 0) {
+              const textToSearch = cleanHtml;
+              const bracketMatches = textToSearch.matchAll(/(?:【|\(|（|\[)\s*(?:CV|声優|ボイス)[.:：\s]*([^】)）\]\r\n<]+)(?:】|\)|）|\])/gi);
+              for (const bm of bracketMatches) {
+                bm[1].split(/[/,、・\s+＆&]+/).forEach(c => {
                   const clean = c.replace(/様|さん|氏|他|／/g, '').trim();
                   if (clean && clean.length >= 2 && !['DLsite', '同人', 'ASMR', 'R18'].includes(clean) && !cvList.includes(clean)) {
                     cvList.push(clean);
                   }
                 });
                 if (cvList.length > 0) break;
-              }
-            }
-
-            // HTML table / link matches
-            const linkCvMatches = html.matchAll(/href=["'][^"']*\/(?:author|voice|actor)\/[^"']*["'][^>]*>([^<]+)<\/a>/gi);
-            for (const lm of linkCvMatches) {
-              const clean = lm[1].trim();
-              if (clean && !cvList.includes(clean) && !['DLsite', '声優', '同人', 'サークル'].includes(clean)) {
-                cvList.push(clean);
               }
             }
 
@@ -197,6 +195,13 @@ async function resolveRjWork(rjCode) {
           CANDIDATE_KEYWORDS.forEach(kw => {
             if (html.includes(kw) && !tags.includes(kw)) tags.push(kw);
           });
+
+          // Always add Voice Actors as tags/genres!
+          if (cv && cv !== 'N/A') {
+            cv.split(/[/,、・\s]+/).map(s => s.trim()).filter(Boolean).forEach(c => {
+              if (c.length >= 2 && !tags.includes(c)) tags.push(c);
+            });
+          }
 
           // Cover Image
           let imgUrl = dlsiteMeta?.rawCoverUrl || '';
@@ -1183,8 +1188,7 @@ const INDEX_HTML = `<!DOCTYPE html>
       status.style.display = 'inline';
 
       try {
-        const token = authToken || localStorage.getItem('astreamer_passcode') || 'astreamer2026';
-        const res = await fetch('/api/library');
+        const res = await apiFetch('/api/library');
         const works = await res.json();
         let updated = 0;
 
@@ -1192,12 +1196,11 @@ const INDEX_HTML = `<!DOCTYPE html>
           const w = works[i];
           status.innerText = 'Updating ' + (i + 1) + '/' + works.length + ': ' + w.rjCode + '...';
           try {
-            await fetch('/api/library/refresh/' + w.rjCode + '?passcode=' + encodeURIComponent(token), {
-              method: 'POST',
-              headers: authHeaders()
-            });
+            await apiFetch('/api/library/refresh/' + w.rjCode, { method: 'POST' });
             updated++;
-          } catch (e) {}
+          } catch (e) {
+            if (e.message === 'Unauthorized') return;
+          }
         }
 
         status.innerText = '✅ Successfully updated all ' + updated + ' works!';
@@ -1205,7 +1208,9 @@ const INDEX_HTML = `<!DOCTYPE html>
         btn.disabled = false;
         setTimeout(() => { loadLibrary(); }, 1200);
       } catch (e) {
-        status.innerText = 'Error: ' + e.message;
+        if (e.message !== 'Unauthorized') {
+          status.innerText = 'Error: ' + e.message;
+        }
         btn.disabled = false;
         btn.innerText = '🔄 Re-Fetch All Metadata';
       }
@@ -1213,20 +1218,18 @@ const INDEX_HTML = `<!DOCTYPE html>
 
     async function refreshSingleWork(rjCode) {
       try {
-        const token = authToken || localStorage.getItem('astreamer_passcode') || 'astreamer2026';
-        const res = await fetch('/api/library/refresh/' + rjCode + '?passcode=' + encodeURIComponent(token), {
-          method: 'POST',
-          headers: authHeaders()
-        });
+        const res = await apiFetch('/api/library/refresh/' + rjCode, { method: 'POST' });
         const data = await res.json();
         if (data.success) {
-          alert('✅ Metadata refreshed: ' + data.work.title);
+          alert('✅ Metadata refreshed: ' + data.work.title + (data.work.cv ? ' (CV: ' + data.work.cv + ')' : ''));
           loadWorkDetail(rjCode);
         } else {
           alert('Failed: ' + (data.error || 'Unknown error'));
         }
       } catch (e) {
-        alert('Error: ' + e.message);
+        if (e.message !== 'Unauthorized') {
+          alert('Error: ' + e.message);
+        }
       }
     }
 
