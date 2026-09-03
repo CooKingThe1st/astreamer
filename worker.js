@@ -1253,7 +1253,7 @@ const INDEX_HTML = `<!DOCTYPE html>
 
       works.forEach(function(w) {
         const display = getDisplayCover(w);
-        html += '<div class="work-card" onclick="navWork(' + JSON.stringify(w.rjCode) + ')"><div class="card-cover-wrapper"><img class="card-cover" src="' + display.coverUrl + '">' + (display.isDisguised ? '<div class="disguised-overlay"><span class="disguised-badge">🎭 Disguised SFW</span></div>' : '') + '</div><div class="card-badge-row"><span class="card-rj">' + w.rjCode + '</span><span class="card-fav card-fav-' + w.rjCode + '" title="' + (w.favorite ? 'Favorited' : 'Add to Favorites') + '" onclick="toggleFav(' + JSON.stringify(w.rjCode) + ', event)" style="transition: transform 0.15s ease-out; display: inline-block;">' + (w.favorite ? '❤️' : '🤍') + '</span></div><div class="card-title">' + w.title + '</div><div class="card-sub">' + (w.cv || w.circle || 'ASMR') + '</div></div>';
+        html += '<div class="work-card" data-rj="' + w.rjCode + '" onclick="navWork(this.dataset.rj)"><div class="card-cover-wrapper"><img class="card-cover" src="' + display.coverUrl + '">' + (display.isDisguised ? '<div class="disguised-overlay"><span class="disguised-badge">🎭 Disguised SFW</span></div>' : '') + '</div><div class="card-badge-row"><span class="card-rj">' + w.rjCode + '</span><span class="card-fav card-fav-' + w.rjCode + '" data-rj="' + w.rjCode + '" title="' + (w.favorite ? 'Favorited' : 'Add to Favorites') + '" onclick="toggleFav(this.dataset.rj, event)" style="transition: transform 0.15s ease-out; display: inline-block;">' + (w.favorite ? '❤️' : '🤍') + '</span></div><div class="card-title">' + w.title + '</div><div class="card-sub">' + (w.cv || w.circle || 'ASMR') + '</div></div>';
       });
 
       html += '</div>';
@@ -1273,26 +1273,54 @@ const INDEX_HTML = `<!DOCTYPE html>
       
       const cvPills = cvList.length > 0
         ? cvList.map(function(c) {
-            return '<span class="tag-pill" style="display:inline-flex; align-items:center; gap:4px; margin-right:4px; background:rgba(56,189,248,0.15); color:#38bdf8; border:1px solid rgba(56,189,248,0.3); font-weight:700;" onclick="navCv(' + JSON.stringify(c) + ')">🎙️ ' + c + '</span>';
+            return '<span class="tag-pill" style="display:inline-flex; align-items:center; gap:4px; margin-right:4px; background:rgba(56,189,248,0.15); color:#38bdf8; border:1px solid rgba(56,189,248,0.3); font-weight:700;" data-cv="' + c.replace(/"/g, '&quot;') + '" onclick="navCv(this.dataset.cv)">🎙️ ' + c + '</span>';
           }).join('')
         : '<span style="color:var(--text-muted);">N/A</span>';
 
       const circlePill = work.circle && work.circle !== 'N/A'
-        ? '<span class="tag-pill" style="display:inline-flex; align-items:center; gap:4px; background:rgba(255,255,255,0.06); border:1px solid var(--border); font-weight:700;" onclick="navCircle(' + JSON.stringify(work.circle) + ')">🏢 ' + work.circle + '</span>'
+        ? '<span class="tag-pill" style="display:inline-flex; align-items:center; gap:4px; background:rgba(255,255,255,0.06); border:1px solid var(--border); font-weight:700;" data-circle="' + work.circle.replace(/"/g, '&quot;') + '" onclick="navCircle(this.dataset.circle)">🏢 ' + work.circle + '</span>'
         : '<span style="color:var(--text-muted);">N/A</span>';
 
       const tagPills = (work.tags || []).map(function(t) {
-        return '<span class="tag-pill" onclick="navGenre(' + JSON.stringify(t) + ')">' + t + '</span>';
+        return '<span class="tag-pill" data-tag="' + t.replace(/"/g, '&quot;') + '" onclick="navGenre(this.dataset.tag)">' + t + '</span>';
       }).join('');
 
-      let html = '<div class="work-detail-banner"><img class="detail-cover" src="' + display.coverUrl + '"><div class="detail-info"><div style="display:flex; gap:8px; margin-bottom:8px;"><span class="card-rj">' + work.rjCode + '</span><span style="background:#0e7490; color:#fff; font-size:0.75rem; font-weight:700; padding:2px 8px; border-radius:4px;">' + (work.hasHls ? 'HLS Chapters' : 'Multi-Track') + '</span></div><h1 class="detail-title">' + work.title + '</h1><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Voice Actor (CV):</strong> ' + cvPills + '</div><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Circle:</strong> ' + circlePill + '</div><div class="tags-row">' + tagPills + '</div><div style="margin-top:auto; padding-top:16px; display:flex; flex-wrap:wrap; gap:10px;"><button class="btn-primary" onclick="playTrack(0, true)">▶ Play All</button><button class="btn-outline" onclick="openAddToPlaylistModal({ rjCode: ' + JSON.stringify(work.rjCode) + ', title: ' + JSON.stringify(work.title) + ', workTitle: ' + JSON.stringify(work.title) + ', poster: ' + JSON.stringify(work.coverUrl) + ', cv: ' + JSON.stringify(work.cv || '') + ', isWork: true })">➕ Add Work to Playlist</button><button class="btn-outline" onclick="refreshSingleWork(' + JSON.stringify(work.rjCode) + ')">🔄 Refresh</button><button class="btn-outline" onclick="deleteWorkItem(' + JSON.stringify(work.rjCode) + ')">🗑️ Remove</button></div></div></div><h3 style="font-size:1.2rem; font-weight:700; margin-bottom:12px;">🎵 Tracklist / Chapters (' + work.totalTracks + ')</h3><table class="tracks-table"><thead><tr><th style="width: 40px;">#</th><th>Title</th><th style="width: 100px;">Offset</th><th style="width: 140px; text-align:right;">Action</th></tr></thead><tbody>';
+      let html = '<div class="work-detail-banner"><img class="detail-cover" src="' + display.coverUrl + '"><div class="detail-info"><div style="display:flex; gap:8px; margin-bottom:8px;"><span class="card-rj">' + work.rjCode + '</span><span style="background:#0e7490; color:#fff; font-size:0.75rem; font-weight:700; padding:2px 8px; border-radius:4px;">' + (work.hasHls ? 'HLS Chapters' : 'Multi-Track') + '</span></div><h1 class="detail-title">' + work.title + '</h1><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Voice Actor (CV):</strong> ' + cvPills + '</div><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Circle:</strong> ' + circlePill + '</div><div class="tags-row">' + tagPills + '</div><div style="margin-top:auto; padding-top:16px; display:flex; flex-wrap:wrap; gap:10px;"><button class="btn-primary" onclick="playTrack(0, true)">▶ Play All</button><button class="btn-outline" data-rj="' + work.rjCode + '" onclick="addWorkToPlaylistAction(this.dataset.rj)">➕ Add Work to Playlist</button><button class="btn-outline" data-rj="' + work.rjCode + '" onclick="refreshSingleWork(this.dataset.rj)">🔄 Refresh</button><button class="btn-outline" data-rj="' + work.rjCode + '" onclick="deleteWorkItem(this.dataset.rj)">🗑️ Remove</button></div></div></div><h3 style="font-size:1.2rem; font-weight:700; margin-bottom:12px;">🎵 Tracklist / Chapters (' + work.totalTracks + ')</h3><table class="tracks-table"><thead><tr><th style="width: 40px;">#</th><th>Title</th><th style="width: 100px;">Offset</th><th style="width: 140px; text-align:right;">Action</th></tr></thead><tbody>';
 
       work.tracks.forEach(function(t, i) {
-        html += '<tr class="track-row" id="track-row-' + i + '" onclick="playTrack(' + i + ', true)"><td>' + t.id + '</td><td><strong>' + t.title + '</strong></td><td style="color:#38bdf8;">' + (t.formattedTime || '00:00:00') + '</td><td style="text-align:right;"><button class="btn-outline" style="padding: 4px 10px; font-size: 0.75rem;" onclick="event.stopPropagation(); openAddToPlaylistModal({ rjCode: ' + JSON.stringify(work.rjCode) + ', trackId: ' + t.id + ', title: ' + JSON.stringify(t.title) + ', workTitle: ' + JSON.stringify(work.title) + ', startTime: ' + (t.startTime || 0) + ', streamUrl: ' + JSON.stringify(t.streamUrl) + ', isHls: ' + t.isHls + ', poster: ' + JSON.stringify(work.coverUrl) + ', cv: ' + JSON.stringify(work.cv || '') + ' })">➕ Playlist</button></td></tr>';
+        html += '<tr class="track-row" id="track-row-' + i + '" data-idx="' + i + '" onclick="playTrack(parseInt(this.dataset.idx), true)"><td>' + t.id + '</td><td><strong>' + t.title + '</strong></td><td style="color:#38bdf8;">' + (t.formattedTime || '00:00:00') + '</td><td style="text-align:right;"><button class="btn-outline" style="padding: 4px 10px; font-size: 0.75rem;" data-idx="' + i + '" onclick="event.stopPropagation(); addTrackToPlaylistAction(parseInt(this.dataset.idx))">➕ Playlist</button></td></tr>';
       });
 
       html += '</tbody></table>';
       container.innerHTML = html;
+    }
+
+    function addWorkToPlaylistAction(rj) {
+      if (!currentWork) return;
+      openAddToPlaylistModal({
+        rjCode: currentWork.rjCode,
+        title: currentWork.title,
+        workTitle: currentWork.title,
+        poster: currentWork.coverUrl,
+        cv: currentWork.cv || '',
+        isWork: true
+      });
+    }
+
+    function addTrackToPlaylistAction(idx) {
+      if (!currentWork || !currentWork.tracks[idx]) return;
+      const t = currentWork.tracks[idx];
+      openAddToPlaylistModal({
+        rjCode: currentWork.rjCode,
+        trackId: t.id,
+        title: t.title,
+        workTitle: currentWork.title,
+        startTime: t.startTime || 0,
+        streamUrl: t.streamUrl,
+        isHls: t.isHls,
+        poster: currentWork.coverUrl,
+        cv: currentWork.cv || ''
+      });
     }
 
     async function loadGenres() {
@@ -1300,7 +1328,7 @@ const INDEX_HTML = `<!DOCTYPE html>
       const tags = await (await fetch('/api/tags')).json();
       let html = '<div class="section-header"><h1 class="section-title">🏷️ Genres & Tags</h1></div><div class="tag-cloud">';
       tags.forEach(function(t) {
-        html += '<div class="tag-cloud-item" onclick="navGenre(' + JSON.stringify(t.name) + ')"><span>' + t.name + '</span><span class="tag-count">' + t.count + '</span></div>';
+        html += '<div class="tag-cloud-item" data-tag="' + t.name.replace(/"/g, '&quot;') + '" onclick="navGenre(this.dataset.tag)"><span>' + t.name + '</span><span class="tag-count">' + t.count + '</span></div>';
       });
       html += '</div>';
       container.innerHTML = html;
@@ -1311,7 +1339,7 @@ const INDEX_HTML = `<!DOCTYPE html>
       const artists = await (await fetch('/api/artists')).json();
       let html = '<div class="section-header"><h1 class="section-title">🎙️ Voice Actors (CV)</h1></div><div class="tag-cloud">';
       artists.forEach(function(a) {
-        html += '<div class="tag-cloud-item" onclick="navCv(' + JSON.stringify(a.name) + ')"><span>' + a.name + '</span><span class="tag-count">' + a.count + ' works</span></div>';
+        html += '<div class="tag-cloud-item" data-cv="' + a.name.replace(/"/g, '&quot;') + '" onclick="navCv(this.dataset.cv)"><span>' + a.name + '</span><span class="tag-count">' + a.count + ' works</span></div>';
       });
       html += '</div>';
       container.innerHTML = html;
@@ -1323,7 +1351,7 @@ const INDEX_HTML = `<!DOCTYPE html>
       let html = '<div class="section-header"><h1 class="section-title">📜 Your Playlists</h1><button class="btn-primary" onclick="openPlaylistModal()">+ New Playlist</button></div><div class="works-grid">';
       if (playlists.length === 0) html += '<div style="grid-column: 1/-1; padding: 3rem; text-align: center; color: var(--text-muted);">No playlists yet.</div>';
       playlists.forEach(function(p) {
-        html += '<div class="work-card" onclick="navPlaylist(' + JSON.stringify(p.id) + ')"><img class="card-cover" src="' + (p.coverUrl || '') + '"><div class="card-title">' + p.name + '</div><div class="card-sub">' + (p.items && p.items.length ? p.items.length : 0) + ' tracks</div></div>';
+        html += '<div class="work-card" data-pl="' + p.id + '" onclick="navPlaylist(this.dataset.pl)"><img class="card-cover" src="' + (p.coverUrl || '') + '"><div class="card-title">' + p.name + '</div><div class="card-sub">' + (p.items && p.items.length ? p.items.length : 0) + ' tracks</div></div>';
       });
       html += '</div>';
       container.innerHTML = html;
@@ -1335,13 +1363,13 @@ const INDEX_HTML = `<!DOCTYPE html>
       const pl = playlists.find(function(p) { return p.id === plId; });
       if (!pl) { loadPlaylists(); return; }
 
-      let html = '<div class="work-detail-banner"><img class="detail-cover" src="' + (pl.coverUrl || '') + '"><div class="detail-info"><span class="card-rj" style="width:fit-content; margin-bottom:8px;">PLAYLIST</span><h1 class="detail-title">' + pl.name + '</h1><div class="detail-meta">' + (pl.description || 'Custom playlist') + '</div><div class="detail-meta"><strong>Tracks:</strong> ' + (pl.items ? pl.items.length : 0) + '</div><div style="margin-top:auto; padding-top:16px; display:flex; gap:10px;">' + (pl.items && pl.items.length > 0 ? '<button class="btn-primary" onclick="playPlaylistItem(0, ' + JSON.stringify(pl.id) + ')">▶ Play All</button>' : '') + '<button class="btn-outline" onclick="deletePlaylistAction(' + JSON.stringify(pl.id) + ')">🗑️ Delete Playlist</button><button class="btn-outline" onclick="switchView(&quot;playlists&quot;)">← Back to Playlists</button></div></div></div><h3 style="font-size:1.2rem; font-weight:700; margin-bottom:12px;">🎵 Playlist Tracks (' + (pl.items ? pl.items.length : 0) + ')</h3><table class="tracks-table"><thead><tr><th style="width: 40px;">#</th><th>Title</th><th>From Work</th><th style="width: 100px; text-align:right;">Action</th></tr></thead><tbody>';
+      let html = '<div class="work-detail-banner"><img class="detail-cover" src="' + (pl.coverUrl || '') + '"><div class="detail-info"><span class="card-rj" style="width:fit-content; margin-bottom:8px;">PLAYLIST</span><h1 class="detail-title">' + pl.name + '</h1><div class="detail-meta">' + (pl.description || 'Custom playlist') + '</div><div class="detail-meta"><strong>Tracks:</strong> ' + (pl.items ? pl.items.length : 0) + '</div><div style="margin-top:auto; padding-top:16px; display:flex; gap:10px;">' + (pl.items && pl.items.length > 0 ? '<button class="btn-primary" data-pl="' + pl.id + '" onclick="playPlaylistItem(0, this.dataset.pl)">▶ Play All</button>' : '') + '<button class="btn-outline" data-pl="' + pl.id + '" onclick="deletePlaylistAction(this.dataset.pl)">🗑️ Delete Playlist</button><button class="btn-outline" onclick="switchView(&quot;playlists&quot;)">← Back to Playlists</button></div></div></div><h3 style="font-size:1.2rem; font-weight:700; margin-bottom:12px;">🎵 Playlist Tracks (' + (pl.items ? pl.items.length : 0) + ')</h3><table class="tracks-table"><thead><tr><th style="width: 40px;">#</th><th>Title</th><th>From Work</th><th style="width: 100px; text-align:right;">Action</th></tr></thead><tbody>';
 
       if (!pl.items || pl.items.length === 0) {
         html += '<tr><td colspan="4" style="text-align:center; padding:2rem; color:var(--text-muted);">Playlist is empty. Add tracks from any work in your Library!</td></tr>';
       } else {
         pl.items.forEach(function(item, index) {
-          html += '<tr class="track-row" onclick="playPlaylistItem(' + index + ', ' + JSON.stringify(pl.id) + ')"><td>' + (index + 1) + '</td><td><strong>' + item.title + '</strong></td><td style="color:var(--text-muted);">' + (item.workTitle || item.rjCode) + '</td><td style="text-align:right;"><button class="btn-outline" style="padding:4px 8px; font-size:0.75rem;" onclick="event.stopPropagation(); removePlaylistItem(' + JSON.stringify(pl.id) + ', ' + index + ')">🗑️</button></td></tr>';
+          html += '<tr class="track-row" data-idx="' + index + '" data-pl="' + pl.id + '" onclick="playPlaylistItem(parseInt(this.dataset.idx), this.dataset.pl)"><td>' + (index + 1) + '</td><td><strong>' + item.title + '</strong></td><td style="color:var(--text-muted);">' + (item.workTitle || item.rjCode) + '</td><td style="text-align:right;"><button class="btn-outline" style="padding:4px 8px; font-size:0.75rem;" data-idx="' + index + '" data-pl="' + pl.id + '" onclick="event.stopPropagation(); removePlaylistItem(this.dataset.pl, parseInt(this.dataset.idx))">🗑️</button></td></tr>';
         });
       }
       html += '</tbody></table>';
