@@ -26,10 +26,11 @@ const BROWSER_HEADERS = {
   'Referer': 'https://japaneseasmr.com/'
 };
 
-// 1. Fetch Official DLsite Metadata (Public API + Product Page Fallback - 100% Reliable)
+// 1. Fetch Official DLsite Metadata (Universal Multi-Layer Extractor)
 async function fetchDlsiteMetadata(rjCode) {
   const cleanRj = rjCode.toUpperCase();
   const divisions = ['maniax', 'home', 'girls', 'pro', 'books'];
+  let dlsiteMeta = null;
 
   // Strategy A: JSON APIs across divisions
   for (const div of divisions) {
@@ -45,6 +46,13 @@ async function fetchDlsiteMetadata(rjCode) {
 
       if (res.data && res.data.length > 0) {
         const item = res.data[0];
+        let cv = '';
+        if (Array.isArray(item.voice_actor)) cv = item.voice_actor.join(', ');
+        else if (typeof item.voice_actor === 'string') cv = item.voice_actor;
+        else if (item.creators && item.creators.voice_actor) {
+          cv = item.creators.voice_actor.map(v => v.name || v).join(', ');
+        }
+
         let imgUrl = typeof item.image_main === 'string' ? item.image_main : (item.image_main?.url || item.work_image || '');
         if (imgUrl.startsWith('//')) imgUrl = 'https:' + imgUrl;
         if (!imgUrl || !imgUrl.startsWith('http')) imgUrl = `https://pic.weeabo0.xyz/${cleanRj}_img_main.jpg`;
@@ -52,82 +60,112 @@ async function fetchDlsiteMetadata(rjCode) {
         const isAdult = item.age_category === 3 || div === 'maniax' || div === 'girls' ||
                         item.age_category_string === 'adult';
 
-        return {
+        dlsiteMeta = {
           title: item.work_name || '',
           circle: item.maker_name || '',
-          cv: Array.isArray(item.voice_actor) ? item.voice_actor.join(', ') : (item.voice_actor || ''),
+          cv: cv || 'N/A',
           rawCoverUrl: imgUrl,
           tags: (item.genres || []).map(g => g.name || g),
           isNsfw: isAdult
         };
+        break;
       }
     } catch (err) {}
   }
 
-  // Strategy B: Fallback to direct DLsite Product Page HTML (handles discounted, older & special works)
-  for (const div of divisions) {
-    try {
-      const pageUrl = `https://www.dlsite.com/${div}/work/=/product_id/${cleanRj}.html`;
-      const res = await axios.get(pageUrl, {
-        headers: {
-          'User-Agent': BROWSER_HEADERS['User-Agent'],
-          'Accept-Language': 'ja,en;q=0.9',
-          'Cookie': 'adultchecked=1'
-        },
-        timeout: 6000
-      });
+  // Strategy B: Deep HTML Product Page Scraper
+  if (!dlsiteMeta || !dlsiteMeta.title || dlsiteMeta.tags.length === 0) {
+    for (const div of divisions) {
+      try {
+        const pageUrl = `https://www.dlsite.com/${div}/work/=/product_id/${cleanRj}.html/?locale=ja_JP`;
+        const res = await axios.get(pageUrl, {
+          headers: {
+            'User-Agent': BROWSER_HEADERS['User-Agent'],
+            'Accept-Language': 'ja-JP,ja;q=0.9',
+            'Cookie': 'adultchecked=1; age_checked=1; locale=ja_JP;'
+          },
+          timeout: 6000
+        });
 
-      if (res.status === 200 && res.data) {
-        const html = res.data;
-        let title = '';
-        let circle = '';
-
-        const titleMatch = html.match(/<title>([\s\S]*?)<\/title>/i);
-        if (titleMatch) {
-          let full = titleMatch[1].trim().replace(/\s*\|\s*DLsite.*$/i, '').trim();
-          const circleM = full.match(/\[(.*?)\]\s*$/);
-          if (circleM) {
-            circle = circleM[1].trim();
-            full = full.replace(/\[(.*?)\]\s*$/, '').trim();
-          }
-          title = full.replace(/【[^】]*%OFF[^】]*】/gi, '').replace(/【[^】]*特典[^】]*】/gi, '').trim();
-        }
-
-        let imgUrl = '';
-        const imgMatch = html.match(/<meta\s+property=["']og:image["']\s+content=["']([^"']+)["']/i) ||
-                         html.match(/<meta\s+content=["']([^"']+)["']\s+property=["']og:image["']/i);
-        if (imgMatch) {
-          imgUrl = imgMatch[1];
-          if (imgUrl.startsWith('//')) imgUrl = 'https:' + imgUrl;
-        }
-        if (!imgUrl) imgUrl = `https://pic.weeabo0.xyz/${cleanRj}_img_main.jpg`;
-
-        const tags = [];
-        const metaKeywords = html.match(/<meta\s+name=["']keywords["']\s+content=["']([^"']+)["']/i);
-        if (metaKeywords) {
-          metaKeywords[1].split(',').forEach(k => {
-            const cleaned = k.trim();
-            if (cleaned && !['DLsite', '同人', 'R18', 'アール18', 'ダウンロード'].includes(cleaned) && !tags.includes(cleaned)) {
-              tags.push(cleaned);
+        if (res.status === 200 && res.data) {
+          const html = res.data;
+          let title = '';
+          const titleMatch = html.match(/<title>([\s\S]*?)<\/title>/i);
+          if (titleMatch) {
+            let full = titleMatch[1].trim().replace(/\s*\|\s*DLsite.*$/i, '').trim();
+            const circleBracketMatch = full.match(/\[(.*?)\]\s*$/);
+            if (circleBracketMatch && !dlsiteMeta?.circle) {
+              full = full.replace(/\[(.*?)\]\s*$/, '').trim();
             }
-          });
-        }
+            title = full.replace(/【[^】]*%OFF[^】]*】/gi, '').replace(/【[^】]*特典[^】]*】/gi, '').trim();
+          }
 
-        if (title) {
-          return {
-            title,
-            circle: circle || 'ASMR Circle',
-            cv: 'N/A',
+          let circle = dlsiteMeta?.circle || '';
+          if (!circle) {
+            const ldMatch = html.match(/<script type=["']application\/ld\+json["']>([\s\S]*?)<\/script>/i);
+            if (ldMatch) {
+              try {
+                const ldData = JSON.parse(ldMatch[1]);
+                if (ldData['@type'] === 'BreadcrumbList' && Array.isArray(ldData.itemListElement)) {
+                  const circleObj = ldData.itemListElement.find(it => it.position === 3);
+                  if (circleObj && circleObj.name) circle = circleObj.name;
+                }
+              } catch(e) {}
+            }
+          }
+          if (!circle) {
+            const makerLinkMatch = html.match(/href=["'][^"']*\/maker_id\/[^"']*["'][^>]*>([^<]+)<\/a>/i);
+            if (makerLinkMatch) circle = makerLinkMatch[1].trim();
+          }
+
+          let cv = dlsiteMeta?.cv && dlsiteMeta.cv !== 'N/A' ? dlsiteMeta.cv : '';
+          if (!cv) {
+            const cvMatch = html.match(/CV[.:：\s]+([^()「」<]{2,60})/i);
+            if (cvMatch) {
+              const cvNames = [];
+              cvMatch[1].split(/[/,、・\s]+/).forEach(c => {
+                const clean = c.replace(/様|さん|氏/g, '').trim();
+                if (clean && clean.length >= 2 && !cvNames.includes(clean)) cvNames.push(clean);
+              });
+              if (cvNames.length > 0) cv = cvNames.join(', ');
+            }
+          }
+
+          const tags = dlsiteMeta?.tags && dlsiteMeta.tags.length > 0 ? [...dlsiteMeta.tags] : [];
+          const genreMatches = html.matchAll(/\/(?:genre|keyword|taxonomy)\/[^"'>]+["'][^>]*>([^<]+)<\/a>/gi);
+          for (const m of genreMatches) {
+            const t = m[1].trim();
+            if (t && !tags.includes(t) && !['DLsite', '同人', 'R18', 'サークル一覧'].includes(t)) tags.push(t);
+          }
+
+          const CANDIDATE_KEYWORDS = ['催眠', 'ASMR', 'バイノーラル', 'ダミヘ', '耳舐め', '囁き', 'ご奉仕', '奉仕', '甘やかし', '癒し', 'オナサポ', '手コキ', '中出し', '乳首', '巨乳', '爆乳', 'お姉さん', '後輩', '同級生', '幼馴染', 'メイド', '風紀委員'];
+          CANDIDATE_KEYWORDS.forEach(kw => {
+            if (html.includes(kw) && !tags.includes(kw)) tags.push(kw);
+          });
+
+          let imgUrl = dlsiteMeta?.rawCoverUrl || '';
+          if (!imgUrl) {
+            const ogImgMatch = html.match(/<meta\s+property=["']og:image["']\s+content=["']([^"']+)["']/i);
+            if (ogImgMatch) imgUrl = ogImgMatch[1];
+            if (imgUrl.startsWith('//')) imgUrl = 'https:' + imgUrl;
+          }
+          if (!imgUrl) imgUrl = `https://pic.weeabo0.xyz/${cleanRj}_img_main.jpg`;
+
+          dlsiteMeta = {
+            title: title || dlsiteMeta?.title || `Work ${cleanRj}`,
+            circle: circle || dlsiteMeta?.circle || 'ASMR Circle',
+            cv: cv || 'N/A',
             rawCoverUrl: imgUrl,
-            tags,
+            tags: tags.length > 0 ? tags : ['ASMR', 'Audio'],
             isNsfw: div === 'maniax' || div === 'girls' || html.includes('R18') || html.includes('18禁')
           };
+          break;
         }
-      }
-    } catch (e) {}
+      } catch (e) {}
+    }
   }
 
-  return null;
+  return dlsiteMeta;
 }
 
 // 2. Probe CDN Directly (M3U8 HLS vs MP3 Multi-track)

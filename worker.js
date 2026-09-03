@@ -1,9 +1,4 @@
-/**
- * aStreamer — Cloudflare Worker Edition
- * Serverless, Zero-Cost, Edge-Accelerated Audio Streaming & Library Suite
- */
-
-const DEFAULT_PASSCODE = 'astreamer2026';
+const DEFAULT_PASSCODE = 'iloveuet';
 
 // 26 SFW Cover Arts for PSFW Disguise Mode
 const SFW_DISGUISE_LIST = [
@@ -29,64 +24,9 @@ const NSFW_KEYWORDS = [
 // Seed Data for Initial Boot
 const SEED_DATA = {
   version: 1,
-  works: {
-    'RJ01473335': {
-      rjCode: 'RJ01473335',
-      title: '事務的メイドの好意だだ漏れよわよわマゾオス克服訓練',
-      circle: '裏あおぎり学園',
-      cv: 'こまる',
-      tags: ['メイド', 'ラブラブ/あまあま', '女性優位', '手コキ', '中出し', 'オナサポ', '耳舐め', '乳首責め', 'NSFW', 'R18'],
-      coverUrl: '/image-proxy?url=https%3A%2F%2Fpic.weeabo0.xyz%2FRJ01473335_img_main.jpg',
-      rawCoverUrl: 'https://pic.weeabo0.xyz/RJ01473335_img_main.jpg',
-      hasHls: true,
-      isNsfw: true,
-      totalTracks: 6,
-      tracks: [
-        { id: 1, title: '01.よわよわおちんぽ強化訓練寸止め手コキ', formattedTime: '00:00:00', startTime: 0, isHls: true, rawUrl: 'https://v.weeab0o.xyz/RJ01473335.m3u8', streamUrl: '/stream?url=https%3A%2F%2Fv.weeab0o.xyz%2FRJ01473335.m3u8', poster: '/image-proxy?url=https%3A%2F%2Fpic.weeabo0.xyz%2FRJ01473335_img_main.jpg' },
-        { id: 2, title: '02.交尾想像訓練オナサポ', formattedTime: '00:20:04', startTime: 1204, isHls: true, rawUrl: 'https://v.weeab0o.xyz/RJ01473335.m3u8', streamUrl: '/stream?url=https%3A%2F%2Fv.weeab0o.xyz%2FRJ01473335.m3u8', poster: '/image-proxy?url=https%3A%2F%2Fpic.weeabo0.xyz%2FRJ01473335_img_main.jpg' },
-        { id: 3, title: '03.雑魚オス弱点克服訓練、ねっとり乳首いじめオナホコキ', formattedTime: '00:36:49', startTime: 2209, isHls: true, rawUrl: 'https://v.weeab0o.xyz/RJ01473335.m3u8', streamUrl: '/stream?url=https%3A%2F%2Fv.weeab0o.xyz%2FRJ01473335.m3u8', poster: '/image-proxy?url=https%3A%2F%2Fpic.weeabo0.xyz%2FRJ01473335_img_main.jpg' },
-        { id: 4, title: '04.ナマハメ交尾訓練、メス優位ドスケベ暴走騎乗位搾精', formattedTime: '00:59:04', startTime: 3544, isHls: true, rawUrl: 'https://v.weeab0o.xyz/RJ01473335.m3u8', streamUrl: '/stream?url=https%3A%2F%2Fv.weeab0o.xyz%2FRJ01473335.m3u8', poster: '/image-proxy?url=https%3A%2F%2Fpic.weeabo0.xyz%2FRJ01473335_img_main.jpg' },
-        { id: 5, title: '05.ナマハメ交尾訓練、オス優位いちゃらぶすきすき対面座位セックス', formattedTime: '01:18:06', startTime: 4686, isHls: true, rawUrl: 'https://v.weeab0o.xyz/RJ01473335.m3u8', streamUrl: '/stream?url=https%3A%2F%2Fv.weeab0o.xyz%2FRJ01473335.m3u8', poster: '/image-proxy?url=https%3A%2F%2Fpic.weeabo0.xyz%2FRJ01473335_img_main.jpg' },
-        { id: 6, title: '早期購入特典フリートーク_事務的メイドの好意だだ漏れよわよわマゾオス克服訓練', formattedTime: '01:37:39', startTime: 5859, isHls: true, rawUrl: 'https://v.weeab0o.xyz/RJ01473335.m3u8', streamUrl: '/stream?url=https%3A%2F%2Fv.weeab0o.xyz%2FRJ01473335.m3u8', poster: '/image-proxy?url=https%3A%2F%2Fpic.weeabo0.xyz%2FRJ01473335_img_main.jpg' }
-      ],
-      addedAt: new Date().toISOString(),
-      favorite: true
-    },
-    'RJ441308': {
-      rjCode: 'RJ441308',
-      title: '愛聖天使ラブメアリー ～堕ちた魔法少女たちの淫惑～',
-      circle: 'Voice Unreal',
-      cv: 'いねむりすやこ, Yuka Hinata 【陽向葵ゅか】, Kazari Hanashiro 【花城かざり】',
-      tags: ['Futanari', 'NSFW', 'Magical Girl', 'Ear Licking', 'Whispering', '18禁'],
-      coverUrl: '/image-proxy?url=https%3A%2F%2Fpic.weeabo0.xyz%2FRJ441308_img_main.jpg',
-      rawCoverUrl: 'https://pic.weeabo0.xyz/RJ441308_img_main.jpg',
-      hasHls: false,
-      isNsfw: true,
-      totalTracks: 3,
-      tracks: [
-        { id: 1, title: 'Track 1 (トラック1)', formattedTime: '00:00:00', startTime: 0, isHls: false, rawUrl: 'https://v.weeab0o.xyz/RJ441308.mp3', streamUrl: '/stream?url=https%3A%2F%2Fv.weeab0o.xyz%2FRJ441308.mp3', poster: '/image-proxy?url=https%3A%2F%2Fpic.weeabo0.xyz%2FRJ441308_img_main.jpg' },
-        { id: 2, title: 'Track 2 (トラック2)', formattedTime: '00:00:00', startTime: 0, isHls: false, rawUrl: 'https://v.weeab0o.xyz/RJ441308 2.mp3', streamUrl: '/stream?url=https%3A%2F%2Fv.weeab0o.xyz%2FRJ441308%202.mp3', poster: '/image-proxy?url=https%3A%2F%2Fpic.weeabo0.xyz%2FRJ441308_img_main.jpg' },
-        { id: 3, title: 'Track 3 (トラック3)', formattedTime: '00:00:00', startTime: 0, isHls: false, rawUrl: 'https://v.weeab0o.xyz/RJ441308 3.mp3', streamUrl: '/stream?url=https%3A%2F%2Fv.weeab0o.xyz%2FRJ441308%203.mp3', poster: '/image-proxy?url=https%3A%2F%2Fpic.weeabo0.xyz%2FRJ441308_img_main.jpg' }
-      ],
-      addedAt: new Date().toISOString(),
-      favorite: false
-    }
-  },
-  playlists: [
-    {
-      id: 'pl-favorites',
-      name: '❤️ Favorites',
-      description: 'Your favorited audio tracks and ASMR sessions',
-      coverUrl: '/image-proxy?url=https%3A%2F%2Fpic.weeabo0.xyz%2FRJ01473335_img_main.jpg',
-      items: [
-        { rjCode: 'RJ01473335', trackId: 1, title: '事務的メイドの好意だだ漏れよわよわマゾオス克服訓練', workTitle: '事務的メイドの好意だだ漏れよわよわマゾオス克服訓練', cv: 'こまる', poster: '/image-proxy?url=https%3A%2F%2Fpic.weeabo0.xyz%2FRJ01473335_img_main.jpg' }
-      ],
-      createdAt: new Date().toISOString()
-    }
-  ],
-  settings: {
-    contentMode: 'NSFW'
-  }
+  works: {},
+  playlists: [],
+  settings: { contentMode: 'NSFW' }
 };
 
 // In-Memory Database fallback (if KV is not yet bound)
@@ -110,13 +50,13 @@ async function saveDb(env, data) {
   }
 }
 
-// Resolver: DLsite Multi-Division API + HTML Product Fallback + Direct CDN Probe
+// Resolver: Universal Multi-Layer DLsite Extractor + Direct CDN Probe
 async function resolveRjWork(rjCode) {
   const cleanRj = rjCode.toUpperCase();
   let dlsiteMeta = null;
   const divisions = ['maniax', 'home', 'girls', 'pro', 'books'];
 
-  // Strategy A: JSON APIs across divisions
+  // Layer 1: Official JSON APIs across divisions
   for (const div of divisions) {
     try {
       const dlsiteRes = await fetch(`https://www.dlsite.com/${div}/api/=/product.json?workno=${cleanRj}`, {
@@ -129,6 +69,13 @@ async function resolveRjWork(rjCode) {
         const data = await dlsiteRes.json();
         if (data && data.length > 0) {
           const item = data[0];
+          let cv = '';
+          if (Array.isArray(item.voice_actor)) cv = item.voice_actor.join(', ');
+          else if (typeof item.voice_actor === 'string') cv = item.voice_actor;
+          else if (item.creators && item.creators.voice_actor) {
+            cv = item.creators.voice_actor.map(v => v.name || v).join(', ');
+          }
+
           let imgUrl = typeof item.image_main === 'string' ? item.image_main : (item.image_main?.url || item.work_image || '');
           if (imgUrl.startsWith('//')) imgUrl = 'https:' + imgUrl;
           if (!imgUrl || !imgUrl.startsWith('http')) imgUrl = `https://pic.weeabo0.xyz/${cleanRj}_img_main.jpg`;
@@ -142,7 +89,7 @@ async function resolveRjWork(rjCode) {
           dlsiteMeta = {
             title: item.work_name || '',
             circle: item.maker_name || '',
-            cv: Array.isArray(item.voice_actor) ? item.voice_actor.join(', ') : (item.voice_actor || ''),
+            cv: cv || 'N/A',
             rawCoverUrl: imgUrl,
             tags: (item.genres || []).map(g => g.name || g),
             isNsfw: isAdult
@@ -153,74 +100,98 @@ async function resolveRjWork(rjCode) {
     } catch (e) {}
   }
 
-  // Strategy B: Fallback to direct DLsite Product Page HTML
-  if (!dlsiteMeta) {
+  // Layer 2: Deep HTML Product Page Scraper
+  if (!dlsiteMeta || !dlsiteMeta.title || dlsiteMeta.tags.length === 0) {
     for (const div of divisions) {
       try {
-        const pageRes = await fetch(`https://www.dlsite.com/${div}/work/=/product_id/${cleanRj}.html`, {
+        const pageRes = await fetch(`https://www.dlsite.com/${div}/work/=/product_id/${cleanRj}.html/?locale=ja_JP`, {
           headers: {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept-Language': 'ja,en;q=0.9',
-            'Cookie': 'adultchecked=1'
+            'Accept-Language': 'ja-JP,ja;q=0.9',
+            'Cookie': 'adultchecked=1; age_checked=1; locale=ja_JP;'
           }
         });
 
         if (pageRes.ok) {
           const html = await pageRes.text();
-          let title = '';
-          let circle = '';
 
-          const titleMatch = html.match(/<title>([\s\S]*?)<\/title>/i);
-          if (titleMatch) {
-            let full = titleMatch[1].trim().replace(/\s*\|\s*DLsite.*$/i, '').trim();
-            const circleM = full.match(/\[(.*?)\]\s*$/);
-            if (circleM) {
-              circle = circleM[1].trim();
+          // Title
+          let title = '';
+          const titleTagMatch = html.match(/<title>([\s\S]*?)<\/title>/i);
+          if (titleTagMatch) {
+            let full = titleTagMatch[1].trim().replace(/\s*\|\s*DLsite.*$/i, '').trim();
+            const circleBracketMatch = full.match(/\[(.*?)\]\s*$/);
+            if (circleBracketMatch && !dlsiteMeta?.circle) {
               full = full.replace(/\[(.*?)\]\s*$/, '').trim();
             }
             title = full.replace(/【[^】]*%OFF[^】]*】/gi, '').replace(/【[^】]*特典[^】]*】/gi, '').trim();
           }
 
-          let imgUrl = '';
-          const imgMatch = html.match(/<meta\s+property=["']og:image["']\s+content=["']([^"']+)["']/i) ||
-                           html.match(/<meta\s+content=["']([^"']+)["']\s+property=["']og:image["']/i);
-          if (imgMatch) {
-            imgUrl = imgMatch[1];
+          // Circle Name (From LD+JSON Breadcrumb position 3 or /maker_id/ link)
+          let circle = dlsiteMeta?.circle || '';
+          if (!circle) {
+            const ldMatch = html.match(/<script type=["']application\/ld\+json["']>([\s\S]*?)<\/script>/i);
+            if (ldMatch) {
+              try {
+                const ldData = JSON.parse(ldMatch[1]);
+                if (ldData['@type'] === 'BreadcrumbList' && Array.isArray(ldData.itemListElement)) {
+                  const circleObj = ldData.itemListElement.find(it => it.position === 3);
+                  if (circleObj && circleObj.name) circle = circleObj.name;
+                }
+              } catch(e) {}
+            }
+          }
+          if (!circle) {
+            const makerLinkMatch = html.match(/href=["'][^"']*\/maker_id\/[^"']*["'][^>]*>([^<]+)<\/a>/i);
+            if (makerLinkMatch) circle = makerLinkMatch[1].trim();
+          }
+
+          // Voice Actor (CV) - From meta description or text
+          let cv = dlsiteMeta?.cv && dlsiteMeta.cv !== 'N/A' ? dlsiteMeta.cv : '';
+          if (!cv) {
+            const cvMatch = html.match(/CV[.:：\s]+([^()「」<]{2,60})/i);
+            if (cvMatch) {
+              const cvNames = [];
+              cvMatch[1].split(/[/,、・\s]+/).forEach(c => {
+                const clean = c.replace(/様|さん|氏/g, '').trim();
+                if (clean && clean.length >= 2 && !cvNames.includes(clean)) cvNames.push(clean);
+              });
+              if (cvNames.length > 0) cv = cvNames.join(', ');
+            }
+          }
+
+          // Tags / Genres
+          const tags = dlsiteMeta?.tags && dlsiteMeta.tags.length > 0 ? [...dlsiteMeta.tags] : [];
+          const genreMatches = html.matchAll(/\/(?:genre|keyword|taxonomy)\/[^"'>]+["'][^>]*>([^<]+)<\/a>/gi);
+          for (const m of genreMatches) {
+            const t = m[1].trim();
+            if (t && !tags.includes(t) && !['DLsite', '同人', 'R18', 'サークル一覧'].includes(t)) tags.push(t);
+          }
+
+          // ASMR Keywords extraction
+          const CANDIDATE_KEYWORDS = ['催眠', 'ASMR', 'バイノーラル', 'ダミヘ', '耳舐め', '囁き', 'ご奉仕', '奉仕', '甘やかし', '癒し', 'オナサポ', '手コキ', '中出し', '乳首', '巨乳', '爆乳', 'お姉さん', '後輩', '同級生', '幼馴染', 'メイド', '風紀委員'];
+          CANDIDATE_KEYWORDS.forEach(kw => {
+            if (html.includes(kw) && !tags.includes(kw)) tags.push(kw);
+          });
+
+          // Cover Image
+          let imgUrl = dlsiteMeta?.rawCoverUrl || '';
+          if (!imgUrl) {
+            const ogImgMatch = html.match(/<meta\s+property=["']og:image["']\s+content=["']([^"']+)["']/i);
+            if (ogImgMatch) imgUrl = ogImgMatch[1];
             if (imgUrl.startsWith('//')) imgUrl = 'https:' + imgUrl;
           }
           if (!imgUrl) imgUrl = `https://pic.weeabo0.xyz/${cleanRj}_img_main.jpg`;
 
-          const tags = [];
-          // Match all genre, keyword, and taxonomy links in DLsite HTML
-          const genreMatches = html.matchAll(/\/(?:genre|keyword|taxonomy)\/[^"'>]+["'][^>]*>([^<]+)<\/a>/gi);
-          for (const m of genreMatches) {
-            const t = m[1].trim();
-            if (t && !tags.includes(t) && !['DLsite', '同人', 'R18'].includes(t)) tags.push(t);
-          }
-
-          // Fallback to meta keywords
-          const metaKeywords = html.match(/<meta\s+name=["']keywords["']\s+content=["']([^"']+)["']/i) ||
-                               html.match(/<meta\s+content=["']([^"']+)["']\s+name=["']keywords["']/i);
-          if (metaKeywords) {
-            metaKeywords[1].split(/[,、]/).forEach(k => {
-              const cleaned = k.trim();
-              if (cleaned && !['DLsite', '同人', 'R18', 'アール18', 'ダウンロード', '作品'].includes(cleaned) && !tags.includes(cleaned)) {
-                tags.push(cleaned);
-              }
-            });
-          }
-
-          if (title) {
-            dlsiteMeta = {
-              title,
-              circle: circle || 'ASMR Circle',
-              cv: 'N/A',
-              rawCoverUrl: imgUrl,
-              tags,
-              isNsfw: div === 'maniax' || div === 'girls' || html.includes('R18') || html.includes('18禁')
-            };
-            break;
-          }
+          dlsiteMeta = {
+            title: title || dlsiteMeta?.title || `Work ${cleanRj}`,
+            circle: circle || dlsiteMeta?.circle || 'ASMR Circle',
+            cv: cv || 'N/A',
+            rawCoverUrl: imgUrl,
+            tags: tags.length > 0 ? tags : ['ASMR', 'Audio'],
+            isNsfw: div === 'maniax' || div === 'girls' || html.includes('R18') || html.includes('18禁')
+          };
+          break;
         }
       } catch (e) {}
     }
