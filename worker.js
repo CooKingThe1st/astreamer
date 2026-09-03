@@ -316,15 +316,14 @@ export default {
       headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
     });
 
-    // Helper: Auth Check (Accepts both iloveuet and any custom admin passcode)
+    // Helper: Auth Check
     const isAuth = () => {
       const headerToken = request.headers.get('x-admin-passcode') ||
                           request.headers.get('authorization')?.replace(/^Bearer\s+/i, '') ||
                           request.headers.get('X-Admin-Passcode');
       const queryToken = url.searchParams.get('passcode') || url.searchParams.get('token');
       const provided = (headerToken || queryToken || '').trim();
-      const validPasscodes = ['iloveuet', 'astreamer2026', passcode, DEFAULT_PASSCODE];
-      return Boolean(provided && validPasscodes.includes(provided));
+      return Boolean(provided && provided === passcode);
     };
 
     // CORS preflight
@@ -991,8 +990,28 @@ const INDEX_HTML = `<!DOCTYPE html>
       else { document.getElementById('loginError').style.display = 'block'; }
     }
 
+    function handleAuthError() {
+      localStorage.removeItem('astreamer_passcode');
+      authToken = '';
+      document.getElementById('passcodeInput').value = '';
+      const errEl = document.getElementById('loginError');
+      errEl.innerText = 'Session expired or passcode changed. Please log in.';
+      errEl.style.display = 'block';
+      document.getElementById('gatekeeperModal').style.display = 'flex';
+    }
+
+    async function apiFetch(url, options = {}) {
+      options.headers = options.headers || authHeaders();
+      const res = await fetch(url, options);
+      if (res.status === 401) {
+        handleAuthError();
+        throw new Error('Unauthorized');
+      }
+      return res;
+    }
+
     function authHeaders() {
-      const token = authToken || localStorage.getItem('astreamer_passcode') || 'astreamer2026';
+      const token = authToken || localStorage.getItem('astreamer_passcode') || '';
       return {
         'x-admin-passcode': token,
         'Authorization': 'Bearer ' + token,
