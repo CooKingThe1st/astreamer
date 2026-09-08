@@ -1,6 +1,6 @@
 # 🎧 aStreamer — Universal ASMR & Doujin Audio Streaming Platform
 
-[![Version](https://img.shields.io/badge/Version-1.5%20Official-38bdf8?style=for-the-badge)](https://github.com/CooKingThe1st/astreamer)
+[![Version](https://img.shields.io/badge/Version-1.5%20Stable%20Release-38bdf8?style=for-the-badge)](https://github.com/CooKingThe1st/astreamer)
 [![Deploy to Cloudflare](https://img.shields.io/badge/Deploy-Cloudflare%20Workers-f38020?style=for-the-badge&logo=cloudflare)](https://workers.cloudflare.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 
@@ -12,20 +12,26 @@
 
 ---
 
-## 🚀 Version 1.5 Milestone Highlights
+## 🚀 Version 1.5 Official Stable Release Highlights
 
-* **🏷️ Self-Learning Bilingual Tag Dictionary**:
-  * **JapaneseASMR-Style Formatting**: Dynamic on-the-fly bilingual rendering (e.g. `耳かき (Ear Cleaning)`, `添い寝 (Sleeping Together)`).
-  * **Autonomous Vocabulary Learning**: Automatically fetches and accumulates English translations from the ASMR.one API into Cloudflare KV with zero-write diff protection.
-  * **Bilingual Search Engine**: Full keyword querying and genre filtering across English and Japanese terms simultaneously.
+* **🏷️ Zen Tag & CV Command Search Modal**:
+  * **Instant Bilingual Autocomplete**: Real-time suggestion dropdown with Japanese, Romaji, and English translations.
+  * **Multi-Tag Combinations (`+`)**: Filter library seamlessly by compound keywords (e.g. `耳かき + 囁き + ASMR`).
+  * **Keyboard Navigation & Esc Dismiss**: Full `↑`/`↓`/`↵` arrow-key browsing and instant, clean `Esc` key dismissal without view disruptions.
+* **🎧 Intelligent Multi-Track & Chapter Tree Engine**:
+  * **Hierarchy-Aware File Parser**: Automatically detects and isolates main master session tracks from bonus files, MP3 duplicates, and alt versions.
+  * **Accurate Timestamps**: Chapter markers strictly mapped to physical track boundaries, preventing timestamp overflow and phantom tracks.
 * **🖼️ Adaptive Artwork & Illustration Gallery**:
   * **Horizontal Swipe Reader Carousel**: Mobile-optimized full-height card strip (`.view-strip`) with snap-to-card scrolling and centered uncropped view for 100+ manga/doujin scans.
   * **One-Tap Mode Switcher**: Easily toggle between `⊞ Grid View` and `↔ Carousel View`.
   * **Immersive Lightbox Popup**: Full-screen high-resolution preview with keyboard/touch navigation.
 * **📱 Comprehensive Mobile Card Overhaul**:
   * Transformed all desktop tables (Playlist Tracks, Library List View, Playback History, Chapters) into compact **2-row responsive mobile cards** (~58px height), preventing long Japanese titles from creating multi-line wrapping sprawl.
+  * **Docked 3-Row Bottom Player**: Thumb-friendly mobile player bar with dedicated playback controls, scrubber, and a single chapter drawer button.
 * **🔔 Floating YouTube-Style Toast Notifications**:
   * Minimal, unobtrusive auto-dismissing bottom floating toasts for playlist actions and metadata refreshes.
+* **🛡️ Stealth SFW Disguise Mode**:
+  * 3 privacy tiers (`🌶️ NSFW`, `🎭 PSFW`, `🛡️ SFW`) with instant discreet cover swapping for safe listening in public.
 
 ---
 
@@ -34,18 +40,19 @@
 * **🗖 Rectangle Floating Popup Player (Now Playing Card)**:
   * Click the glowing mini-album art or maximize button to pop open a sleek, cyberpunk-styled floating player.
   * Features high-resolution cover glow, integrated tracklist & chapter drawer, volume scrubbers, and playback controls.
-  * **Escape Key Handling**: Press `Esc` to instantly minimize the popup player back to the bottom bar (or toggle stealth disguise mode when closed).
+  * **Escape Key Handling**: Press `Esc` to instantly minimize the popup player back to the bottom bar.
 * **📱 Responsive Mobile Top Navbar**:
-  * On mobile/tablets, the fixed sidebar smoothly collapses into a sleek top header with horizontal scrolling category tabs (`🎧 Library`, `📁 Folders`, `🏷️ Genres`, `📜 Playlists`, `🕒 History`, `⚙️ Settings`).
+  * On mobile/tablets, the fixed sidebar smoothly collapses into a sleek top header with horizontal scrolling category tabs (`📚 Library`, `📜 Playlists`, `🕒 History`, `📋 Wishlist`, `🎙️ Voice Actors`, `🏷️ Genres`, `⚙️ Settings`).
 * **🗂️ Explorer View Modes & Pagination**:
   * Switch on-the-fly between **Large Cards**, **Medium Grid**, **Compact Grid**, and **Detailed List** views.
   * Supports configurable items per page (`10`, `20`, `50`, `100`, or `All`) with responsive pagination controls.
 * **📜 Playlist Management**:
   * Add individual tracks or entire works to custom playlists with one tap.
+  * Play tracks directly from playlists without interrupting active sessions or reloading pages.
   * Built-in `❤️ Favorites` playlist automatically seeded and pinned to the top.
-* **🛡️ Content Privacy & Stealth SFW Disguise Mode**:
-  * **3 Privacy Modes**: `🌶️ NSFW (Full Adult)`, `🎭 PSFW (Pseudo-SFW / Disguise Covers)`, and `🛡️ SFW (Strict Safe For Work)`.
-  * In PSFW mode, adult artwork is automatically swapped for glowing stylized SFW artwork so you can listen safely in public.
+* **🏷️ Self-Learning Bilingual Tag Dictionary**:
+  * JapaneseASMR-style dynamic tag formatting (e.g. `耳かき (Ear Cleaning)`).
+  * Automatically fetches and accumulates English translations from the ASMR.one API into Cloudflare KV with zero-write diff protection.
 
 ---
 

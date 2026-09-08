@@ -19,103 +19,482 @@ const NSFW_KEYWORDS = [
   '背徳', '強制', '無理矢理', '媚び', '服従', '淫惑', '性器', '淫具', '孕'
 ];
 
-// Base Dictionary for Standard ASMR / DLsite Genre Translations
+// Base Dictionary for Standard ASMR / DLsite Genre Translations & Voice Actors
+// Tri-part format: { romaji, english, isCV }
 const BASE_TAG_DICT = {
-  "耳かき": "Ear Cleaning",
-  "耳舐め": "Ear Licking",
-  "耳ふー": "Ear Blowing",
-  "添い寝": "Sleeping Together",
-  "囁き": "Whispering",
-  "マッサージ": "Massage",
-  "バイノーラル": "Binaural",
-  "ダミーヘッドマイク": "Dummy Head Mic",
-  "甘やかし": "Pampering",
-  "癒やし": "Healing",
-  "オナサポ": "Masturbation Support",
-  "言葉責め": "Verbal Degradation",
-  "催眠": "Hypnosis",
-  "主従": "Master / Servant",
-  "幼馴染": "Childhood Friend",
-  "妹": "Little Sister",
-  "姉": "Older Sister",
-  "先輩": "Senior (Senpai)",
-  "後輩": "Junior (Kouhai)",
-  "同級生": "Classmate",
-  "クーデレ": "Kuudere",
-  "ツンデレ": "Tsundere",
-  "ヤンデレ": "Yandere",
-  "メイド": "Maid",
-  "ギャル": "Gyaru",
-  "お姉さん": "Older Woman",
-  "母性": "Maternal",
-  "ママ": "Mom",
-  "人妻": "Married Woman",
-  "淫語": "Dirty Talk",
-  "射精管理": "Ejaculation Control",
-  "寸止め": "Edging",
-  "フェラ": "Blowjob",
-  "手コキ": "Handjob",
-  "パイズリ": "Paizuri (Breastjob)",
-  "足コキ": "Footjob",
-  "アナル": "Anal",
-  "潮吹き": "Squirting",
-  "中出し": "Creampie",
-  "キス": "Kissing",
-  "吐息": "Breathing",
-  "咀嚼音": "Chewing Sounds",
-  "タッピング": "Tapping",
-  "スクラッチ": "Scratching",
-  "心音": "Heartbeat",
-  "ASMR": "ASMR",
-  "ロールプレイ": "Roleplay",
-  "シチュエーションボイス": "Situation Voice",
-  "ドラマCD": "Drama CD",
-  "朗読": "Reading Aloud",
-  "お嬢様": "Rich Girl / Lady",
-  "ボクっ娘": "Tomboy (Bokukko)",
-  "メスガキ": "Cheeky Brat (Mesugaki)",
-  "男の娘": "Femboy (Otokonoko)",
-  "ショタ": "Shota",
-  "ロリ": "Loli",
-  "百合": "Yuri",
-  "BL": "BL",
-  "逆レイプ": "Reverse Rape",
-  "痴女": "Slutty Woman",
-  "淫魔": "Succubus",
-  "エルフ": "Elf",
-  "獣耳": "Animal Ears",
-  "猫耳": "Cat Ears",
-  "狐耳": "Fox Ears",
-  "犬耳": "Dog Ears",
-  "吸血鬼": "Vampire",
-  "看護師": "Nurse",
-  "女医": "Female Doctor",
-  "教師": "Teacher",
-  "生徒": "Student",
-  "巫女": "Shrine Maiden",
-  "温泉": "Hot Spring",
-  "お風呂": "Bath",
-  "雨音": "Rain Sound",
-  "焚き火": "Campfire",
-  "水音": "Water Sounds",
-  "密着": "Close Contact",
-  "密着耳かき": "Close-contact Ear Cleaning",
-  "全裸": "Naked",
-  "巨乳": "Big Breasts",
-  "貧乳": "Small Breasts",
-  "微乳": "Petite Breasts",
-  "爆乳": "Huge Breasts",
-  "ぽっちゃり": "Chubby",
-  "スレンダー": "Slender",
-  "拘束": "Restraint",
-  "目隠し": "Blindfold",
-  "調教": "Training / Discipline",
-  "催眠音声": "Hypnosis Voice",
-  "催眠導入": "Hypnosis Induction",
-  "洗脳": "Brainwashing",
-  "隷属": "Enslavement",
-  "ASMR/音声": "ASMR / Voice"
+  // === Audio & ASMR ===
+  "ASMR": { romaji: "ASMR", english: "ASMR" },
+  "バイノーラル": { romaji: "Binaural", english: "Binaural" },
+  "立体音響": { romaji: "Rittai Onkyou", english: "3D Audio" },
+  "KU100": { romaji: "KU100", english: "KU100 Binaural" },
+  "ダミーヘッドマイク": { romaji: "Damii Heddo Maiku", english: "Dummy Head Mic" },
+  "ダミヘ": { romaji: "Damihe", english: "Dummy Head Mic" },
+  "耳かき": { romaji: "Mimikaki", english: "Ear Cleaning" },
+  "耳掃除": { romaji: "Mimisouji", english: "Ear Cleaning" },
+  "耳舐め": { romaji: "Miminame", english: "Ear Licking" },
+  "耳ふー": { romaji: "Mimi-fuu", english: "Ear Blowing" },
+  "吐息": { romaji: "Toiki", english: "Breathing" },
+  "囁き": { romaji: "Sasayaki", english: "Whispering" },
+  "ささやき": { romaji: "Sasayaki", english: "Whispering" },
+  "密着": { romaji: "Mitchaku", english: "Close Contact" },
+  "密着耳かき": { romaji: "Mitchaku Mimikaki", english: "Close-Contact Ear Cleaning" },
+  "添い寝": { romaji: "Soine", english: "Co-Sleeping" },
+  "睡眠導入": { romaji: "Suimin Dounyuu", english: "Sleep Induction" },
+  "安眠": { romaji: "Anmin", english: "Deep Sleep" },
+  "マッサージ": { romaji: "Massaaji", english: "Massage" },
+  "オイルマッサージ": { romaji: "Oiru Massaaji", english: "Oil Massage" },
+  "シャンプー": { romaji: "Shanpuu", english: "Hair Wash" },
+  "炭酸": { romaji: "Tansan", english: "Carbonated Bubbles" },
+  "心音": { romaji: "Shin'on", english: "Heartbeat" },
+  "タッピング": { romaji: "Tappingu", english: "Tapping" },
+  "スクラッチ": { romaji: "Sukuratchi", english: "Scratching" },
+  "咀嚼音": { romaji: "Soshakuon", english: "Chewing Sounds" },
+  "水音": { romaji: "Mizuoto", english: "Water Sounds" },
+  "雨音": { romaji: "Amaoto", english: "Rain Sounds" },
+  "焚き火": { romaji: "Takibi", english: "Campfire" },
+  "ロールプレイ": { romaji: "Roorupurei", english: "Roleplay" },
+  "シチュエーションボイス": { romaji: "Shichueeshon Boisu", english: "Situation Voice" },
+  "ドラマCD": { romaji: "Dorama CD", english: "Drama CD" },
+  "朗読": { romaji: "Roudoku", english: "Reading Aloud" },
+
+  // === Tropes & Character Archetypes ===
+  "甘やかし": { romaji: "Amayakashi", english: "Pampering" },
+  "癒やし": { romaji: "Iyashi", english: "Healing" },
+  "癒し": { romaji: "Iyashi", english: "Healing" },
+  "甘々": { romaji: "Ama-ama", english: "Sweet" },
+  "全肯定": { romaji: "Zen-koutei", english: "Affirmation" },
+  "お姉さん": { romaji: "Oneesan", english: "Older Sister" },
+  "姉": { romaji: "Ane", english: "Older Sister" },
+  "妹": { romaji: "Imouto", english: "Little Sister" },
+  "義妹": { romaji: "Gimai", english: "Step Sister" },
+  "幼馴染": { romaji: "Osananajimi", english: "Childhood Friend" },
+  "幼なじみ": { romaji: "Osananajimi", english: "Childhood Friend" },
+  "同級生": { romaji: "Doukyuusei", english: "Classmate" },
+  "先輩": { romaji: "Senpai", english: "Senpai" },
+  "後輩": { romaji: "Kouhai", english: "Kouhai" },
+  "ママ": { romaji: "Mama", english: "Mom" },
+  "母性": { romaji: "Bosei", english: "Maternal" },
+  "人妻": { romaji: "Hitozuma", english: "Married Woman" },
+  "団地妻": { romaji: "Danchizuma", english: "Apartment Wife" },
+  "メイド": { romaji: "Meido", english: "Maid" },
+  "お嬢様": { romaji: "Ojousama", english: "Rich Lady" },
+  "ギャル": { romaji: "Gyaru", english: "Gyaru" },
+  "ツンデレ": { romaji: "Tsundere", english: "Tsundere" },
+  "クーデレ": { romaji: "Kuudere", english: "Kuudere" },
+  "ヤンデレ": { romaji: "Yandere", english: "Yandere" },
+  "メスガキ": { romaji: "Mesugaki", english: "Cheeky Brat" },
+  "ボクっ娘": { romaji: "Bokukko", english: "Tomboy" },
+  "男の娘": { romaji: "Otokonoko", english: "Femboy" },
+  "ショタ": { romaji: "Shota", english: "Shota" },
+  "ロリ": { romaji: "Rori", english: "Loli" },
+  "熟女": { romaji: "Jukujo", english: "Milf" },
+  "JK": { romaji: "JK", english: "High School Girl" },
+  "JC": { romaji: "JC", english: "Middle School Girl" },
+  "JS": { romaji: "JS", english: "Elementary Girl" },
+  "OL": { romaji: "OL", english: "Office Lady" },
+  "女教師": { romaji: "Onna Kyoushi", english: "Female Teacher" },
+  "教師": { romaji: "Kyoushi", english: "Teacher" },
+  "生徒": { romaji: "Seito", english: "Student" },
+  "看護師": { romaji: "Kangoshi", english: "Nurse" },
+  "ナース": { romaji: "Naasu", english: "Nurse" },
+  "女医": { romaji: "Joi", english: "Female Doctor" },
+  "巫女": { romaji: "Miko", english: "Shrine Maiden" },
+  "エルフ": { romaji: "Erufu", english: "Elf" },
+  "ダークエルフ": { romaji: "Daaku Erufu", english: "Dark Elf" },
+  "獣耳": { romaji: "Kemonomimi", english: "Animal Ears" },
+  "猫耳": { romaji: "Nekomimi", english: "Cat Ears" },
+  "狐耳": { romaji: "Kitsunemimi", english: "Fox Ears" },
+  "犬耳": { romaji: "Inumimi", english: "Dog Ears" },
+  "吸血鬼": { romaji: "Kyuuketsuki", english: "Vampire" },
+  "淫魔": { romaji: "Inma", english: "Succubus" },
+  "サキュバス": { romaji: "Sakyubasu", english: "Succubus" },
+  "悪魔": { romaji: "Akuma", english: "Demon" },
+  "天使": { romaji: "Tenshi", english: "Angel" },
+
+  // === Fetish & Erotic Keywords ===
+  "オナサポ": { romaji: "Onasapo", english: "Masturbation Support" },
+  "射精管理": { romaji: "Shasei Kanri", english: "Ejaculation Control" },
+  "寸止め": { romaji: "Sundome", english: "Edging" },
+  "焦らし": { romaji: "Jirashi", english: "Teasing" },
+  "淫語": { romaji: "Ingo", english: "Dirty Talk" },
+  "言葉責め": { romaji: "Kotoba Zeme", english: "Verbal Degradation" },
+  "主観視点": { romaji: "Shukan Shiten", english: "POV" },
+  "催眠": { romaji: "Saimin", english: "Hypnosis" },
+  "催眠音声": { romaji: "Saimin Onsei", english: "Hypnosis Voice" },
+  "洗脳": { romaji: "Sennou", english: "Brainwashing" },
+  "隷属": { romaji: "Reizoku", english: "Enslavement" },
+  "常識改変": { romaji: "Joushiki Kaihen", english: "Common Sense Alteration" },
+  "乳首責め": { romaji: "Chikubi Zeme", english: "Nipple Stimulation" },
+  "連続絶頂": { romaji: "Renzoku Zecchou", english: "Multiple Orgasms" },
+  "快楽堕ち": { romaji: "Kairaku Ochi", english: "Succumbing to Pleasure" },
+  "悪堕ち": { romaji: "Aku Ochi", english: "Corruption" },
+  "メス堕ち": { romaji: "Mesu Ochi", english: "Feminization" },
+  "オホ声": { romaji: "Oho-goe", english: "Ahegao Voice" },
+  "淫紋": { romaji: "Inmon", english: "Erotic Tattoo" },
+  "手コキ": { romaji: "Tekoki", english: "Handjob" },
+  "フェラ": { romaji: "Fera", english: "Blowjob" },
+  "フェラチオ": { romaji: "Ferachio", english: "Blowjob" },
+  "イラマチオ": { romaji: "Iramachio", english: "Deep Throat" },
+  "パイズリ": { romaji: "Paizuri", english: "Breastjob" },
+  "足コキ": { romaji: "Ashikoki", english: "Footjob" },
+  "アナル": { romaji: "Anaru", english: "Anal" },
+  "潮吹き": { romaji: "Shiofuki", english: "Squirting" },
+  "中出し": { romaji: "Nakadashi", english: "Creampie" },
+  "キス": { romaji: "Kisu", english: "Kissing" },
+  "拘束": { romaji: "Kousoku", english: "Restraint" },
+  "目隠し": { romaji: "Mekakushi", english: "Blindfold" },
+  "調教": { romaji: "Choukyou", english: "Discipline" },
+  "痴女": { romaji: "Chijo", english: "Slutty Woman" },
+  "逆レイプ": { romaji: "Gyaku Reipu", english: "Reverse Rape" },
+  "寝取られ": { romaji: "Netorare", english: "NTR" },
+  "寝取り": { romaji: "Netori", english: "Partner Poaching" },
+  "寝取らせ": { romaji: "Netorase", english: "Cuckolding" },
+  "純愛": { romaji: "Jun'ai", english: "Pure Love" },
+  "女性優位": { romaji: "Josei Yuui", english: "Female Dominance" },
+  "赤ちゃんプレイ": { romaji: "Akachan Purei", english: "Age Play" },
+  "巨乳": { romaji: "Kyonyuu", english: "Big Breasts" },
+  "爆乳": { romaji: "Bakunyuu", english: "Huge Breasts" },
+  "貧乳": { romaji: "Hinnyuu", english: "Small Breasts" },
+  "微乳": { romaji: "Binyuu", english: "Petite Breasts" },
+  "全裸": { romaji: "Zenra", english: "Naked" },
+  "百合": { romaji: "Yuri", english: "Yuri" },
+  "BL": { romaji: "BL", english: "Boys Love" },
+  "ハーレム": { romaji: "Haaremu", english: "Harem" },
+  "浮気": { romaji: "Uwaki", english: "Affair" },
+
+  // === EhTag Chinese Synonyms (Mirror tags) ===
+  "手交": { romaji: "Tekoki", english: "Handjob" },
+  "内射": { romaji: "Nakadashi", english: "Creampie" },
+  "中出": { romaji: "Nakadashi", english: "Creampie" },
+  "口交": { romaji: "Ferachio", english: "Blowjob" },
+  "姐姐": { romaji: "Oneesan", english: "Older Sister" },
+  "妹妹": { romaji: "Imouto", english: "Little Sister" },
+  "环绕音": { romaji: "Rittai Onkyou", english: "3D Audio" },
+  "舔耳": { romaji: "Miminame", english: "Ear Licking" },
+  "挖耳": { romaji: "Mimikaki", english: "Ear Cleaning" },
+  "采耳": { romaji: "Mimikaki", english: "Ear Cleaning" },
+  "睡眠引导": { romaji: "Suimin Dounyuu", english: "Sleep Induction" },
+  "纯爱": { romaji: "Jun'ai", english: "Pure Love" },
+  "同栖": { romaji: "Dousei", english: "Cohabitation" },
+  "幼驯染": { romaji: "Osananajimi", english: "Childhood Friend" },
+  "女仆": { romaji: "Meido", english: "Maid" },
+  "傲娇": { romaji: "Tsundere", english: "Tsundere" },
+  "病娇": { romaji: "Yandere", english: "Yandere" },
+  "萝莉": { romaji: "Rori", english: "Loli" },
+  "正太": { romaji: "Shota", english: "Shota" },
+  "乳交": { romaji: "Paizuri", english: "Breastjob" },
+  "足交": { romaji: "Ashikoki", english: "Footjob" },
+  "后庭": { romaji: "Anaru", english: "Anal" },
+  "喷水": { romaji: "Shiofuki", english: "Squirting" },
+  "潮吹": { romaji: "Shiofuki", english: "Squirting" },
+  "调教": { romaji: "Choukyou", english: "Training" },
+  "紧缚": { romaji: "Kinbaku", english: "Bondage" },
+  "蒙眼": { romaji: "Mekakushi", english: "Blindfold" },
+  "逆推": { romaji: "Gyaku Reipu", english: "Reverse Rape" },
+  "御姐": { romaji: "Oneesan", english: "Older Sister" },
+  "兽耳": { romaji: "Kemonomimi", english: "Animal Ears" },
+  "魅魔": { romaji: "Sakyubasu", english: "Succubus" },
+  "精灵": { romaji: "Erufu", english: "Elf" },
+  "暗精灵": { romaji: "Daaku Erufu", english: "Dark Elf" },
+  "寸止": { romaji: "Sundome", english: "Edging" },
+  "自慰支援": { romaji: "Onasapo", english: "Masturbation Support" },
+  "耳语": { romaji: "Sasayaki", english: "Whispering" },
+  "贴近": { romaji: "Mitchaku", english: "Close Contact" },
+  "零距离": { romaji: "Zero Kyori", english: "Zero Distance" },
+  "治愈": { romaji: "Iyashi", english: "Healing" },
+  "宠溺": { romaji: "Amayakashi", english: "Pampering" },
+
+  // === Voice Actors (CV) ===
+  "民安ともえ": { romaji: "Tamiyasu Tomoe", isCV: true },
+  "たみやすともえ": { romaji: "Tamiyasu Tomoe", isCV: true },
+  "秋野花": { romaji: "Akino Hana", isCV: true },
+  "秋野かえで": { romaji: "Akino Kaede", isCV: true },
+  "陽向葵ゅか": { romaji: "Hinata Aoiyuka", isCV: true },
+  "音霊魂子": { romaji: "Onrei Tamako", isCV: true },
+  "猫舐つな": { romaji: "Nekoname Tsuna", isCV: true },
+  "桃山いおん": { romaji: "Momoyama Ion", isCV: true },
+  "逢真井もこ": { romaji: "Aimai Moko", isCV: true },
+  "小鳥遊結衣": { romaji: "Takanashi Yui", isCV: true },
+  "くすはらゆい": { romaji: "Kusuhara Yui", isCV: true },
+  "歩サラ": { romaji: "Ayumi Sara", isCV: true },
+  "杏子御津": { romaji: "Anzu Mitsu", isCV: true },
+  "藤咲ウサ": { romaji: "Fujisaki Usa", isCV: true },
+  "花園めい": { romaji: "Hanazono Mei", isCV: true },
+  "北大路ゆき": { romaji: "Kitaooji Yuki", isCV: true },
+  "御苑生メイ": { romaji: "Misonoo Mei", isCV: true },
+  "悠木碧": { romaji: "Yuuki Aoi", isCV: true },
+  "種﨑敦美": { romaji: "Tanezaki Atsumi", isCV: true },
+  "いねむりすやこ": { romaji: "Inemuri Suyako", isCV: true },
+  "花城かざり": { romaji: "Hanashiro Kazari", isCV: true },
+  "黒木ほの香": { romaji: "Kuroki Honoka", isCV: true },
+  "飯田ヒカル": { romaji: "Iida Hikaru", isCV: true },
+  "七瀬つむぎ": { romaji: "Nanase Tsumugi", isCV: true },
+  "薄井友里": { romaji: "Usui Yuri", isCV: true },
+  "小原好美": { romaji: "Kohara Konomi", isCV: true },
+  "竹達彩奈": { romaji: "Taketatsu Ayana", isCV: true },
+  "みもりあいの": { romaji: "Mimori Aino", isCV: true },
+  "桜音のん": { romaji: "Sakurane Non", isCV: true },
+  "逢坂成美": { romaji: "Oosaka Narumi", isCV: true },
+  "水純なな歩": { romaji: "Mizujun Nanaho", isCV: true },
+  "空峰羽奈": { romaji: "Soramine Hana", isCV: true },
+  "こまる": { romaji: "Komaru", isCV: true },
+  "佐倉綾音": { romaji: "Sakura Ayane", isCV: true },
+  "鬼頭明里": { romaji: "Kitou Akari", isCV: true },
+  "伊藤美来": { romaji: "Itou Miku", isCV: true },
+  "雨宮天": { romaji: "Amamiya Sora", isCV: true },
+  "高橋李依": { romaji: "Takahashi Rie", isCV: true },
+  "上坂すみれ": { romaji: "Uesaka Sumire", isCV: true },
+  "東山奈央": { romaji: "Touyama Nao", isCV: true },
+  "茅野愛衣": { romaji: "Kayano Ai", isCV: true },
+  "花澤香菜": { romaji: "Hanazawa Kana", isCV: true },
+  "早見沙織": { romaji: "Hayami Saori", isCV: true },
+  "水瀬いのり": { romaji: "Minase Inori", isCV: true },
+  "大西沙織": { romaji: "Oonishi Saori", isCV: true },
+  "内田真礼": { romaji: "Uchida Maaya", isCV: true },
+  "小倉唯": { romaji: "Ogura Yui", isCV: true },
+  "日高里菜": { romaji: "Hidaka Rina", isCV: true },
+  "瀬戸麻沙美": { romaji: "Seto Asami", isCV: true },
+  "阿澄佳奈": { romaji: "Asumi Kana", isCV: true },
+  "井澤詩織": { romaji: "Izawa Shiori", isCV: true },
+  "M・A・O": { romaji: "M・A・O", isCV: true },
+  "市ノ瀬加那": { romaji: "Ichinose Kana", isCV: true },
+  "鈴代紗弓": { romaji: "Suzushiro Sayumi", isCV: true },
+  "会沢紗弥": { romaji: "Aizawa Saya", isCV: true },
+  "羊宮妃那": { romaji: "Youmiya Hina", isCV: true },
+  "長谷川育美": { romaji: "Hasegawa Ikumi", isCV: true },
+  "富田美憂": { romaji: "Tomita Miyu", isCV: true },
+  "楠木ともり": { romaji: "Kusunoki Tomori", isCV: true },
+  "和氣あず未": { romaji: "Waki Azumi", isCV: true },
+  "ファイルーズあい": { romaji: "Fairouz Ai", isCV: true },
+  "石見舞菜香": { romaji: "Iwami Manaka", isCV: true },
+  "指出毬亜": { romaji: "Sashide Maria", isCV: true },
+  "ペペロンチーノ": { romaji: "Peperoncino", isCV: true },
+  "かの仔": { romaji: "Kanoko", isCV: true },
+  "秋野こぎく": { romaji: "Akino Kogiku", isCV: true },
+  "月野きいろ": { romaji: "Tsukino Kiiro", isCV: true },
+  "飴川紫乃": { romaji: "Amekawa Shino", isCV: true },
+  "御手洗かりん": { romaji: "Mitarai Karin", isCV: true },
+  "柚原みう": { romaji: "Yuzuhara Miu", isCV: true },
+  "恋羽ここ": { romaji: "Kohane Koko", isCV: true },
+  "天知遥": { romaji: "Amachi Haruka", isCV: true },
+  "羽高なる": { romaji: "Hadaka Naru", isCV: true },
+  "月城まひる": { romaji: "Tsukishiro Mahiru", isCV: true },
+  "蒼乃むすび": { romaji: "Aono Musubi", isCV: true },
+  "shizuku": { romaji: "Shizuku", isCV: true },
+  "犬塚いちご": { romaji: "Inuzuka Ichigo", isCV: true },
+  "みる": { romaji: "Miru", isCV: true },
+  "北見六花": { romaji: "Kitami Rikka", isCV: true },
+  "波野夏花": { romaji: "Namano Natsuka", isCV: true },
+  "風音": { romaji: "Kazane", isCV: true },
+  "夏野こおり": { romaji: "Natsuno Koori", isCV: true },
+  "五行なずな": { romaji: "Gogyou Nazuna", isCV: true },
+  "青山ゆかり": { romaji: "Aoyama Yukari", isCV: true },
+  "かわしまりの": { romaji: "Kawashima Rino", isCV: true },
+  "一色ヒカル": { romaji: "Isshiki Hikaru", isCV: true }
 };
+
+function cleanCVName(raw) {
+  if (!raw || typeof raw !== 'string') return '';
+  let str = raw.trim();
+  str = str.replace(/^(?:【|\(|（|\[)?\s*(?:CV|声優|ボイス|キャスト)[.:：\s]*/i, '');
+  str = str.replace(/(?:】|\)|）|\])\s*$/i, '');
+  str = str.replace(/(?:様|さん|氏|他)$/, '').trim();
+  return str;
+}
+
+function normalizeCVRomaji(ja, romaji) {
+  if (!romaji || typeof romaji !== 'string') return romaji || '';
+  let str = romaji.trim();
+  if (!str) return '';
+
+  const parenMatch = str.match(/^([^(（]+)[(（](.+)[)）]$/);
+  if (parenMatch) {
+    const jaParen = (ja && typeof ja === 'string') ? ja.match(/^([^(（]+)[(（](.+)[)）]$/) : null;
+    if (jaParen) {
+      return normalizeCVRomaji(jaParen[1].trim(), parenMatch[1].trim()) + ' (' +
+             normalizeCVRomaji(jaParen[2].trim(), parenMatch[2].trim()) + ')';
+    }
+    return normalizeCVRomaji('', parenMatch[1].trim()) + ' (' + normalizeCVRomaji('', parenMatch[2].trim()) + ')';
+  }
+
+  const words = str.split(/\s+/).filter(Boolean);
+  if (words.length === 0) return '';
+
+  if (words.length === 1) {
+    return words[0].charAt(0).toUpperCase() + words[0].slice(1);
+  }
+
+  if (words.length === 2) {
+    const w0 = words[0].charAt(0).toUpperCase() + words[0].slice(1).toLowerCase();
+    const w1 = words[1].charAt(0).toUpperCase() + words[1].slice(1).toLowerCase();
+    return w0 + ' ' + w1;
+  }
+
+  if (words.some(w => w.toLowerCase() === 'no') && ja && /[ノ之の]/.test(ja)) {
+    return words.map((w) => {
+      if (w.toLowerCase() === 'no') return 'no';
+      return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+    }).join(' ');
+  }
+
+  const capitalizedWords = words.map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
+
+  if (words.length === 4) {
+    const surname = capitalizedWords[0] + capitalizedWords[1].toLowerCase();
+    const given = capitalizedWords[2] + capitalizedWords[3].toLowerCase();
+    return surname + ' ' + given;
+  }
+
+  if (words.length === 3) {
+    if (ja && typeof ja === 'string') {
+      const matchKanjiKana = ja.match(/^([\u4E00-\u9FFF]+)([\u3040-\u309F\u30A0-\u30FF]+)$/);
+      if (matchKanjiKana && matchKanjiKana[1].length >= 2) {
+        return capitalizedWords[0] + capitalizedWords[1].toLowerCase() + ' ' + capitalizedWords[2];
+      }
+      const matchKanjiMixed = ja.match(/^([\u4E00-\u9FFF]{2,})([\u3040-\u309F\u30A0-\u30FF]+[\u4E00-\u9FFF]*)$/);
+      if (matchKanjiMixed) {
+        return capitalizedWords[0] + ' ' + capitalizedWords[1] + capitalizedWords[2].toLowerCase();
+      }
+      if (/^[\u4E00-\u9FFF]{4}$/.test(ja)) {
+        return capitalizedWords[0] + capitalizedWords[1].toLowerCase() + ' ' + capitalizedWords[2];
+      }
+    }
+
+    const surnameSuffixes = /^(ne|mine|saka|zaka|ta|da|kawa|gawa|hara|bara|shima|jima|mori|saki|zaki|no|ki|gi|mizu|tsuka|zuka|ba|ha|ya|tani|yama|kura|miya|hashi|bashi|fuji|se|ko|to|no)$/i;
+    if (surnameSuffixes.test(words[1])) {
+      return capitalizedWords[0] + capitalizedWords[1].toLowerCase() + ' ' + capitalizedWords[2];
+    }
+
+    return capitalizedWords[0] + capitalizedWords[1].toLowerCase() + ' ' + capitalizedWords[2];
+  }
+
+  return capitalizedWords.join(' ');
+}
+
+function getWorkCV(work) {
+  if (!work) return '';
+  let cv = (work.cv || '').trim();
+  if (cv && cv !== 'N/A') return cv;
+
+  const title = (work.title || '');
+  if (!title) return '';
+
+  const match = title.match(/(?:【|\(|（|\[)\s*(?:CV|声優|ボイス|キャスト)[.:：\s]*([^】)）\]]+)(?:】|\)|）|\])/i);
+  if (match && match[1]) {
+    const rawCv = match[1].trim();
+    const firstPart = rawCv.split(/[/,、/]/)[0].trim();
+    if (firstPart && firstPart.length >= 2 && !['DLsite', '同人', 'ASMR', 'R18'].includes(firstPart)) {
+      return firstPart;
+    }
+  }
+  return '';
+}
+
+function formatTag(t, tagDict = BASE_TAG_DICT) {
+  if (!t || typeof t !== 'string') return '';
+  const raw = t.trim();
+  if (!raw) return '';
+
+  let jaName = raw;
+  let existingRomaji = '';
+  if (raw.includes('|')) {
+    const pipeIdx = raw.indexOf('|');
+    jaName = raw.slice(0, pipeIdx).trim();
+    existingRomaji = raw.slice(pipeIdx + 1).trim();
+  }
+
+  let entry = (tagDict && tagDict[jaName]);
+  if (!entry || typeof entry === 'string') {
+    if (BASE_TAG_DICT[jaName]) {
+      entry = BASE_TAG_DICT[jaName];
+    } else if (typeof entry === 'string') {
+      entry = { romaji: jaName, english: entry };
+    }
+  }
+
+  if (!entry && !existingRomaji) return raw;
+
+  if (entry && entry.isCV) {
+    let romaji = entry.romaji || existingRomaji;
+    if (romaji) romaji = normalizeCVRomaji(jaName, romaji);
+    return (romaji && romaji !== jaName) ? jaName + ' | ' + romaji : jaName;
+  }
+
+  if (entry) {
+    const parts = [jaName];
+    let romaji = entry.romaji || '';
+    let english = entry.english || '';
+    if (romaji && romaji.toLowerCase() !== jaName.toLowerCase()) {
+      parts.push(romaji);
+    }
+    if (english && english.toLowerCase() !== jaName.toLowerCase() && english.toLowerCase() !== romaji.toLowerCase()) {
+      parts.push(english);
+    }
+    return parts.join(' | ');
+  }
+
+  if (existingRomaji) {
+    const norm = normalizeCVRomaji(jaName, existingRomaji);
+    return jaName + ' | ' + norm;
+  }
+
+  return raw;
+}
+
+function formatCV(cv, tagDict = BASE_TAG_DICT) {
+  if (!cv || typeof cv !== 'string' || cv === 'N/A') return '';
+  const parts = cv.split(/[,、/&＋+;・\n|]/).map(p => p.trim()).filter(Boolean);
+  if (parts.length === 0) return '';
+
+  const results = [];
+
+  for (let part of parts) {
+    let raw = cleanCVName(part);
+    if (!raw || raw === 'N/A') continue;
+
+    let jaName = raw;
+    let existingRomaji = '';
+
+    const bracketMatch = raw.match(/【([^】]+)】|（([^）]+)）|\(([^)]+)\)|\[([^\]]+)\]/);
+    if (bracketMatch) {
+      const inside = (bracketMatch[1] || bracketMatch[2] || bracketMatch[3] || bracketMatch[4] || '').trim();
+      const outside = raw.replace(bracketMatch[0], '').trim();
+      const isInsideJa = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(inside);
+      const isOutsideJa = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(outside);
+
+      if (isInsideJa && !isOutsideJa && outside) {
+        jaName = inside;
+        existingRomaji = outside;
+      } else if (isOutsideJa && !isInsideJa && inside) {
+        jaName = outside;
+        existingRomaji = inside;
+      } else if (isInsideJa) {
+        jaName = inside;
+      }
+    }
+
+    let entry = (tagDict && tagDict[jaName]);
+    if (!entry && BASE_TAG_DICT && BASE_TAG_DICT[jaName]) {
+      entry = BASE_TAG_DICT[jaName];
+    }
+    if (typeof entry === 'string') {
+      entry = { romaji: entry, isCV: true };
+    }
+
+    let romaji = (entry && (entry.romaji || entry.english)) ? (entry.romaji || entry.english) : existingRomaji;
+    if (romaji) {
+      romaji = normalizeCVRomaji(jaName, romaji);
+    }
+
+    if (romaji && /[a-zA-Z]/.test(romaji) && romaji.toLowerCase() !== jaName.toLowerCase()) {
+      results.push(jaName + ' | ' + romaji);
+    } else {
+      results.push(jaName);
+    }
+  }
+
+  return Array.from(new Set(results)).join(', ');
+}
 
 function mergeTagDict(db, newTags) {
   if (!db) return false;
@@ -123,10 +502,27 @@ function mergeTagDict(db, newTags) {
   let changed = false;
   const translations = (newTags && newTags.tagTranslations) ? newTags.tagTranslations : newTags;
   if (translations && typeof translations === 'object') {
-    for (const [ja, en] of Object.entries(translations)) {
-      if (ja && en && ja !== en && db.tagDict[ja] !== en) {
-        db.tagDict[ja] = en;
-        changed = true;
+    for (const [ja, val] of Object.entries(translations)) {
+      if (!ja || !val) continue;
+      if (typeof val === 'string') {
+        const base = BASE_TAG_DICT[ja];
+        const normalized = (base && typeof base === 'object') ? base : { romaji: '', english: val };
+        if (!db.tagDict[ja] || JSON.stringify(db.tagDict[ja]) !== JSON.stringify(normalized)) {
+          db.tagDict[ja] = normalized;
+          changed = true;
+        }
+      } else if (typeof val === 'object') {
+        const item = Object.assign({}, val);
+        if (item.romaji) {
+          item.romaji = normalizeCVRomaji(ja, item.romaji);
+        }
+        if (item.english && (item.english === val.romaji || item.isCV)) {
+          item.english = item.romaji;
+        }
+        if (!db.tagDict[ja] || JSON.stringify(db.tagDict[ja]) !== JSON.stringify(item)) {
+          db.tagDict[ja] = item;
+          changed = true;
+        }
       }
     }
   }
@@ -264,7 +660,7 @@ async function resolveRjWork(rjCode) {
   let title = '';
   let circle = '';
   let cv = '';
-  const tags = [];
+  let tags = [];
   const tagTranslations = {};
   let coverUrl = '';
   let isAdult = true;
@@ -462,11 +858,24 @@ async function resolveRjWork(rjCode) {
     }
   }
 
-  if (cv && cv !== 'N/A') {
-    cv.split(/[/,、・\s+＆&]+/).map(s => s.trim()).filter(Boolean).forEach(c => {
-      if (c.length >= 2 && !tags.includes(c)) tags.push(c);
+  // Filter out CV names from tags
+  const rawCvForDedupe = cv || getWorkCV({ title, cv });
+  const cvNamesList = [];
+  if (rawCvForDedupe && rawCvForDedupe !== 'N/A') {
+    rawCvForDedupe.split(/[,、/&＋+;・\n|]/).forEach(c => {
+      const clean = cleanCVName(c);
+      if (clean) cvNamesList.push(clean.toLowerCase());
     });
   }
+  tags = tags.filter(t => {
+    const clean = String(t || '').trim();
+    if (!clean) return false;
+    if (cvNamesList.includes(clean.toLowerCase())) return false;
+    const entry = BASE_TAG_DICT[clean];
+    if (entry && entry.isCV) return false;
+    return true;
+  });
+  if (tags.length === 0) tags = ['ASMR', 'Audio'];
 
   if (!coverUrl) {
     const bucket = getDlsiteCoverBucket(cleanRj);
@@ -759,8 +1168,10 @@ function parseAsmrTreeData(treeData, hasHls = true, targetDuration = 0) {
             // Combined duration would exceed the stream duration
             continue;
           }
+          bonusTracks.push(...validCandidateBonus);
+        } else if (mainTracks.length === 0) {
+          bonusTracks.push(...validCandidateBonus);
         }
-        bonusTracks.push(...validCandidateBonus);
       }
     }
   } else {
@@ -803,25 +1214,48 @@ function parseAsmrTreeData(treeData, hasHls = true, targetDuration = 0) {
   }
 
   let cumulativeTime = 0;
+  let trackCumulativeTime = 0;
+  let currentDetectedTrack = 0;
+  let lastDetectedTrack = -1;
   const chapters = [];
 
   for (let idx = 0; idx < finalAudioList.length; idx++) {
     const t = finalAudioList[idx];
-    const startSecs = cumulativeTime;
-    
-    // Stop if chapter start time exceeds known target stream duration
-    if (targetDuration > 0 && startSecs >= targetDuration - 2) {
-      break;
+    let trackIdx = 0;
+    let startSecs = 0;
+
+    if (hasHls || targetDuration > 0) {
+      trackIdx = 0;
+      startSecs = cumulativeTime;
+      if (targetDuration > 0 && startSecs >= targetDuration - 2) {
+        break;
+      }
+      cumulativeTime += t.duration;
+    } else {
+      const combined = (t.folder ? t.folder + '/' : '') + (t.title || '');
+      const tm = combined.match(/(?:トラック|track|disc|disk|cd|part|vol|volume|side|第)\s*([0-9]+)/i);
+      if (tm && tm[1]) {
+        const num = parseInt(tm[1], 10) - 1;
+        if (num >= 0 && num <= 20) {
+          if (num !== lastDetectedTrack) {
+            lastDetectedTrack = num;
+            currentDetectedTrack = num;
+            trackCumulativeTime = 0;
+          }
+        }
+      }
+      trackIdx = currentDetectedTrack;
+      startSecs = trackCumulativeTime;
+      trackCumulativeTime += t.duration;
     }
 
-    cumulativeTime += t.duration;
     chapters.push({
       id: idx + 1,
       title: t.title,
       startTime: startSecs,
       duration: t.duration,
       formattedTime: formatTime(startSecs),
-      trackIndex: hasHls ? 0 : idx
+      trackIndex: trackIdx
     });
   }
 
@@ -1068,9 +1502,9 @@ export default {
       const cv = url.searchParams.get('cv')?.toLowerCase().trim();
       const circle = url.searchParams.get('circle')?.toLowerCase().trim();
       const favorite = url.searchParams.get('favorite');
+      const dict = db.tagDict || BASE_TAG_DICT || {};
 
       if (q) {
-        const dict = db.tagDict || BASE_TAG_DICT || {};
         works = works.filter(w =>
           w.rjCode.toLowerCase().includes(q) ||
           w.title.toLowerCase().includes(q) ||
@@ -1078,19 +1512,46 @@ export default {
           (w.cv && w.cv.toLowerCase().includes(q)) ||
           (w.tags && w.tags.some(t => {
             if (t.toLowerCase().includes(q)) return true;
-            const en = dict[t];
-            return en && en.toLowerCase().includes(q);
+            const entry = dict[t];
+            if (entry) {
+              if (typeof entry === 'string') return entry.toLowerCase().includes(q);
+              if (typeof entry === 'object') {
+                return (entry.romaji && entry.romaji.toLowerCase().includes(q)) ||
+                       (entry.english && entry.english.toLowerCase().includes(q));
+              }
+            }
+            return false;
           }))
         );
       }
       if (tag) {
-        const dict = db.tagDict || BASE_TAG_DICT || {};
-        works = works.filter(w => (w.tags || []).some(t => {
-          const tLower = t.toLowerCase().trim();
-          if (tLower === tag) return true;
-          const en = (dict[t] || '').toLowerCase().trim();
-          return en === tag;
-        }));
+        const tagTokens = tag.split(/[+,]+/).map(s => s.trim()).filter(Boolean);
+        if (tagTokens.length > 0) {
+          works = works.filter(w => {
+            const workTags = Array.isArray(w.tags) ? w.tags : [];
+            const allWorkTagStrings = [...workTags];
+            if (w.cv) {
+              w.cv.split(/[,、/&＋+]/).forEach(c => {
+                if (c.trim()) allWorkTagStrings.push(c.trim());
+              });
+            }
+            return tagTokens.every(token => {
+              return allWorkTagStrings.some(t => {
+                const tLower = t.toLowerCase().trim();
+                if (tLower.includes(token)) return true;
+                const entry = dict[t];
+                if (entry) {
+                  if (typeof entry === 'string') return entry.toLowerCase().includes(token);
+                  if (typeof entry === 'object') {
+                    return (entry.romaji && entry.romaji.toLowerCase().includes(token)) ||
+                           (entry.english && entry.english.toLowerCase().includes(token));
+                  }
+                }
+                return false;
+              });
+            });
+          });
+        }
       }
       if (cv) works = works.filter(w => w.cv && w.cv.toLowerCase().includes(cv));
       if (circle) works = works.filter(w => w.circle && w.circle.toLowerCase().includes(circle));
@@ -1286,14 +1747,15 @@ export default {
       let targetDur = parseInt(url.searchParams.get('duration') || '0', 10);
       const db = await getDb(env);
       const work = db.works ? (db.works[rjCode] || Object.values(db.works).find(w => (w.rjCode || '').replace(/^RJ0+/, 'RJ') === rjCode.replace(/^RJ0+/, 'RJ'))) : null;
-      const hasHls = work ? Boolean(work.hasHls) : true;
+      const numTracks = (work && work.tracks) ? work.tracks.length : 1;
+      const isSingleStream = work ? (Boolean(work.hasHls) || numTracks <= 1) : true;
 
-      if (targetDur <= 0 && work) {
+      if (targetDur <= 0 && work && isSingleStream) {
         if (work.tracks && work.tracks[0] && work.tracks[0].duration > 0) targetDur = Math.round(work.tracks[0].duration);
         else if (work.totalDuration > 0) targetDur = Math.round(work.totalDuration);
       }
 
-      const result = await fetchChaptersAndGallery(rjCode, hasHls, targetDur);
+      const result = await fetchChaptersAndGallery(rjCode, isSingleStream, targetDur);
       return json({ success: true, chapters: result.chapters, gallery: result.gallery });
     }
 
@@ -1553,8 +2015,33 @@ export default {
     if (pathname === '/api/tags') {
       if (!isAuth()) return json([]);
       const db = await getDb(env);
+      const cvNamesSet = new Set();
+      Object.values(db.works || {}).forEach(w => {
+        const rawCv = getWorkCV(w);
+        if (rawCv && rawCv !== 'N/A') {
+          rawCv.split(/[,、/&＋+;・\n|]/).forEach(c => {
+            const clean = cleanCVName(c);
+            if (clean) cvNamesSet.add(clean.toLowerCase());
+          });
+        }
+      });
+      Object.entries(db.tagDict || BASE_TAG_DICT || {}).forEach(([k, v]) => {
+        if (v && v.isCV) {
+          cvNamesSet.add(k.toLowerCase());
+          if (v.romaji) cvNamesSet.add(v.romaji.toLowerCase());
+        }
+      });
+
       const counts = {};
-      Object.values(db.works || {}).forEach(w => (w.tags || []).forEach(t => counts[t] = (counts[t] || 0) + 1));
+      Object.values(db.works || {}).forEach(w => {
+        (w.tags || []).forEach(t => {
+          const clean = (t || '').trim();
+          if (!clean || cvNamesSet.has(clean.toLowerCase())) return;
+          const entry = db.tagDict?.[clean] || BASE_TAG_DICT[clean];
+          if (entry && entry.isCV) return;
+          counts[clean] = (counts[clean] || 0) + 1;
+        });
+      });
       const tagList = Object.entries(counts).map(([name, count]) => ({
         name,
         count,
@@ -1568,11 +2055,177 @@ export default {
       const db = await getDb(env);
       const counts = {};
       Object.values(db.works || {}).forEach(w => {
-        if (w.cv && w.cv !== 'N/A') {
-          w.cv.split(/[,、/]/).map(s => s.trim()).filter(Boolean).forEach(cv => counts[cv] = (counts[cv] || 0) + 1);
+        const rawCv = getWorkCV(w);
+        if (rawCv && rawCv !== 'N/A') {
+          const cvList = rawCv.split(/[,、/&＋+;・\n|]/).map(s => cleanCVName(s)).filter(Boolean);
+          Array.from(new Set(cvList)).forEach(cv => {
+            counts[cv] = (counts[cv] || 0) + 1;
+          });
         }
       });
       return json(Object.entries(counts).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count));
+    }
+
+    if (pathname === '/api/tags/translate-batch' && request.method === 'POST') {
+      if (!isAuth()) return json({ error: 'Unauthorized' }, 401);
+      try {
+        const body = await request.json().catch(() => ({}));
+        const tags = body.tags;
+        if (!Array.isArray(tags) || tags.length === 0) {
+          return json({ success: false, error: 'tags must be a non-empty array' }, 400);
+        }
+        const apiKey = (env && env.OPENROUTER_API_KEY) || '';
+        if (!apiKey) {
+          return json({ success: false, error: 'OPENROUTER_API_KEY is not configured in Cloudflare Worker environment variables.' }, 500);
+        }
+        const resp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': 'Bearer ' + apiKey,
+            'Content-Type': 'application/json',
+            'HTTP-Referer': 'https://astreamer.local',
+            'X-Title': 'streasmr Tag Translator'
+          },
+          body: JSON.stringify({
+            model: 'deepseek/deepseek-v3.2',
+            messages: [
+              {
+                role: 'system',
+                content: 'You are a specialist in Japanese doujin works, ASMR voice actors (CVs), and adult content tags.\nYour task is to convert Japanese tags into Rōmaji (Hepburn system) and English.\n\nPRINCIPLES (not exceptions):\n\n1. **Voice Actor Names** (CVs / seiyuu):\n   - Read the full name as a single unit\n   - Do not split into separate words\n   - Example: 陽向葵ゅか → "Hinata Aoiyuka" (one name)\n   - Example: 秋野かえで → "Akino Kaede"\n   - Output the Rōmaji name in BOTH columns (no English translation needed)\n\n2. **Compound Tags** (multiple words with / or 、):\n   - Preserve the separator\n   - Each component gets its own Rōmaji and English\n   - Example: ラブラブ/あまあま → "Rabu Rabu / Ama Ama" | "Loving / Sweet"\n\n3. **Verb Forms**:\n   - For tags ending in 堕ち (ochi): use the noun form "Ochi" (not "Ochiru")\n   - The tag is a noun phrase, not a verb conjugation\n   - Example: 快楽堕ち → "Kairaku Ochi" | "Succumbing to Pleasure"\n\n4. **Technical Terms**:\n   - Use recognized subculture terminology\n   - Use clinical/educational English where appropriate\n   - Example: イラマチオ → "Iramachio" | "Deep Throat"\n\n5. **Romanization Consistency**:\n   - Use Hepburn system\n   - ち → "chi" (not "ti")\n   - つ → "tsu" (not "tu")\n   - Long vowels: おう → "ō" or "ou"\n   - し → "shi" (not "si")\n\n6. **One Term = One Unit**:\n   - 連続絶頂 → "Renzoku Zecchō" | "Multiple Orgasms" (not split into separate words)\n   - 淫紋 → "Inmon" | "Erotic Mark" (one word)\n\n7. **Context Matters**:\n   - "寝取られ" is "Netorare" (being cuckolded)\n   - "寝取り" is "Netori" (cuckolding someone else)\n   - "寝取らせ" is "Netorase" (consensual cuckolding)\n\nOutput strictly in JSON format:\n{"original_tag": {"romaji": "romaji_translation", "english": "english_translation"}}'
+              },
+              {
+                role: 'user',
+                content: JSON.stringify(tags)
+              }
+            ],
+            response_format: { type: 'json_object' },
+            temperature: 0.1,
+            max_tokens: 4096
+          })
+        });
+
+        if (!resp.ok) {
+          const errText = await resp.text();
+          return json({ success: false, error: 'OpenRouter API returned ' + resp.status + ': ' + errText }, 502);
+        }
+
+        const data = await resp.json();
+        const rawContent = (data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '{}';
+        
+        let cleaned = String(rawContent).replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+        const jsonBlockMatch = cleaned.match(/\{[\s\S]*\}/);
+        if (jsonBlockMatch) cleaned = jsonBlockMatch[0];
+
+        let translated = {};
+        try {
+          translated = JSON.parse(cleaned);
+        } catch (parseErr) {
+          // Robust regex fallback to salvage valid objects if response was cut off
+          const extracted = {};
+          const objRegex = /"([^"]+)"\s*:\s*\{\s*"romaji"\s*:\s*"([^"]*)"\s*,\s*"english"\s*:\s*"([^"]*)"\s*\}/g;
+          let match;
+          while ((match = objRegex.exec(rawContent)) !== null) {
+            extracted[match[1]] = { romaji: match[2], english: match[3] };
+          }
+          if (Object.keys(extracted).length > 0) {
+            translated = extracted;
+          } else {
+            return json({
+              success: false,
+              error: 'JSON parse error: ' + parseErr.message,
+              rawResponse: rawContent,
+              tags: tags
+            }, 422);
+          }
+        }
+
+        // Post-process translations with normalizeCVRomaji
+        for (const [k, v] of Object.entries(translated)) {
+          if (v && typeof v === 'object' && v.romaji) {
+            v.romaji = normalizeCVRomaji(k, v.romaji);
+            if (v.english && (v.english === v.romaji || /^[A-Z][a-z]+(\s+[A-Z][a-z]+)*$/.test(v.english))) {
+              v.english = normalizeCVRomaji(k, v.english);
+            }
+          }
+        }
+
+        const db = await getDb(env);
+        mergeTagDict(db, translated);
+        await saveDb(env, db);
+
+        return json({
+          success: true,
+          count: Object.keys(translated).length,
+          translations: translated,
+          tagDict: db.tagDict
+        });
+      } catch (e) {
+        return json({ success: false, error: e.message }, 500);
+      }
+    }
+
+    if (pathname === '/api/tags/sync-dict' && request.method === 'POST') {
+      if (!isAuth()) return json({ error: 'Unauthorized' }, 401);
+      try {
+        const body = await request.json().catch(() => ({}));
+        const newEntries = body.newEntries || body.updates;
+        if (newEntries && typeof newEntries === 'object') {
+          const db = await getDb(env);
+          const changed = mergeTagDict(db, newEntries);
+          if (changed) await saveDb(env, db);
+          return json({ success: true, tagDict: db.tagDict });
+        }
+        return json({ success: false, error: 'Invalid newEntries object' }, 400);
+      } catch (e) {
+        return json({ success: false, error: e.message }, 500);
+      }
+    }
+
+    if (pathname === '/api/tags/reset-dict' && request.method === 'POST') {
+      if (!isAuth()) return json({ error: 'Unauthorized' }, 401);
+      try {
+        const db = await getDb(env);
+        const currentDict = db.tagDict || {};
+        const cleanedDict = Object.assign({}, BASE_TAG_DICT);
+        let removedCount = 0;
+        let preservedCount = 0;
+
+        for (const [key, val] of Object.entries(currentDict)) {
+          if (BASE_TAG_DICT[key]) continue;
+
+          const isJapanese = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(key);
+          if (!isJapanese) {
+            cleanedDict[key] = val;
+            preservedCount++;
+            continue;
+          }
+
+          if (val && typeof val === 'object') {
+            let romaji = (val.romaji || '').trim();
+            const english = (val.english || '').trim();
+            if (romaji) romaji = normalizeCVRomaji(key, romaji);
+            const validRomaji = romaji && /[a-zA-Z]/.test(romaji) && romaji !== key;
+            const validEnglish = english && /[a-zA-Z]/.test(english) && english !== key;
+
+            if (val.isCV ? validRomaji : (validRomaji && validEnglish)) {
+              cleanedDict[key] = {
+                romaji: romaji,
+                english: val.isCV ? (validEnglish ? english : romaji) : english,
+                isCV: !!val.isCV
+              };
+              preservedCount++;
+              continue;
+            }
+          }
+          removedCount++;
+        }
+
+        db.tagDict = cleanedDict;
+        await saveDb(env, db);
+        return json({ success: true, removedCount, preservedCount, tagDict: db.tagDict });
+      } catch (e) {
+        return json({ success: false, error: e.message }, 500);
+      }
     }
 
     // Backup Export & Import APIs
@@ -1733,6 +2386,274 @@ const INDEX_HTML = `<!DOCTYPE html>
     .search-box input { width: 100%; background: var(--bg-card); border: 1px solid var(--border); padding: 10px 16px 10px 42px; border-radius: 10px; color: #fff; font-size: 0.9rem; outline: none; transition: 0.2s; }
     .search-box input:focus { border-color: var(--accent); box-shadow: 0 0 12px rgba(255,51,102,0.25); }
     .search-box span { position: absolute; left: 14px; color: var(--text-muted); font-size: 0.95rem; }
+    .tag-suggestions-dropdown {
+      display: none;
+      position: absolute;
+      top: 100%;
+      left: 0;
+      right: 0;
+      margin-top: 6px;
+      background: rgba(18, 20, 29, 0.96);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 51, 102, 0.35);
+      border-radius: 12px;
+      box-shadow: 0 14px 36px rgba(0, 0, 0, 0.7);
+      z-index: 1000;
+      max-height: 280px;
+      overflow-y: auto;
+    }
+    .tag-suggestion-item {
+      padding: 9px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      cursor: pointer;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      transition: background 0.15s;
+      font-size: 0.84rem;
+    }
+    .tag-suggestion-item:last-child { border-bottom: none; }
+    .tag-suggestion-item:hover, .tag-suggestion-item.active { background: rgba(255, 51, 102, 0.2); }
+    .suggestion-title { color: #fff; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .suggestion-count { font-size: 0.72rem; color: var(--accent); background: rgba(255, 51, 102, 0.14); padding: 2px 7px; border-radius: 6px; white-space: nowrap; font-weight: 700; }
+
+    /* Zen Browser Style Command/Tag Search Modal */
+    .zen-search-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(8, 10, 18, 0.78);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      z-index: 99999;
+      align-items: flex-start;
+      justify-content: center;
+      padding: 8vh 16px 20px;
+      animation: zenFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    @keyframes zenFadeIn {
+      from { opacity: 0; transform: translateY(-8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .zen-search-card {
+      width: 100%;
+      max-width: 680px;
+      background: rgba(18, 22, 36, 0.96);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 16px;
+      box-shadow: 0 30px 90px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.05), 0 0 30px rgba(124, 92, 252, 0.15);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      max-height: 80vh;
+    }
+    .zen-search-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 16px 20px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.02);
+    }
+    .zen-search-icon {
+      font-size: 1.25rem;
+      opacity: 0.85;
+    }
+    .zen-search-input {
+      flex: 1;
+      background: transparent;
+      border: none;
+      outline: none;
+      color: #fff;
+      font-size: 1.05rem;
+      font-weight: 500;
+      font-family: inherit;
+    }
+    .zen-search-input::placeholder {
+      color: rgba(255, 255, 255, 0.38);
+      font-size: 0.95rem;
+    }
+    .zen-search-commit-btn {
+      background: linear-gradient(135deg, #38bdf8, #818cf8);
+      color: #0f172a;
+      font-weight: 700;
+      font-size: 0.8rem;
+      padding: 6px 14px;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      margin-right: 6px;
+      white-space: nowrap;
+      transition: all 0.15s ease;
+      box-shadow: 0 2px 8px rgba(56, 189, 248, 0.25);
+    }
+    .zen-search-commit-btn:hover {
+      filter: brightness(1.1);
+      transform: translateY(-1px);
+      box-shadow: 0 4px 14px rgba(56, 189, 248, 0.4);
+    }
+    .zen-close-btn {
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: #94a3b8;
+      border-radius: 8px;
+      width: 32px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 0.9rem;
+      transition: 0.15s;
+    }
+    .zen-close-btn:hover {
+      background: rgba(255, 255, 255, 0.15);
+      color: #fff;
+    }
+    .zen-chips-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      padding: 10px 20px;
+      background: rgba(0, 0, 0, 0.35);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    .zen-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(124, 92, 252, 0.22);
+      border: 1px solid rgba(124, 92, 252, 0.45);
+      color: #ddd6fe;
+      font-size: 0.82rem;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 20px;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+    }
+    .zen-chip-remove {
+      cursor: pointer;
+      font-size: 0.85rem;
+      color: #a78bfa;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      width: 16px;
+      height: 16px;
+      transition: 0.15s;
+    }
+    .zen-chip-remove:hover {
+      background: rgba(239, 68, 68, 0.3);
+      color: #fca5a5;
+    }
+    .zen-clear-btn {
+      background: none;
+      border: none;
+      color: #f87171;
+      font-size: 0.78rem;
+      cursor: pointer;
+      margin-left: auto;
+      padding: 2px 6px;
+      border-radius: 4px;
+      transition: 0.15s;
+    }
+    .zen-clear-btn:hover {
+      text-decoration: underline;
+    }
+    .zen-results-container {
+      overflow-y: auto;
+      padding: 10px 14px;
+      flex: 1;
+      max-height: 440px;
+    }
+    .zen-category-title {
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #94a3b8;
+      font-weight: 700;
+      margin: 10px 8px 6px;
+    }
+    .zen-result-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 11px 16px;
+      border-radius: 10px;
+      margin-bottom: 4px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      border: 1px solid transparent;
+      background: rgba(255, 255, 255, 0.02);
+    }
+    .zen-result-item:hover, .zen-result-item.selected {
+      background: rgba(124, 92, 252, 0.18);
+      border-color: rgba(124, 92, 252, 0.45);
+      transform: translateX(2px);
+    }
+    .zen-tag-info {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+      flex: 1;
+      min-width: 0;
+    }
+    .zen-tag-orig {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: #fff;
+    }
+    .zen-tag-romaji {
+      font-size: 0.85rem;
+      color: #c084fc;
+      font-weight: 500;
+    }
+    .zen-tag-eng {
+      font-size: 0.85rem;
+      color: #94a3b8;
+    }
+    .zen-tag-sep {
+      color: rgba(255, 255, 255, 0.2);
+      font-size: 0.75rem;
+    }
+    .zen-tag-badge {
+      font-size: 0.75rem;
+      background: rgba(255, 255, 255, 0.08);
+      color: #cbd5e1;
+      padding: 3px 8px;
+      border-radius: 12px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .zen-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 20px;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      font-size: 0.76rem;
+      color: #64748b;
+      background: rgba(0, 0, 0, 0.3);
+    }
+    .zen-shortcut-badge {
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      padding: 2px 6px;
+      border-radius: 4px;
+      color: #cbd5e1;
+      font-family: inherit;
+      font-size: 0.72rem;
+      font-weight: 600;
+    }
     .top-actions { display: flex; gap: 10px; }
     .btn-primary { background: var(--accent); color: #fff; border: none; padding: 9px 16px; border-radius: 10px; font-weight: 700; font-size: 0.88rem; cursor: pointer; transition: 0.15s; display: inline-flex; align-items: center; gap: 6px; }
     .btn-primary:hover { background: var(--accent-hover); box-shadow: 0 0 12px var(--accent-glow); }
@@ -2050,6 +2971,7 @@ const INDEX_HTML = `<!DOCTYPE html>
       }
 
       #playerBarChapterBtnMobile { display: inline-flex; }
+      #playerBarChapterBtn { display: none; }
       .app-sidebar { display: none; }
       .mobile-topbar { display: flex; }
       .mobile-nav-pills { display: flex; }
@@ -2683,8 +3605,13 @@ const INDEX_HTML = `<!DOCTYPE html>
       
       <div style="color: #d1d5db; font-size: 0.9rem; line-height: 1.6; display: flex; flex-direction: column; gap: 14px;">
         <div style="background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.2); padding: 14px; border-radius: 10px;">
-          <h4 style="color: #38bdf8; font-weight: 700; margin-bottom: 4px;">🏷️ Self-Learning Bilingual Tag Dictionary</h4>
-          <p style="color: var(--text-muted); font-size: 0.85rem;">JapaneseASMR-style dynamic tag formatting (e.g. <code>耳かき (Ear Cleaning)</code>). Automatically extracts and learns translations from ASMR.one into Cloudflare KV with diff protection. Enables full English and Japanese keyword searching.</p>
+          <h4 style="color: #38bdf8; font-weight: 700; margin-bottom: 4px;">🏷️ Zen Tag & CV Command Search</h4>
+          <p style="color: var(--text-muted); font-size: 0.85rem;">Floating tag & Voice Actor autocompleter with live Japanese/Romaji/English translations, multi-tag filter combination (<code>+</code>), keyboard navigation (<code>↑</code>/<code>↓</code>/<code>↵</code>), and clean <code>Esc</code> key dismiss.</p>
+        </div>
+
+        <div style="background: rgba(168, 85, 247, 0.08); border: 1px solid rgba(168, 85, 247, 0.2); padding: 14px; border-radius: 10px;">
+          <h4 style="color: #c084fc; font-weight: 700; margin-bottom: 4px;">🎧 Intelligent Multi-Track & Chapter Tree Engine</h4>
+          <p style="color: var(--text-muted); font-size: 0.85rem;">Advanced hierarchy parser automatically separates master session audio tracks from bonus files/alt versions, guaranteeing accurate track counts and chapter markers without timestamps exceeding track durations.</p>
         </div>
 
         <div style="background: rgba(255, 51, 102, 0.08); border: 1px solid rgba(255, 51, 102, 0.2); padding: 14px; border-radius: 10px;">
@@ -2693,13 +3620,13 @@ const INDEX_HTML = `<!DOCTYPE html>
         </div>
 
         <div style="background: rgba(34, 197, 94, 0.08); border: 1px solid rgba(34, 197, 94, 0.2); padding: 14px; border-radius: 10px;">
-          <h4 style="color: #22c55e; font-weight: 700; margin-bottom: 4px;">📱 Mobile UI Overhaul (Compact 2-Row Cards)</h4>
-          <p style="color: var(--text-muted); font-size: 0.85rem;">Re-architected Chapter Lists, Audio Tracks, Playlist Views, Library List View, and Playback History into consistent ~58px tall responsive mobile cards, eliminating ugly table wrapping.</p>
+          <h4 style="color: #22c55e; font-weight: 700; margin-bottom: 4px;">📱 Mobile UI Overhaul (Compact 2-Row Cards & Player Bar)</h4>
+          <p style="color: var(--text-muted); font-size: 0.85rem;">Re-architected Chapter Lists, Audio Tracks, Playlists, and History into consistent ~58px responsive mobile cards, paired with a dedicated 3-row thumb-friendly docked bottom player.</p>
         </div>
 
         <div style="background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border); padding: 14px; border-radius: 10px;">
-          <h4 style="color: #fff; font-weight: 700; margin-bottom: 4px;">🔔 Floating Toast Notifications & UI Polish</h4>
-          <p style="color: var(--text-muted); font-size: 0.85rem;">Replaced browser alerts with clean YouTube-style floating bottom toasts for playlist additions and metadata refreshes.</p>
+          <h4 style="color: #fff; font-weight: 700; margin-bottom: 4px;">🛡️ Privacy SFW Mode & Playlist Management</h4>
+          <p style="color: var(--text-muted); font-size: 0.85rem;">One-tap track additions with floating toast feedback, non-interrupting playback navigation, and 3 privacy levels including <code>🎭 PSFW</code> disguise covers.</p>
         </div>
       </div>
 
@@ -2767,6 +3694,55 @@ const INDEX_HTML = `<!DOCTYPE html>
       <div style="display: flex; gap: 10px; justify-content: flex-end;">
         <button class="btn-outline" onclick="closePlaylistModal()">Cancel</button>
         <button class="btn-primary" onclick="submitCreatePlaylist()">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tag Translation Progress Modal -->
+  <div id="tagTranslationProgressModal" class="modal-overlay" style="z-index: 10050;">
+    <div class="modal-content" style="max-width: 560px; width: 92vw; background: #0f172a; border: 1px solid rgba(167, 139, 250, 0.3); box-shadow: 0 20px 50px rgba(0,0,0,0.85); border-radius: 12px; padding: 20px;">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <div style="font-size: 1.6rem;">🌐</div>
+          <div>
+            <h3 class="modal-title" style="margin: 0; font-size: 1.15rem; color: #fff;">AI Tag &amp; Voice Actor Translation</h3>
+            <div id="transModalSubtitle" style="font-size: 0.8rem; color: #94a3b8; margin-top: 2px;">DeepSeek AI Batch Processor (Max 150/batch)</div>
+          </div>
+        </div>
+        <button id="transModalCloseBtn" class="btn-outline" style="padding: 4px 10px; display: none;" onclick="closeTransProgressModal()">✖</button>
+      </div>
+
+      <!-- Progress Bar Area -->
+      <div style="margin-bottom: 14px;">
+        <div style="display: flex; justify-content: space-between; font-size: 0.82rem; margin-bottom: 6px;">
+          <span id="transProgressStage" style="font-weight: 600; color: #38bdf8;">Preparing translation...</span>
+          <span id="transProgressPercent" style="font-weight: 700; color: #a78bfa;">0%</span>
+        </div>
+        <div style="width: 100%; height: 8px; background: #1e293b; border-radius: 999px; overflow: hidden; position: relative;">
+          <div id="transProgressBar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #38bdf8, #818cf8, #c084fc); transition: width 0.3s ease; border-radius: 999px;"></div>
+        </div>
+      </div>
+
+      <!-- Live Terminal / Log Box -->
+      <div id="transLogBox" style="background: #090d16; border: 1px solid #1e293b; border-radius: 8px; padding: 12px; height: 160px; overflow-y: auto; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 0.78rem; line-height: 1.45; color: #cbd5e1; margin-bottom: 14px;">
+      </div>
+
+      <!-- Failsafe Action Bar (when a batch encounters an issue) -->
+      <div id="transFailedBar" style="display: none; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 8px; padding: 12px; margin-bottom: 14px;">
+        <div style="color: #fca5a5; font-size: 0.82rem; font-weight: 600; margin-bottom: 8px;">⚠️ Batch paused on error: <span id="transFailedReason" style="font-weight: 400; color: #cbd5e1;"></span></div>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+          <button class="btn-primary" style="padding: 6px 12px; font-size: 0.8rem;" onclick="handleTransAction('retry')">🔄 Retry Batch</button>
+          <button class="btn-outline" style="padding: 6px 12px; font-size: 0.8rem;" onclick="handleTransAction('skip')">⏭️ Skip &amp; Continue</button>
+          <button class="btn-outline" style="padding: 6px 12px; font-size: 0.8rem; border-color: #38bdf8; color: #38bdf8;" onclick="downloadFailedResponse()">📥 Download Raw Error / Response</button>
+        </div>
+      </div>
+
+      <!-- Footer / Action Area -->
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span id="transStatsText" style="font-size: 0.8rem; color: #64748b;">Ready</span>
+        <div style="display: flex; gap: 8px;">
+          <button id="transModalDoneBtn" class="btn-primary" style="display: none; padding: 8px 18px; font-size: 0.85rem;" onclick="closeTransProgressModal()">Done</button>
+        </div>
       </div>
     </div>
   </div>
@@ -2860,14 +3836,19 @@ const INDEX_HTML = `<!DOCTYPE html>
       <div class="logo-icon">🐧</div>
       <div>
         <div class="logo-title">aStreamer</div>
-        <span style="font-size: 0.65rem; color: #38bdf8; font-weight: 700; background: rgba(56,189,248,0.15); padding: 1px 6px; border-radius: 4px; border: 1px solid rgba(56,189,248,0.3);">v1.1 Official</span>
+        <span style="font-size: 0.65rem; color: #38bdf8; font-weight: 700; background: rgba(56,189,248,0.15); padding: 1px 6px; border-radius: 4px; border: 1px solid rgba(56,189,248,0.3);">v1.5 Official</span>
       </div>
     </div>
 
-    <!-- Sidebar Search -->
-    <div class="search-box" style="margin-bottom: 12px; width: 100%; max-width: 100%;">
+    <!-- Sidebar Dual Search Bars -->
+    <div class="search-box" style="margin-bottom: 8px; width: 100%; max-width: 100%;">
       <span>🔍</span>
-      <input type="text" id="globalSearch" placeholder="Search library..." oninput="handleSearch(this.value)">
+      <input type="text" id="globalSearch" placeholder="Search title, RJ, circle..." oninput="handleTitleSearch(this.value)">
+    </div>
+    <div class="search-box" style="margin-bottom: 14px; width: 100%; max-width: 100%;" onclick="openZenTagSearch()" title="Open Tag Search">
+      <span>🏷️</span>
+      <input type="text" id="globalTagSearch" placeholder="Search tags + CV..." onfocus="openZenTagSearch(this.value)" onclick="openZenTagSearch(this.value)" readonly style="cursor: pointer;">
+      <div id="tagSuggestionsDropdown" class="tag-suggestions-dropdown"></div>
     </div>
 
     <!-- Sidebar Quick Add -->
@@ -2896,7 +3877,15 @@ const INDEX_HTML = `<!DOCTYPE html>
   <!-- Main View Area -->
   <main class="app-main">
     <div class="mobile-search-bar">
-      <div class="search-box" style="width: 100%; max-width: 100%;"><span>🔍</span><input type="text" id="mobileSearchInput" placeholder="Search title, RJ code, CV..." oninput="handleSearch(this.value)"></div>
+      <div class="search-box" style="width: 100%; max-width: 100%; margin-bottom: 8px;">
+        <span>🔍</span>
+        <input type="text" id="mobileSearchInput" placeholder="Search title, RJ code, circle..." oninput="handleTitleSearch(this.value)">
+      </div>
+      <div class="search-box" style="width: 100%; max-width: 100%;" onclick="openZenTagSearch()" title="Open Tag Search">
+        <span>🏷️</span>
+        <input type="text" id="mobileTagSearchInput" placeholder="Search tags + CV..." onfocus="openZenTagSearch(this.value)" onclick="openZenTagSearch(this.value)" readonly style="cursor: pointer;">
+        <div id="mobileTagSuggestionsDropdown" class="tag-suggestions-dropdown"></div>
+      </div>
     </div>
     <div id="viewContainer" class="view-container"></div>
   </main>
@@ -2934,6 +3923,41 @@ const INDEX_HTML = `<!DOCTYPE html>
     </div>
   </footer>
 
+  <!-- Zen Browser Style Floating Tag Search Modal -->
+  <div id="zenTagSearchModal" class="zen-search-overlay" onclick="handleZenOverlayClick(event)">
+    <div class="zen-search-card" onclick="event.stopPropagation()">
+      <div class="zen-search-header">
+        <span class="zen-search-icon">🏷️</span>
+        <input type="text" id="zenTagSearchInput" class="zen-search-input" placeholder="Search tags + CV (e.g. ear cleaning, whisper, CV name)..." oninput="handleZenTagInput(this.value)" onkeydown="handleZenTagKeydown(event)" autocomplete="off">
+        <button class="zen-search-commit-btn" onclick="applyZenTagSearch()" title="Apply search and filter library (Enter)">↵ Search</button>
+        <button class="zen-close-btn" onclick="closeZenTagSearch(true)" title="Cancel / Close without searching (Esc)">✕</button>
+      </div>
+
+      <!-- Active Tag Filter Pills Bar -->
+      <div id="zenChipsBar" class="zen-chips-bar" style="display: none;">
+        <span style="font-size: 0.76rem; color: #94a3b8; margin-right: 4px; display: inline-flex; align-items: center;">Active filters:</span>
+        <div id="zenChipsList" style="display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center;"></div>
+        <button class="zen-clear-btn" onclick="clearAllZenTags()">Clear all</button>
+      </div>
+
+      <!-- Results Body -->
+      <div id="zenResultsContainer" class="zen-results-container">
+        <!-- Live Tag Suggestions render here -->
+      </div>
+
+      <!-- Zen Modal Footer Hints -->
+      <div class="zen-footer">
+        <div style="display: flex; gap: 14px; align-items: center; flex-wrap: wrap;">
+          <span><kbd class="zen-shortcut-badge">↑</kbd> <kbd class="zen-shortcut-badge">↓</kbd> navigate</span>
+          <span><kbd class="zen-shortcut-badge">↵</kbd> select / add</span>
+          <span><kbd class="zen-shortcut-badge">Esc</kbd> close</span>
+          <span><kbd class="zen-shortcut-badge">+</kbd> combine tags</span>
+        </div>
+        <div id="zenResultsCountBadge" style="color: #a78bfa; font-weight: 600; font-size: 0.78rem;"></div>
+      </div>
+    </div>
+  </div>
+
   <audio id="coreAudio" preload="metadata"></audio>
 
   <script>
@@ -2941,14 +3965,298 @@ const INDEX_HTML = `<!DOCTYPE html>
     window.BASE_TAG_DICT = CLIENT_BASE_TAG_DICT;
     window.tagDict = Object.assign({}, CLIENT_BASE_TAG_DICT);
 
-    function formatTag(t) {
-      if (!t) return '';
-      const dict = window.tagDict || window.BASE_TAG_DICT || {};
-      const en = dict[t];
-      if (en && en !== t) {
-        return t + ' (' + en + ')';
+    function cleanCVName(raw) {
+      if (!raw || typeof raw !== 'string') return '';
+      let str = raw.trim();
+      str = str.replace(/^(?:【|\\(|（|\\[)?\\s*(?:CV|声優|ボイス|キャスト)[.:：\\s]*/i, '');
+      str = str.replace(/(?:】|\\)|）|\\])\\s*$/i, '');
+      str = str.replace(/(?:様|さん|氏|他)$/, '').trim();
+      return str;
+    }
+
+    function normalizeCVRomaji(ja, romaji) {
+      if (!romaji || typeof romaji !== 'string') return romaji || '';
+      let str = romaji.trim();
+      if (!str) return '';
+
+      const parenMatch = str.match(/^([^(\\uFF08]+)[(\\uFF08](.+)[)\\uFF09]$/);
+      if (parenMatch) {
+        const jaParen = (ja && typeof ja === 'string') ? ja.match(/^([^(\\uFF08]+)[(\\uFF08](.+)[)\\uFF09]$/) : null;
+        if (jaParen) {
+          return normalizeCVRomaji(jaParen[1].trim(), parenMatch[1].trim()) + ' (' +
+                 normalizeCVRomaji(jaParen[2].trim(), parenMatch[2].trim()) + ')';
+        }
+        return normalizeCVRomaji('', parenMatch[1].trim()) + ' (' + normalizeCVRomaji('', parenMatch[2].trim()) + ')';
       }
-      return t;
+
+      const words = str.split(/\\s+/).filter(Boolean);
+      if (words.length === 0) return '';
+
+      if (words.length === 1) {
+        return words[0].charAt(0).toUpperCase() + words[0].slice(1);
+      }
+
+      if (words.length === 2) {
+        const w0 = words[0].charAt(0).toUpperCase() + words[0].slice(1).toLowerCase();
+        const w1 = words[1].charAt(0).toUpperCase() + words[1].slice(1).toLowerCase();
+        return w0 + ' ' + w1;
+      }
+
+      if (words.some(function(w) { return w.toLowerCase() === 'no'; }) && ja && /[ノ之の]/.test(ja)) {
+        return words.map(function(w) {
+          if (w.toLowerCase() === 'no') return 'no';
+          return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+        }).join(' ');
+      }
+
+      const capitalizedWords = words.map(function(w) { return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase(); });
+
+      if (words.length === 4) {
+        const surname = capitalizedWords[0] + capitalizedWords[1].toLowerCase();
+        const given = capitalizedWords[2] + capitalizedWords[3].toLowerCase();
+        return surname + ' ' + given;
+      }
+
+      if (words.length === 3) {
+        if (ja && typeof ja === 'string') {
+          const matchKanjiKana = ja.match(/^([\\u4E00-\\u9FFF]+)([\\u3040-\\u309F\\u30A0-\\u30FF]+)$/);
+          if (matchKanjiKana && matchKanjiKana[1].length >= 2) {
+            return capitalizedWords[0] + capitalizedWords[1].toLowerCase() + ' ' + capitalizedWords[2];
+          }
+          const matchKanjiMixed = ja.match(/^([\\u4E00-\\u9FFF]{2,})([\\u3040-\\u309F\\u30A0-\\u30FF]+[\\u4E00-\\u9FFF]*)$/);
+          if (matchKanjiMixed) {
+            return capitalizedWords[0] + ' ' + capitalizedWords[1] + capitalizedWords[2].toLowerCase();
+          }
+          if (/^[\\u4E00-\\u9FFF]{4}$/.test(ja)) {
+            return capitalizedWords[0] + capitalizedWords[1].toLowerCase() + ' ' + capitalizedWords[2];
+          }
+        }
+
+        const surnameSuffixes = /^(ne|mine|saka|zaka|ta|da|kawa|gawa|hara|bara|shima|jima|mori|saki|zaki|no|ki|gi|mizu|tsuka|zuka|ba|ha|ya|tani|yama|kura|miya|hashi|bashi|fuji|se|ko|to|no)$/i;
+        if (surnameSuffixes.test(words[1])) {
+          return capitalizedWords[0] + capitalizedWords[1].toLowerCase() + ' ' + capitalizedWords[2];
+        }
+
+        return capitalizedWords[0] + capitalizedWords[1].toLowerCase() + ' ' + capitalizedWords[2];
+      }
+
+      return capitalizedWords.join(' ');
+    }
+
+    function getWorkCV(work) {
+      if (!work) return '';
+      let cv = (work.cv || '').trim();
+      if (cv && cv !== 'N/A') return cv;
+
+      const title = (work.title || '');
+      if (!title) return '';
+
+      const match = title.match(/(?:【|\\(|（|\\[)\\s*(?:CV|声優|ボイス|キャスト)[.:：\\s]*([^】)）\\]]+)(?:】|\\)|）|\\])/i);
+      if (match && match[1]) {
+        const rawCv = match[1].trim();
+        const firstPart = rawCv.split(/[/,、/]/)[0].trim();
+        if (firstPart && firstPart.length >= 2 && !['DLsite', '同人', 'ASMR', 'R18'].includes(firstPart)) {
+          return firstPart;
+        }
+      }
+      return '';
+    }
+
+    function getTagEntry(key) {
+      if (!key) return null;
+      const clean = String(key).trim();
+      const baseDict = window.BASE_TAG_DICT || CLIENT_BASE_TAG_DICT || {};
+      const userDict = window.tagDict || {};
+
+      // Priority 1: Base dictionary has standardized high quality { romaji, english }
+      if (baseDict[clean]) {
+        const b = baseDict[clean];
+        if (typeof b === 'object' && (b.romaji || b.english)) {
+          const r = normalizeCVRomaji(clean, b.romaji || b.english || '');
+          return { romaji: r, english: b.english || '', isCV: !!b.isCV };
+        }
+        if (typeof b === 'string') {
+          const r = normalizeCVRomaji(clean, b);
+          return { romaji: r, english: b, isCV: true };
+        }
+      }
+
+      let entry = userDict[clean];
+      if (typeof entry === 'string') {
+        const r = normalizeCVRomaji(clean, entry);
+        return { romaji: r, english: entry, isCV: true };
+      }
+      if (!entry && baseDict[clean]) {
+        entry = baseDict[clean];
+      }
+      if (entry && typeof entry === 'object') {
+        let romaji = (entry.romaji || entry.english || '').trim();
+        let english = (entry.english || entry.romaji || '').trim();
+        if (romaji) romaji = normalizeCVRomaji(clean, romaji);
+        return {
+          romaji: (romaji !== clean) ? romaji : '',
+          english: (english !== clean) ? english : '',
+          isCV: !!entry.isCV
+        };
+      }
+      return null;
+    }
+
+    function formatTag(t) {
+      if (!t || typeof t !== 'string') return '';
+      const raw = t.trim();
+      if (!raw) return '';
+
+      let jaName = raw;
+      let existingRomaji = '';
+      if (raw.includes('|')) {
+        const pipeIdx = raw.indexOf('|');
+        jaName = raw.slice(0, pipeIdx).trim();
+        existingRomaji = raw.slice(pipeIdx + 1).trim();
+      }
+
+      const entry = getTagEntry(jaName);
+      if (!entry && !existingRomaji) return raw;
+
+      if (entry && entry.isCV) {
+        let romaji = entry.romaji || existingRomaji;
+        if (romaji) romaji = normalizeCVRomaji(jaName, romaji);
+        return (romaji && /[a-zA-Z]/.test(romaji) && romaji !== jaName)
+          ? jaName + ' | ' + romaji
+          : jaName;
+      }
+
+      if (entry) {
+        const parts = [jaName];
+        let romaji = entry.romaji || '';
+        let english = entry.english || '';
+        if (romaji && /[a-zA-Z]/.test(romaji) && romaji.toLowerCase() !== jaName.toLowerCase()) {
+          parts.push(romaji);
+        }
+        if (english && /[a-zA-Z]/.test(english) && english.toLowerCase() !== jaName.toLowerCase() && english.toLowerCase() !== romaji.toLowerCase()) {
+          parts.push(english);
+        }
+        return parts.join(' | ');
+      }
+
+      if (existingRomaji) {
+        const norm = normalizeCVRomaji(jaName, existingRomaji);
+        return jaName + ' | ' + norm;
+      }
+
+      return raw;
+    }
+
+    function formatCV(cv) {
+      if (!cv || typeof cv !== 'string' || cv === 'N/A') return '';
+      const parts = cv.split(/[,、/&＋+;・\\n|]/).map(function(p) { return p.trim(); }).filter(Boolean);
+      if (parts.length === 0) return '';
+
+      const results = [];
+
+      for (let i = 0; i < parts.length; i++) {
+        let raw = cleanCVName(parts[i]);
+        if (!raw || raw === 'N/A') continue;
+
+        let jaName = raw;
+        let existingRomaji = '';
+
+        const bracketMatch = raw.match(/【([^】]+)】|（([^）]+)）|\\(([^)]+)\\)|\\[([^\\]]+)\\]/);
+        if (bracketMatch) {
+          const inside = (bracketMatch[1] || bracketMatch[2] || bracketMatch[3] || bracketMatch[4] || '').trim();
+          const outside = raw.replace(bracketMatch[0], '').trim();
+          const isInsideJa = /[\\u3040-\\u309F\\u30A0-\\u30FF\\u4E00-\\u9FAF]/.test(inside);
+          const isOutsideJa = /[\\u3040-\\u309F\\u30A0-\\u30FF\\u4E00-\\u9FAF]/.test(outside);
+
+          if (isInsideJa && !isOutsideJa && outside) {
+            jaName = inside;
+            existingRomaji = outside;
+          } else if (isOutsideJa && !isInsideJa && inside) {
+            jaName = outside;
+            existingRomaji = inside;
+          } else if (isInsideJa) {
+            jaName = inside;
+          }
+        }
+
+        const entry = getTagEntry(jaName);
+        let romaji = (entry && (entry.romaji || entry.english)) ? (entry.romaji || entry.english) : existingRomaji;
+        if (romaji) {
+          romaji = normalizeCVRomaji(jaName, romaji);
+        }
+
+        if (romaji && /[a-zA-Z]/.test(romaji) && romaji.toLowerCase() !== jaName.toLowerCase()) {
+          results.push(jaName + ' | ' + romaji);
+        } else {
+          results.push(jaName);
+        }
+      }
+
+      return Array.from(new Set(results)).join(', ');
+    }
+
+    function resolveTagPass2Client(rawTag) {
+      if (!rawTag || typeof rawTag !== 'string') return null;
+      const tag = rawTag.trim();
+      if (!tag) return null;
+
+      const direct = getTagEntry(tag);
+      if (direct && ((direct.romaji && /[a-zA-Z]/.test(direct.romaji)) || (direct.english && /[a-zA-Z]/.test(direct.english)))) {
+        return { original: tag, romaji: direct.romaji, english: direct.english, isCV: direct.isCV };
+      }
+
+      if (tag.includes('/') || tag.includes('、') || tag.includes('+')) {
+        const parts = tag.split(/[/、+]/).map(p => p.trim()).filter(Boolean);
+        const resolved = parts.map(p => resolveTagPass2Client(p));
+        if (resolved.every(r => r && ((r.romaji && /[a-zA-Z]/.test(r.romaji)) || (r.english && /[a-zA-Z]/.test(r.english))))) {
+          return {
+            original: tag,
+            romaji: resolved.map(r => r.romaji || r.original).join(' / '),
+            english: resolved.map(r => r.english || r.romaji || r.original).join(' / ')
+          };
+        }
+      }
+
+      const baseDict = window.BASE_TAG_DICT || CLIENT_BASE_TAG_DICT || {};
+      const userDict = window.tagDict || {};
+      const allDict = Object.assign({}, baseDict, userDict);
+      const matchedTokens = [];
+      let remaining = tag;
+      const keysByLength = Object.keys(allDict).filter(k => {
+        const e = getTagEntry(k);
+        return e && ((e.romaji && /[a-zA-Z]/.test(e.romaji)) || (e.english && /[a-zA-Z]/.test(e.english)));
+      }).sort((a, b) => b.length - a.length);
+
+      while (remaining.length > 0) {
+        let matched = false;
+        for (const key of keysByLength) {
+          if (remaining.startsWith(key)) {
+            const e = getTagEntry(key);
+            if (e && (e.romaji || e.english)) {
+              matchedTokens.push({ term: key, romaji: e.romaji || key, english: e.english || e.romaji || key });
+              remaining = remaining.slice(key.length);
+              matched = true;
+              break;
+            }
+          }
+        }
+        if (!matched) remaining = remaining.slice(1);
+      }
+
+      if (matchedTokens.length >= 2) {
+        return {
+          original: tag,
+          romaji: matchedTokens.map(t => t.romaji).join(' '),
+          english: matchedTokens.map(t => t.english).join(' + ')
+        };
+      } else if (matchedTokens.length === 1 && tag.length <= matchedTokens[0].term.length + 3) {
+        return {
+          original: tag,
+          romaji: matchedTokens[0].romaji,
+          english: matchedTokens[0].english
+        };
+      }
+      return null;
     }
 
     async function syncTagDictionary() {
@@ -3500,12 +4808,44 @@ const INDEX_HTML = `<!DOCTYPE html>
       switchView('work-detail', rj);
       window.scrollTo({ top: 0, behavior: 'instant' });
     };
-    window.navGenre = function(tag) { savedScrollPositions['library'] = 0; shuffledLibraryWorks = null; switchView('library', { tag: tag }, true, 1); };
-    window.navCv = function(cv) { savedScrollPositions['library'] = 0; shuffledLibraryWorks = null; switchView('library', { cv: cv }, true, 1); };
+    window.navGenre = function(tag) {
+      savedScrollPositions['library'] = 0;
+      shuffledLibraryWorks = null;
+      currentTagQuery = tag;
+      const s = document.getElementById('globalTagSearch');
+      const m = document.getElementById('mobileTagSearchInput');
+      if (s) s.value = tag;
+      if (m) m.value = tag;
+      switchView('library', { tag: tag }, true, 1);
+    };
+    window.navCv = function(cv) {
+      savedScrollPositions['library'] = 0;
+      shuffledLibraryWorks = null;
+      currentTitleQuery = cv;
+      const s = document.getElementById('globalSearch');
+      const m = document.getElementById('mobileSearchInput');
+      if (s) s.value = cv;
+      if (m) m.value = cv;
+      switchView('library', { cv: cv }, true, 1);
+    };
     window.navCircle = function(circle) { savedScrollPositions['library'] = 0; shuffledLibraryWorks = null; switchView('library', { circle: circle }, true, 1); };
     window.navPlaylist = function(id) { switchView('playlist-detail', id); };
     window.navFavs = function() { savedScrollPositions['library'] = 0; shuffledLibraryWorks = null; switchView('library', { favorite: 'true' }, true, 1); };
-    window.navAll = function() { savedScrollPositions['library'] = 0; shuffledLibraryWorks = null; switchView('library', {}, true, 1); };
+    window.navAll = function() {
+      savedScrollPositions['library'] = 0;
+      shuffledLibraryWorks = null;
+      currentTitleQuery = '';
+      currentTagQuery = '';
+      const s1 = document.getElementById('globalSearch');
+      const s2 = document.getElementById('globalTagSearch');
+      const m1 = document.getElementById('mobileSearchInput');
+      const m2 = document.getElementById('mobileTagSearchInput');
+      if (s1) s1.value = '';
+      if (s2) s2.value = '';
+      if (m1) m1.value = '';
+      if (m2) m2.value = '';
+      switchView('library', {}, true, 1);
+    };
     window.navBack = function() {
       if (window.history.length > 1) {
         window.history.back();
@@ -3620,7 +4960,8 @@ const INDEX_HTML = `<!DOCTYPE html>
         html += '<table class="works-list-table"><thead><tr><th style="width:50px;">Cover</th><th style="width:110px;">RJ Code</th><th>Title</th><th>Voice Actor (CV)</th><th>Circle</th><th style="width:70px; text-align:center;">Tracks</th><th style="width:90px; text-align:right;">Actions</th></tr></thead><tbody>';
         paginatedWorks.forEach(function(w) {
           const display = getDisplayCover(w);
-          const metaLine = (w.cv ? '<span style="color:#38bdf8; font-weight:600;">' + w.cv + '</span>' : '') + (w.cv && w.circle ? ' • ' : '') + (w.circle ? '<span>' + w.circle + '</span>' : '') + ' • <span class="card-rj" style="padding:1px 5px; font-size:0.7rem;">' + w.rjCode + '</span>';
+          const cvDisplay = formatCV(getWorkCV(w));
+          const metaLine = (cvDisplay ? '<span style="color:#38bdf8; font-weight:600;">' + cvDisplay + '</span>' : '') + (cvDisplay && w.circle ? ' • ' : '') + (w.circle ? '<span>' + w.circle + '</span>' : '') + ' • <span class="card-rj" style="padding:1px 5px; font-size:0.7rem;">' + w.rjCode + '</span>';
           html += '<tr class="works-list-row" data-rj="' + w.rjCode + '" onclick="navWork(this.dataset.rj)">';
           html += '<td class="w-col-cover"><img class="list-thumb" src="' + display.coverUrl + '" onerror="handleImgError(this)"></td>';
           html += '<td class="w-col-rj"><span class="card-rj">' + w.rjCode + '</span></td>';
@@ -3636,11 +4977,13 @@ const INDEX_HTML = `<!DOCTYPE html>
         html += '<div class="works-grid mode-' + libraryViewMode + '">';
         paginatedWorks.forEach(function(w) {
           const display = getDisplayCover(w);
+          const cvDisplay = formatCV(getWorkCV(w));
+          const subText = cvDisplay || w.circle || 'ASMR';
           html += '<div class="work-card" data-rj="' + w.rjCode + '" onclick="navWork(this.dataset.rj)">';
           html += '<div class="card-cover-wrapper"><img class="card-cover" src="' + display.coverUrl + '">' + (display.isDisguised ? '<div class="disguised-overlay"><span class="disguised-badge">🎭 Disguised SFW</span></div>' : '') + '</div>';
           html += '<div class="card-badge-row"><span class="card-rj">' + w.rjCode + '</span><span class="card-fav card-fav-' + w.rjCode + '" data-rj="' + w.rjCode + '" title="' + (w.favorite ? 'Favorited' : 'Add to Favorites') + '" onclick="toggleFav(this.dataset.rj, event)" style="transition: transform 0.15s ease-out; display: inline-block;">' + (w.favorite ? '❤️' : '🤍') + '</span></div>';
           html += '<div class="card-title" title="' + w.title.replace(/"/g, '&quot;') + '">' + w.title + '</div>';
-          html += '<div class="card-sub">' + (w.cv || w.circle || 'ASMR') + '</div>';
+          html += '<div class="card-sub" title="' + subText.replace(/"/g, '&quot;') + '">' + subText + '</div>';
           html += '</div>';
         });
         html += '</div>';
@@ -3711,13 +5054,24 @@ const INDEX_HTML = `<!DOCTYPE html>
       updatePageTitle((work.rjCode ? work.rjCode + ' - ' : '') + (work.title || 'Work Detail'));
       const display = getDisplayCover(work);
 
-      const cvList = work.cv && work.cv !== 'N/A'
-        ? work.cv.split(/[\/,、・\s+＆&]+/).map(function(s) { return s.trim(); }).filter(Boolean)
+      const rawCv = getWorkCV(work);
+      const cvList = rawCv && rawCv !== 'N/A'
+        ? rawCv.split(/[,、/&＋+;・\\n|]/).map(function(s) { return cleanCVName(s); }).filter(Boolean)
         : [];
       
+      const cvNamesSet = new Set();
+      cvList.forEach(function(c) {
+        cvNamesSet.add(c.toLowerCase());
+        const entry = getTagEntry(c);
+        if (entry) {
+          if (entry.romaji) cvNamesSet.add(entry.romaji.toLowerCase());
+          if (entry.english) cvNamesSet.add(entry.english.toLowerCase());
+        }
+      });
+
       const cvPills = cvList.length > 0
-        ? cvList.map(function(c) {
-            return '<span class="tag-pill" style="display:inline-flex; align-items:center; gap:4px; margin-right:4px; background:rgba(56,189,248,0.15); color:#38bdf8; border:1px solid rgba(56,189,248,0.3); font-weight:700;" data-cv="' + c.replace(/"/g, '&quot;') + '" onclick="navCv(this.dataset.cv)">🎙️ ' + c + '</span>';
+        ? Array.from(new Set(cvList)).map(function(c) {
+            return '<span class="tag-pill" style="display:inline-flex; align-items:center; gap:4px; margin-right:4px; background:rgba(56,189,248,0.15); color:#38bdf8; border:1px solid rgba(56,189,248,0.3); font-weight:700;" data-cv="' + c.replace(/"/g, '&quot;') + '" onclick="navCv(this.dataset.cv)">🎙️ ' + formatCV(c) + '</span>';
           }).join('')
         : '<span style="color:var(--text-muted);">N/A</span>';
 
@@ -3725,7 +5079,16 @@ const INDEX_HTML = `<!DOCTYPE html>
         ? '<span class="tag-pill" style="display:inline-flex; align-items:center; gap:4px; background:rgba(255,255,255,0.06); border:1px solid var(--border); font-weight:700;" data-circle="' + work.circle.replace(/"/g, '&quot;') + '" onclick="navCircle(this.dataset.circle)">🏢 ' + work.circle + '</span>'
         : '<span style="color:var(--text-muted);">N/A</span>';
 
-      const tagPills = (work.tags || []).map(function(t) {
+      const filteredTags = (work.tags || []).filter(function(t) {
+        const clean = (t || '').trim();
+        if (!clean) return false;
+        if (cvNamesSet.has(clean.toLowerCase())) return false;
+        const entry = getTagEntry(clean);
+        if (entry && entry.isCV) return false;
+        return true;
+      });
+
+      const tagPills = filteredTags.map(function(t) {
         return '<span class="tag-pill" data-tag="' + t.replace(/"/g, '&quot;') + '" onclick="navGenre(this.dataset.tag)">' + formatTag(t) + '</span>';
       }).join('');
 
@@ -3741,6 +5104,8 @@ const INDEX_HTML = `<!DOCTYPE html>
         maxDuration = rawTracks[0].duration;
       }
 
+      const numTracks = Math.max(1, tracksList.length);
+
       if (Array.isArray(work.chapters) && work.chapters.length > 0) {
         chaptersList = work.chapters;
       } else if (rawTracks.length > 0) {
@@ -3748,13 +5113,107 @@ const INDEX_HTML = `<!DOCTYPE html>
           id: t.id || (idx + 1),
           title: t.title,
           startTime: t.startTime || 0,
+          duration: t.duration || 0,
           formattedTime: t.formattedTime || formatTime(t.startTime || 0),
           trackIndex: idx
         }));
       }
 
-      if (maxDuration > 0 && chaptersList.length > 0) {
-        chaptersList = chaptersList.filter(c => (c.startTime || 0) < maxDuration - 2);
+      // Mathematical Cumulative Duration & Track Partitioning Algorithm
+      const totalChapters = chaptersList.length;
+      const distinctAssignedTracks = new Set(
+        chaptersList.map(c => parseInt(c.trackIndex, 10)).filter(n => !isNaN(n) && n >= 0 && n < numTracks)
+      );
+      const hasDistinctTracks = distinctAssignedTracks.size > 1;
+
+      const trackDurations = tracksList.map(t => Math.max(0, Math.round(Number(t.duration) || 0)));
+      const hasKnownTrackDurs = trackDurations.filter(d => d > 0).length >= numTracks - 1 && trackDurations[0] > 0;
+
+      let currentTrk = 0;
+      let runningTrackOffset = 0;
+
+      chaptersList = chaptersList.map(function(c, i) {
+        const dur = Math.max(0, Math.round(Number(c.duration) || 0));
+        let trk = 0;
+
+        if (numTracks > 1) {
+          if (hasKnownTrackDurs) {
+            const targetTrackDur = trackDurations[currentTrk] || 0;
+            // If adding this chapter exceeds the current track's duration by more than 3s, advance to next track
+            if (targetTrackDur > 0 && currentTrk < numTracks - 1 && (runningTrackOffset + dur) > (targetTrackDur + 3)) {
+              currentTrk++;
+              runningTrackOffset = 0;
+            }
+            trk = currentTrk;
+          } else if (hasDistinctTracks) {
+            trk = Math.min(Math.max(0, parseInt(c.trackIndex, 10) || 0), numTracks - 1);
+            if (trk !== currentTrk) {
+              currentTrk = trk;
+              runningTrackOffset = 0;
+            }
+          } else {
+            // Chapters were not pre-partitioned in metadata: partition across the N physical tracks!
+            const tm = ((c.folder ? c.folder + '/' : '') + (c.title || '')).match(/(?:トラック|track|disc|disk|cd|part|vol|volume|side|第)\s*([0-9]+)/i);
+            if (tm && tm[1]) {
+              const num = parseInt(tm[1], 10) - 1;
+              if (num >= 0 && num < numTracks) {
+                trk = num;
+              } else {
+                trk = Math.min(Math.floor(i * numTracks / totalChapters), numTracks - 1);
+              }
+            } else {
+              trk = Math.min(Math.floor(i * numTracks / totalChapters), numTracks - 1);
+            }
+            if (trk !== currentTrk) {
+              currentTrk = trk;
+              runningTrackOffset = 0;
+            }
+          }
+        } else {
+          currentTrk = 0;
+          trk = 0;
+        }
+
+        const startSecs = runningTrackOffset;
+        runningTrackOffset += dur;
+
+        return {
+          ...c,
+          startTime: startSecs,
+          duration: dur,
+          formattedTime: formatTime(startSecs),
+          trackIndex: trk
+        };
+      });
+
+      // Exact cumulative duration cutoff for single track stream or known maxDuration
+      if (numTracks <= 1 && maxDuration > 0 && chaptersList.length > 0) {
+        let running = 0;
+        let cutoff = -1;
+        for (let i = 0; i < chaptersList.length; i++) {
+          running += (chaptersList[i].duration || 0);
+          if (Math.abs(running - maxDuration) <= 3) {
+            cutoff = i;
+            break;
+          } else if (running > maxDuration + 5) {
+            cutoff = i > 0 ? i - 1 : 0;
+            break;
+          }
+        }
+        if (cutoff >= 0 && cutoff < chaptersList.length - 1) {
+          chaptersList = chaptersList.slice(0, cutoff + 1);
+        } else {
+          chaptersList = chaptersList.filter(c => (c.startTime || 0) < maxDuration - 2);
+        }
+      } else if (numTracks > 1 && hasKnownTrackDurs) {
+        chaptersList = chaptersList.filter(c => {
+          const tDur = trackDurations[c.trackIndex || 0];
+          return !tDur || (c.startTime || 0) < tDur - 2;
+        });
+      }
+      work.chapters = chaptersList;
+      if (currentPlayingWork && normRj(currentPlayingWork.rjCode) === normRj(work.rjCode)) {
+        currentPlayingWork.chapters = chaptersList;
       }
       currentWorkChapters = chaptersList;
 
@@ -3773,16 +5232,33 @@ const INDEX_HTML = `<!DOCTYPE html>
 
       // 2. Chapters & Cue Points Section (if present)
       if (chaptersList.length > 0) {
+        const isMultiTrack = tracksList.length > 1;
+        const trackColorThemes = [
+          { border: '#38bdf8', bg: 'rgba(56, 189, 248, 0.12)', text: '#38bdf8' },
+          { border: '#c084fc', bg: 'rgba(192, 132, 252, 0.12)', text: '#c084fc' },
+          { border: '#34d399', bg: 'rgba(52, 211, 153, 0.12)', text: '#34d399' },
+          { border: '#fb923c', bg: 'rgba(251, 146, 60, 0.12)', text: '#fb923c' },
+          { border: '#f472b6', bg: 'rgba(244, 114, 182, 0.12)', text: '#f472b6' },
+          { border: '#a3e635', bg: 'rgba(163, 230, 53, 0.12)', text: '#a3e635' }
+        ];
+
         html += '<h3 style="font-size:1.2rem; font-weight:700; margin-top:36px; margin-bottom:8px; display:flex; align-items:center; gap:8px;"><span>📑 Chapters & Scene Timestamps (' + chaptersList.length + ')</span></h3>';
-        html += '<p style="color:var(--text-muted); font-size:0.85rem; margin-bottom:12px;">Click any timestamp or Jump button to seek the audio player directly to that scene cue point.</p>';
-        html += '<table class="tracks-table chapters-table"><thead><tr><th style="width: 40px;">#</th><th>Scene / Chapter Title</th><th style="width: 140px;">Timestamp Offset</th><th style="width: 160px; text-align:right;">Action</th></tr></thead><tbody>';
+        html += '<p style="color:var(--text-muted); font-size:0.85rem; margin-bottom:12px;">Click any timestamp or Jump button to seek the audio player directly to that scene cue point.' + (isMultiTrack ? ' Color indicators highlight which audio track section each scene belongs to.' : '') + '</p>';
+        html += '<table class="tracks-table chapters-table"><thead><tr><th style="width: 40px;">#</th>' + (isMultiTrack ? '<th style="width: 120px;">Track Section</th>' : '') + '<th>Scene / Chapter Title</th><th style="width: 140px;">Timestamp Offset</th><th style="width: 160px; text-align:right;">Action</th></tr></thead><tbody>';
 
         chaptersList.forEach(function(c, i) {
           const startTime = c.startTime || 0;
           const trackIdx = c.trackIndex || 0;
           const timeStr = c.formattedTime || formatTime(startTime);
-          html += '<tr class="chapter-row" id="chapter-row-' + i + '" data-idx="' + i + '" data-start="' + startTime + '" data-track="' + trackIdx + '" onclick="jumpToChapter(' + startTime + ', ' + trackIdx + ')">';
+          const trkTheme = trackColorThemes[trackIdx % trackColorThemes.length];
+          const rowStyle = isMultiTrack ? ' style="border-left: 3px solid ' + trkTheme.border + ';"' : '';
+          const trkBadge = isMultiTrack 
+            ? '<td><span class="tag-pill" style="font-size:0.75rem; padding: 2px 8px; border-radius: 4px; font-weight:700; background:' + trkTheme.bg + '; color:' + trkTheme.text + '; border: 1px solid ' + trkTheme.border + '; display:inline-flex; align-items:center; gap:4px;">🎵 Track ' + (trackIdx + 1) + '</span></td>'
+            : '';
+
+          html += '<tr class="chapter-row" id="chapter-row-' + i + '" data-idx="' + i + '" data-start="' + startTime + '" data-track="' + trackIdx + '"' + rowStyle + ' onclick="jumpToChapter(' + startTime + ', ' + trackIdx + ')">';
           html += '<td>' + (c.id || (i + 1)) + '</td>';
+          if (isMultiTrack) html += trkBadge;
           html += '<td><strong>' + c.title + '</strong></td>';
           html += '<td><button class="timestamp-btn" onclick="event.stopPropagation(); jumpToChapter(' + startTime + ', ' + trackIdx + ')" title="Jump to ' + timeStr + '">⏱️ ' + timeStr + '</button></td>';
           html += '<td style="text-align:right;"><div style="display:inline-flex; gap:6px;"><button class="btn-primary" style="padding: 4px 10px; font-size: 0.75rem;" onclick="event.stopPropagation(); jumpToChapter(' + startTime + ', ' + trackIdx + ')">▶ Jump</button><button class="btn-outline" style="padding: 4px 10px; font-size: 0.75rem;" data-idx="' + i + '" onclick="event.stopPropagation(); addChapterToPlaylistAction(parseInt(this.dataset.idx))">➕ Playlist</button></div></td>';
@@ -3826,10 +5302,8 @@ const INDEX_HTML = `<!DOCTYPE html>
 
       renderWorkDetailUI(work);
 
-      // Silently check and fetch lazy chapters in background if not rich yet
-      if (!work.chapters || work.chapters.length <= 1 || (work.chapters[0] && work.chapters[0].title.startsWith('Full Audio Session'))) {
-        fetchChaptersLazy(work.rjCode);
-      }
+      // Instantly check and fetch rich chapters/gallery in background
+      fetchChaptersLazy(work.rjCode);
     }
 
     let currentLightboxGallery = [];
@@ -3963,30 +5437,43 @@ const INDEX_HTML = `<!DOCTYPE html>
       if (!targetWork) return;
       if (!targetWork.tracks || targetWork.tracks.length === 0) return;
 
-      const isDifferentWork = !currentPlayingWork || normRj(currentPlayingWork.rjCode) !== normRj(targetWork.rjCode);
-      const isDifferentTrack = currentTrackIndex !== trackIdx;
-      const isUnloaded = !audio.src || audio.src === '' || audio.src === window.location.href;
+      const numTracks = targetWork.tracks.length;
+      const safeTrackIdx = (trackIdx < numTracks) ? trackIdx : (targetWork.hasHls ? 0 : Math.min(trackIdx, numTracks - 1));
 
-      if (isDifferentWork || isDifferentTrack || isUnloaded) {
-        playTrack(trackIdx, true, targetWork, startTime);
-      } else {
-        try { audio.currentTime = startTime; } catch(e) {}
-        if (audio.paused) audio.play().catch(() => {});
-      }
-      highlightActiveChapter(startTime);
+      playTrack(safeTrackIdx, true, targetWork, startTime);
+
+      highlightActiveChapter(startTime, safeTrackIdx);
+      const timeStr = formatTime(startTime);
+      const currTimeEl = document.getElementById('currTime');
+      const popupCurrTimeEl = document.getElementById('popupCurrTime');
+      if (currTimeEl) currTimeEl.innerText = timeStr;
+      if (popupCurrTimeEl) popupCurrTimeEl.innerText = timeStr;
       if (currentPlayingWork) updatePopupPlayerUI();
     };
 
-    function highlightActiveChapter(ct) {
-      const rows = document.querySelectorAll('.chapter-row');
-      if (!rows || rows.length === 0) return;
-      let activeIdx = -1;
-      rows.forEach((r, i) => {
+    function highlightActiveChapter(ct, trackIdx = -1) {
+      const currentTrk = (trackIdx >= 0) ? trackIdx : currentTrackIndex;
+      
+      const tableRows = document.querySelectorAll('.chapters-table .chapter-row');
+      let activeTableIdx = -1;
+      tableRows.forEach((r, i) => {
         const st = parseFloat(r.dataset.start || 0);
-        if (ct >= st) activeIdx = i;
+        const trk = parseInt(r.dataset.track || 0, 10);
+        if (trk === currentTrk && ct >= st) activeTableIdx = i;
       });
-      rows.forEach((r, i) => {
-        r.classList.toggle('active', i === activeIdx);
+      tableRows.forEach((r, i) => {
+        r.classList.toggle('active', i === activeTableIdx);
+      });
+
+      const drawerRows = document.querySelectorAll('#popupChaptersList .chapter-row');
+      let activeDrawerIdx = -1;
+      drawerRows.forEach((r, i) => {
+        const st = parseFloat(r.dataset.start || 0);
+        const trk = parseInt(r.dataset.track || 0, 10);
+        if (trk === currentTrk && ct >= st) activeDrawerIdx = i;
+      });
+      drawerRows.forEach((r, i) => {
+        r.classList.toggle('active', i === activeDrawerIdx);
       });
     }
 
@@ -4246,7 +5733,11 @@ const INDEX_HTML = `<!DOCTYPE html>
           window.tagDict = Object.assign({}, window.BASE_TAG_DICT || {}, window.tagDict || {}, data.tagDict);
         }
         let html = '<div class="section-header"><h1 class="section-title">🏷️ Genres & Tags</h1></div><div class="tag-cloud">';
-        tags.forEach(function(t) {
+        const filteredTags = tags.filter(function(t) {
+          const entry = getTagEntry(t.name);
+          return !(entry && entry.isCV);
+        });
+        filteredTags.forEach(function(t) {
           html += '<div class="tag-cloud-item" data-tag="' + t.name.replace(/"/g, '&quot;') + '" onclick="navGenre(this.dataset.tag)"><span>' + formatTag(t.name) + '</span><span class="tag-count">' + t.count + ' works</span></div>';
         });
         html += '</div>';
@@ -4266,7 +5757,7 @@ const INDEX_HTML = `<!DOCTYPE html>
         const artists = await res.json();
         let html = '<div class="section-header"><h1 class="section-title">🎙️ Voice Actors (CV)</h1></div><div class="tag-cloud">';
         (Array.isArray(artists) ? artists : []).forEach(function(a) {
-          html += '<div class="tag-cloud-item" data-cv="' + a.name.replace(/"/g, '&quot;') + '" onclick="navCv(this.dataset.cv)"><span>' + a.name + '</span><span class="tag-count">' + a.count + ' works</span></div>';
+          html += '<div class="tag-cloud-item" data-cv="' + a.name.replace(/"/g, '&quot;') + '" onclick="navCv(this.dataset.cv)"><span>' + formatCV(a.name) + '</span><span class="tag-count">' + a.count + ' works</span></div>';
         });
         html += '</div>';
         container.innerHTML = html;
@@ -4354,28 +5845,29 @@ const INDEX_HTML = `<!DOCTYPE html>
           html += '<div class="works-grid mode-medium">';
           items.forEach(function(item, index) {
             const itemPoster = item.poster || cover;
-            const isRowActive = currentPlaylistItemIndex === index && currentWork && currentWork.rjCode === item.rjCode;
-            html += '<div class="work-card playlist-card-row ' + (isRowActive ? 'active' : '') + '" data-pl-idx="' + index + '" data-pl="' + pl.id + '" onclick="playPlaylistItem(parseInt(this.dataset.plIdx), this.dataset.pl)">';
+            const isRowActive = currentPlaylistItemIndex === index && currentPlayingWork && normRj(currentPlayingWork.rjCode) === normRj(item.rjCode);
+            const cvDisplay = formatCV(item.cv);
+            html += '<div class="work-card playlist-card-row ' + (isRowActive ? 'active' : '') + '" data-rj="' + (item.rjCode || '') + '" data-pl-idx="' + index + '" onclick="navWork(this.dataset.rj)">';
             html += '<div class="card-cover-wrapper"><img class="card-cover" src="' + itemPoster + '" data-rj="' + (item.rjCode || '') + '" onerror="handleImgError(this)"></div>';
-            html += '<div class="card-badge-row"><span class="card-rj">' + (item.rjCode || '#' + (index + 1)) + '</span><div style="display:flex; gap:6px; align-items:center;"><span data-rj="' + (item.rjCode || '') + '" onclick="event.stopPropagation(); navWork(this.dataset.rj)" title="View Work Details" style="cursor:pointer; font-size:0.9rem;">👁️</span><span data-pl="' + pl.id + '" data-idx="' + index + '" onclick="event.stopPropagation(); removePlaylistItem(this.dataset.pl, parseInt(this.dataset.idx))" title="Remove Track" style="cursor:pointer; font-size:0.9rem;">🗑️</span></div></div>';
+            html += '<div class="card-badge-row"><span class="card-rj">' + (item.rjCode || '#' + (index + 1)) + '</span><div style="display:flex; gap:6px; align-items:center;"><button class="btn-primary" style="padding:2px 8px; font-size:0.75rem;" data-pl="' + pl.id + '" data-idx="' + index + '" onclick="event.stopPropagation(); playPlaylistItem(parseInt(this.dataset.idx), this.dataset.pl)">▶ Play</button><span data-pl="' + pl.id + '" data-idx="' + index + '" onclick="event.stopPropagation(); removePlaylistItem(this.dataset.pl, parseInt(this.dataset.idx))" title="Remove Track" style="cursor:pointer; font-size:0.9rem;">🗑️</span></div></div>';
             html += '<div class="card-title">' + item.title + '</div>';
-            html += '<div class="card-sub">' + (item.workTitle || item.cv || 'Track ' + (index + 1)) + '</div>';
+            html += '<div class="card-sub">' + (item.workTitle || cvDisplay || 'Track ' + (index + 1)) + '</div>';
             html += '</div>';
           });
           html += '</div>';
         } else {
-          html += '<table class="tracks-table playlist-tracks-table"><thead><tr><th style="width: 40px;">#</th><th style="width: 50px;">Art</th><th>Track Title</th><th>Work / RJ</th><th>CV</th><th style="width: 120px; text-align:right;">Actions</th></tr></thead><tbody>';
+          html += '<table class="tracks-table playlist-tracks-table"><thead><tr><th style="width: 40px;">#</th><th style="width: 50px;">Art</th><th>Track Title</th><th>Work / RJ</th><th>CV</th><th style="width: 140px; text-align:right;">Actions</th></tr></thead><tbody>';
           items.forEach(function(item, index) {
             const itemPoster = item.poster || cover;
-            const isRowActive = currentPlaylistItemIndex === index && currentWork && currentWork.rjCode === item.rjCode;
-            const workCvText = (item.workTitle || item.rjCode) + (item.cv ? ' • ' + item.cv : '');
-            html += '<tr class="playlist-track-row ' + (isRowActive ? 'active' : '') + '" data-pl-idx="' + index + '" data-pl="' + pl.id + '" onclick="playPlaylistItem(parseInt(this.dataset.plIdx), this.dataset.pl)">';
+            const isRowActive = currentPlaylistItemIndex === index && currentPlayingWork && normRj(currentPlayingWork.rjCode) === normRj(item.rjCode);
+            const workCvText = (item.workTitle || item.rjCode) + (item.cv ? ' • ' + formatCV(item.cv) : '');
+            html += '<tr class="playlist-track-row ' + (isRowActive ? 'active' : '') + '" data-rj="' + (item.rjCode || '') + '" data-pl-idx="' + index + '" onclick="navWork(this.dataset.rj)">';
             html += '<td>' + (index + 1) + '</td>';
             html += '<td><img src="' + itemPoster + '" data-rj="' + (item.rjCode || '') + '" onerror="handleImgError(this)" style="width:44px; height:44px; border-radius:8px; object-fit:cover;"></td>';
             html += '<td class="pl-track-title"><strong>' + item.title + '</strong></td>';
             html += '<td class="pl-work-title" style="color:var(--text-muted);">' + workCvText + '</td>';
-            html += '<td class="pl-cv-col" style="color:#38bdf8;">' + (item.cv || '—') + '</td>';
-            html += '<td class="pl-actions-col" style="text-align:right;"><button class="btn-outline" style="padding: 4px 8px; font-size: 0.75rem; margin-right: 4px;" title="View Work Details" data-rj="' + (item.rjCode || '') + '" onclick="event.stopPropagation(); navWork(this.dataset.rj)">👁️ Work</button><button class="btn-outline" style="padding: 4px 8px; font-size: 0.75rem;" title="Remove Track" data-pl="' + pl.id + '" data-idx="' + index + '" onclick="event.stopPropagation(); removePlaylistItem(this.dataset.pl, parseInt(this.dataset.idx))">🗑️</button></td>';
+            html += '<td class="pl-cv-col" style="color:#38bdf8;">' + (item.cv ? formatCV(item.cv) : '—') + '</td>';
+            html += '<td class="pl-actions-col" style="text-align:right;"><div style="display:inline-flex; gap:6px; align-items:center; justify-content:flex-end;"><button class="btn-primary" style="padding: 4px 10px; font-size: 0.75rem;" data-pl="' + pl.id + '" data-idx="' + index + '" onclick="event.stopPropagation(); playPlaylistItem(parseInt(this.dataset.idx), this.dataset.pl)">▶ Play</button><button class="btn-outline" style="padding: 4px 8px; font-size: 0.75rem;" title="Remove Track" data-pl="' + pl.id + '" data-idx="' + index + '" onclick="event.stopPropagation(); removePlaylistItem(this.dataset.pl, parseInt(this.dataset.idx))">🗑️</button></div></td>';
             html += '</tr>';
           });
           html += '</tbody></table>';
@@ -4416,7 +5908,7 @@ const INDEX_HTML = `<!DOCTYPE html>
         const pl = (Array.isArray(playlists) ? playlists : []).find(p => p.id === plId);
         if (!pl || !pl.items[index]) return;
         const item = pl.items[index];
-        let work = allWorks.find(w => w.rjCode === item.rjCode);
+        let work = allWorks.find(w => normRj(w.rjCode) === normRj(item.rjCode));
         if (!work) {
           try {
             const wRes = await apiFetch('/api/library?q=' + encodeURIComponent(item.rjCode));
@@ -4425,11 +5917,13 @@ const INDEX_HTML = `<!DOCTYPE html>
           } catch(e) {}
         }
         if (work) {
-          currentWork = work;
           currentPlaylistItemIndex = index;
           highlightActivePlaylistRows(index);
           const targetTrackIdx = work.tracks.findIndex(t => t.id === item.trackId) >= 0 ? work.tracks.findIndex(t => t.id === item.trackId) : 0;
-          playTrack(targetTrackIdx, true);
+          const isAlreadyPlaying = currentPlayingWork && normRj(currentPlayingWork.rjCode) === normRj(work.rjCode) && currentTrackIndex === targetTrackIdx && !audio.paused;
+          if (!isAlreadyPlaying) {
+            playTrack(targetTrackIdx, true, work);
+          }
         }
       } catch (e) {}
     }
@@ -4462,7 +5956,7 @@ const INDEX_HTML = `<!DOCTYPE html>
     }
 
     async function loadHistory() {
-      updatePageTitle('History');
+      updatePageTitle('Playback History');
       const container = document.getElementById('viewContainer');
       if (!isAdmin) {
         container.innerHTML = renderLockedState('History Locked', 'Unlock admin access to view playback history.');
@@ -4529,7 +6023,8 @@ const INDEX_HTML = `<!DOCTYPE html>
         const displayCover = getDisplayCover({ rjCode: item.rjCode, coverUrl: item.coverUrl });
         const relTime = formatRelativeDate(item.playedAt);
         const fullDate = item.playedAt ? new Date(item.playedAt).toLocaleString() : '';
-        const metaLine = (item.cv ? '<span style="color:#38bdf8; font-weight:600;">' + item.cv + '</span>' : '') + (item.cv && item.circle ? ' • ' : '') + (item.circle ? '<span>' + item.circle + '</span>' : '') + ' • <span class="card-rj" style="padding:1px 5px; font-size:0.7rem;">' + item.rjCode + '</span>';
+        const cvDisplay = formatCV(item.cv);
+        const metaLine = (cvDisplay ? '<span style="color:#38bdf8; font-weight:600;">' + cvDisplay + '</span>' : '') + (cvDisplay && item.circle ? ' • ' : '') + (item.circle ? '<span>' + item.circle + '</span>' : '') + ' • <span class="card-rj" style="padding:1px 5px; font-size:0.7rem;">' + item.rjCode + '</span>';
         html += '<tr class="works-list-row" data-rj="' + item.rjCode + '" onclick="navWork(this.dataset.rj)">';
         html += '<td class="w-col-cover"><img class="list-thumb" src="' + displayCover.coverUrl + '" data-rj="' + item.rjCode + '" onerror="handleImgError(this)"></td>';
         html += '<td class="w-col-rj"><span class="card-rj">' + item.rjCode + '</span></td>';
@@ -4555,6 +6050,9 @@ const INDEX_HTML = `<!DOCTYPE html>
       html += '<div class="settings-option ' + (contentMode === 'SFW' ? 'selected' : '') + '" data-mode="SFW" onclick="setContentMode(this.dataset.mode)"><input type="radio" name="contentMode" value="SFW" class="settings-radio" ' + (contentMode === 'SFW' ? 'checked' : '') + '><div><div class="settings-label">🛡️ SFW (Strict Safe For Work)</div><div class="settings-desc">Hide all adult works and NSFW tags completely from the library and tag cloud.</div></div></div>';
       html += '</div>';
 
+
+      html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🌐 AI Tag Translation & Dictionary Sync</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Scan your library for untranslated Japanese tags and voice actor names, then translate them with OpenRouter AI (DeepSeek) to build your tri-part (Japanese | Rōmaji | English) dictionary.</p>';
+      html += '<div style="display:flex; flex-wrap:wrap; gap:12px; align-items:center;"><button class="btn-primary" id="btnUpdateTagTranslation" onclick="checkUntranslatedTags()">🌐 Update Tag Translations</button><button class="btn-outline" style="border-color: rgba(167, 139, 250, 0.4); color: #c4b5fd;" onclick="rebootTagDictionary()">🔄 Reset & Wipe Stale Tag Cache</button><span id="tagTranslationStatus" style="font-size:0.85rem; color:#38bdf8; display:none;"></span></div></div>';
 
       html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🔄 Re-fetch & Update Metadata</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Re-scan DLsite for all existing works to fix missing titles, circle names, and tags.</p>';
       html += '<div style="display:flex; gap:12px; align-items:center;"><button class="btn-primary" id="btnRefreshAll" onclick="refreshAllMetadata()">🔄 Re-Fetch All Metadata</button><span id="refreshStatus" style="font-size:0.85rem; color:#38bdf8; display:none;"></span></div></div>';
@@ -4634,9 +6132,12 @@ const INDEX_HTML = `<!DOCTYPE html>
 
       // CV Badges in Popup
       const cvContainer = document.getElementById('popupCvRow');
-      if (currentWork.cv && currentWork.cv !== 'N/A') {
-        const cvs = currentWork.cv.split(/[\/,、・\s+＆&]+/).map(s => s.trim()).filter(Boolean);
-        cvContainer.innerHTML = cvs.map(c => '<span class="tag-pill" style="font-size:0.75rem; background:rgba(56,189,248,0.15); color:#38bdf8; border-color:rgba(56,189,248,0.3); font-weight:700;" data-cv="' + c.replace(/"/g, '&quot;') + '" onclick="closePopupPlayer(); navCv(this.dataset.cv)">🎙️ ' + c + '</span>').join('');
+      const rawCv = getWorkCV(currentWork);
+      if (rawCv && rawCv !== 'N/A') {
+        const cvs = rawCv.split(/[,、/&＋+;・\\n|]/).map(function(s) { return cleanCVName(s); }).filter(Boolean);
+        cvContainer.innerHTML = Array.from(new Set(cvs)).map(function(c) {
+          return '<span class="tag-pill" style="font-size:0.75rem; background:rgba(56,189,248,0.15); color:#38bdf8; border-color:rgba(56,189,248,0.3); font-weight:700;" data-cv="' + c.replace(/"/g, '&quot;') + '" onclick="closePopupPlayer(); navCv(this.dataset.cv)">🎙️ ' + formatCV(c) + '</span>';
+        }).join('');
       } else {
         cvContainer.innerHTML = '';
       }
@@ -4657,7 +6158,7 @@ const INDEX_HTML = `<!DOCTYPE html>
         } else if (tracks.length > 0 && tracks[0].duration > 0) {
           maxDuration = tracks[0].duration;
         }
-        if (maxDuration > 0) {
+        if (currentWork.hasHls && maxDuration > 0) {
           chapters = chapters.filter(c => (c.startTime || 0) < maxDuration - 2);
         }
       }
@@ -4673,12 +6174,28 @@ const INDEX_HTML = `<!DOCTYPE html>
         chapHeading.innerText = '📑 Chapters & Scenes';
         drawerList.appendChild(chapHeading);
 
+        const trackColorThemes = [
+          { border: '#38bdf8', bg: 'rgba(56, 189, 248, 0.12)', text: '#38bdf8' },
+          { border: '#c084fc', bg: 'rgba(192, 132, 252, 0.12)', text: '#c084fc' },
+          { border: '#34d399', bg: 'rgba(52, 211, 153, 0.12)', text: '#34d399' },
+          { border: '#fb923c', bg: 'rgba(251, 146, 60, 0.12)', text: '#fb923c' },
+          { border: '#f472b6', bg: 'rgba(244, 114, 182, 0.12)', text: '#f472b6' },
+          { border: '#a3e635', bg: 'rgba(163, 230, 53, 0.12)', text: '#a3e635' }
+        ];
+
         chapters.forEach((c, i) => {
+          const trackIdx = c.trackIndex || 0;
+          const trkTheme = trackColorThemes[trackIdx % trackColorThemes.length];
           const item = document.createElement('div');
           item.className = 'popup-chapter-item chapter-row';
           item.dataset.start = c.startTime || 0;
-          item.innerHTML = '<span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + (c.id || (i+1)) + '. ' + c.title + '</span><span style="color:#38bdf8; font-variant-numeric:tabular-nums; flex-shrink:0; margin-left:8px;">⏱️ ' + (c.formattedTime || '00:00') + '</span>';
-          item.onclick = () => { jumpToChapter(c.startTime || 0, c.trackIndex || 0); };
+          item.dataset.track = trackIdx;
+          if (tracks.length > 1) {
+            item.style.borderLeft = '3px solid ' + trkTheme.border;
+          }
+          const trkTag = (tracks.length > 1) ? '<span style="font-size:0.7rem; font-weight:700; margin-right:6px; color:' + trkTheme.text + ';">[Track ' + (trackIdx + 1) + ']</span>' : '';
+          item.innerHTML = '<span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + (c.id || (i+1)) + '. ' + trkTag + c.title + '</span><span style="color:#38bdf8; font-variant-numeric:tabular-nums; flex-shrink:0; margin-left:8px;">⏱️ ' + (c.formattedTime || '00:00') + '</span>';
+          item.onclick = () => { jumpToChapter(c.startTime || 0, trackIdx); };
           drawerList.appendChild(item);
         });
 
@@ -4748,12 +6265,17 @@ const INDEX_HTML = `<!DOCTYPE html>
       chapterFetchCache.add(normRj(rjCode));
       try {
         let apiUrl = '/api/library/chapters/' + encodeURIComponent(rjCode);
-        if (targetDur > 0) {
-          apiUrl += '?duration=' + Math.round(targetDur);
-        } else if (audio && audio.duration && !isNaN(audio.duration) && audio.duration > 0 && currentPlayingWork && normRj(currentPlayingWork.rjCode) === normRj(rjCode)) {
-          apiUrl += '?duration=' + Math.round(audio.duration);
-        } else if (currentWork && normRj(currentWork.rjCode) === normRj(rjCode) && currentWork.tracks && currentWork.tracks[0] && currentWork.tracks[0].duration > 0) {
-          apiUrl += '?duration=' + Math.round(currentWork.tracks[0].duration);
+        const workItem = (allWorks && allWorks.find(w => normRj(w.rjCode) === normRj(rjCode))) || (currentPlayingWork && normRj(currentPlayingWork.rjCode) === normRj(rjCode) ? currentPlayingWork : currentWork);
+        let reqDur = targetDur;
+        if (reqDur <= 0) {
+          if (audio && audio.duration && !isNaN(audio.duration) && audio.duration > 0 && currentPlayingWork && normRj(currentPlayingWork.rjCode) === normRj(rjCode)) {
+            reqDur = Math.round(audio.duration);
+          } else if (workItem && workItem.tracks && workItem.tracks[0] && workItem.tracks[0].duration > 0) {
+            reqDur = Math.round(workItem.tracks[0].duration);
+          }
+        }
+        if (reqDur > 0) {
+          apiUrl += '?duration=' + reqDur;
         }
         const res = await apiFetch(apiUrl);
         const data = await res.json();
@@ -4766,6 +6288,10 @@ const INDEX_HTML = `<!DOCTYPE html>
             if (currentWork && normRj(currentWork.rjCode) === normRj(rjCode)) {
               currentWork.chapters = data.chapters;
               currentWorkChapters = data.chapters;
+              updatedUI = true;
+            }
+            if (currentPlayingWork && normRj(currentPlayingWork.rjCode) === normRj(rjCode)) {
+              currentPlayingWork.chapters = data.chapters;
               updatedUI = true;
             }
           }
@@ -4917,6 +6443,360 @@ const INDEX_HTML = `<!DOCTYPE html>
     }
 
 
+
+    async function rebootTagDictionary() {
+      const NL = String.fromCharCode(10);
+      if (!confirm('🧹 Clean & Purge Stale Tag Cache:' + NL + NL +
+                   'This will remove incomplete/broken/untranslated cache entries while keeping all your valid AI and custom translations.' + NL + NL +
+                   'Do you want to continue?')) {
+        return;
+      }
+      const statusEl = document.getElementById('tagTranslationStatus');
+      if (statusEl) {
+        statusEl.style.display = 'inline-block';
+        statusEl.textContent = 'Purging stale/broken cache entries...';
+      }
+      try {
+        const res = await apiFetch('/api/tags/reset-dict', { method: 'POST' });
+        const data = await res.json();
+        window.tagDict = Object.assign({}, window.BASE_TAG_DICT, data.tagDict || {});
+        if (statusEl) statusEl.textContent = '✅ Cleaned ' + (data.removedCount || 0) + ' stale entries (kept ' + (data.preservedCount || 0) + ' good translations). Now scanning library...';
+        await checkUntranslatedTags();
+      } catch (e) {
+        alert('Clean failed: ' + e.message);
+      }
+    }
+
+    let lastFailedBatchInfo = null;
+    let transUserActionResolver = null;
+
+    function openTransProgressModal() {
+      const modal = document.getElementById('tagTranslationProgressModal');
+      const logBox = document.getElementById('transLogBox');
+      const closeBtn = document.getElementById('transModalCloseBtn');
+      const doneBtn = document.getElementById('transModalDoneBtn');
+      const failedBar = document.getElementById('transFailedBar');
+      if (logBox) logBox.innerHTML = '';
+      if (closeBtn) closeBtn.style.display = 'none';
+      if (doneBtn) doneBtn.style.display = 'none';
+      if (failedBar) failedBar.style.display = 'none';
+      updateTransProgress(0, 'Initializing...', '0 / 0');
+      if (modal) modal.style.display = 'flex';
+    }
+
+    function closeTransProgressModal() {
+      const modal = document.getElementById('tagTranslationProgressModal');
+      if (modal) modal.style.display = 'none';
+    }
+
+    function handleTransAction(action) {
+      const failedBar = document.getElementById('transFailedBar');
+      if (failedBar) failedBar.style.display = 'none';
+      if (typeof transUserActionResolver === 'function') {
+        const resolve = transUserActionResolver;
+        transUserActionResolver = null;
+        resolve(action);
+      }
+    }
+
+    function downloadFailedResponse() {
+      if (!lastFailedBatchInfo) {
+        alert('No failed response information available.');
+        return;
+      }
+      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(lastFailedBatchInfo, null, 2));
+      const dlAnchorElem = document.createElement('a');
+      dlAnchorElem.setAttribute("href", dataStr);
+      dlAnchorElem.setAttribute("download", "translation_batch_error_" + (lastFailedBatchInfo.batchNum || 1) + ".json");
+      dlAnchorElem.click();
+    }
+
+    function updateTransProgress(percent, stageText, statsText) {
+      const bar = document.getElementById('transProgressBar');
+      const pText = document.getElementById('transProgressPercent');
+      const sText = document.getElementById('transProgressStage');
+      const statEl = document.getElementById('transStatsText');
+      if (bar) bar.style.width = Math.min(100, Math.max(0, percent)) + '%';
+      if (pText) pText.textContent = Math.round(percent) + '%';
+      if (sText && stageText) sText.textContent = stageText;
+      if (statEl && statsText) statEl.textContent = statsText;
+    }
+
+    function logTransProgress(msg, type = 'info') {
+      const logBox = document.getElementById('transLogBox');
+      if (!logBox) return;
+      const time = new Date().toLocaleTimeString();
+      let color = '#cbd5e1';
+      if (type === 'success' || msg.includes('✅') || msg.includes('✨') || msg.includes('🎉')) color = '#4ade80';
+      else if (type === 'warn' || msg.includes('⚠️') || msg.includes('⏸️')) color = '#fbbf24';
+      else if (type === 'error' || msg.includes('❌')) color = '#f87171';
+      else if (msg.includes('🤖') || msg.includes('⏳')) color = '#38bdf8';
+
+      const line = document.createElement('div');
+      line.style.color = color;
+      line.style.marginBottom = '3px';
+      line.textContent = '[' + time + '] ' + msg;
+      logBox.appendChild(line);
+      logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    function finishTransProgress(localCount, llmCount) {
+      const closeBtn = document.getElementById('transModalCloseBtn');
+      const doneBtn = document.getElementById('transModalDoneBtn');
+      const failedBar = document.getElementById('transFailedBar');
+      if (failedBar) failedBar.style.display = 'none';
+      if (closeBtn) closeBtn.style.display = 'inline-block';
+      if (doneBtn) doneBtn.style.display = 'inline-block';
+      updateTransProgress(100, '✅ Translation Completed', (localCount + llmCount) + ' items processed');
+      if (currentView === 'genres') loadGenres();
+      else if (currentView === 'artists') loadArtists();
+      else if (currentView === 'library') loadLibrary(currentFilterParams);
+    }
+
+    async function checkUntranslatedTags() {
+      const statusEl = document.getElementById('tagTranslationStatus');
+      const btn = document.getElementById('btnUpdateTagTranslation');
+      if (statusEl) {
+        statusEl.style.display = 'inline-block';
+        statusEl.textContent = '1/5 Scanning library for untranslated tags & CV names...';
+      }
+
+      openTransProgressModal();
+      updateTransProgress(5, '1/5 Scanning library metadata...');
+      logTransProgress('🔍 Scanning library metadata and server aggregations...');
+
+      // Ensure library, tags, and artists are loaded
+      if (!allWorks || allWorks.length === 0) {
+        try {
+          const res = await apiFetch('/api/library');
+          const works = await res.json();
+          if (Array.isArray(works)) allWorks = works;
+        } catch(e) {}
+      }
+      let serverTags = [];
+      let serverArtists = [];
+      try {
+        const [tagRes, artRes] = await Promise.all([
+          apiFetch('/api/tags'),
+          apiFetch('/api/artists')
+        ]);
+        const tagData = await tagRes.json();
+        serverTags = Array.isArray(tagData) ? tagData : (tagData.tags || []);
+        serverArtists = await artRes.json();
+      } catch(e) {}
+
+      const allCandidateTags = new Set();
+      const allCandidateCVs = new Set();
+
+      (allWorks || []).forEach(w => {
+        if (Array.isArray(w.tags)) {
+          w.tags.forEach(t => {
+            const clean = String(t || '').trim();
+            if (clean) allCandidateTags.add(clean);
+          });
+        }
+        if (w.cv && w.cv !== 'N/A') {
+          String(w.cv).split(/[,、/&＋+;]/).forEach(c => {
+            const clean = c.trim();
+            if (clean) allCandidateCVs.add(clean);
+          });
+        }
+      });
+
+      (serverTags || []).forEach(t => {
+        const name = (t.name || t.tag || t || '').trim();
+        if (name) allCandidateTags.add(name);
+      });
+
+      (serverArtists || []).forEach(a => {
+        const name = (a.name || a.cv || a || '').trim();
+        if (name) allCandidateCVs.add(name);
+      });
+
+      logTransProgress('Found ' + allCandidateTags.size + ' unique tags and ' + allCandidateCVs.size + ' voice actors in library.');
+
+      function isTagProperlyTranslated(tag, isCV) {
+        if (!tag) return true;
+        const hasJapanese = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(tag);
+        if (!hasJapanese) return true;
+        const entry = getTagEntry(tag);
+        if (!entry) return false;
+        const romaji = (entry.romaji || '').trim();
+        const english = (entry.english || '').trim();
+        const validRomaji = romaji && /[a-zA-Z]/.test(romaji) && romaji !== tag;
+        const validEnglish = english && /[a-zA-Z]/.test(english) && english !== tag;
+        if (isCV || entry.isCV) {
+          return !!validRomaji;
+        }
+        return !!(validRomaji && validEnglish);
+      }
+
+      updateTransProgress(15, '2/5 Resolving tags locally with Pass 2 & taxonomy...');
+      const resolvedBatch = {};
+      const needsTranslation = [];
+
+      allCandidateTags.forEach(tag => {
+        if (isTagProperlyTranslated(tag, false)) return;
+        const p2 = resolveTagPass2Client(tag);
+        if (p2 && p2.romaji && p2.english && /[a-zA-Z]/.test(p2.romaji) && /[a-zA-Z]/.test(p2.english) && p2.romaji !== tag && p2.english !== tag) {
+          resolvedBatch[tag] = { romaji: p2.romaji, english: p2.english };
+        } else {
+          needsTranslation.push(tag);
+        }
+      });
+
+      allCandidateCVs.forEach(cv => {
+        if (isTagProperlyTranslated(cv, true)) return;
+        const p2 = resolveTagPass2Client(cv);
+        if (p2 && p2.romaji && /[a-zA-Z]/.test(p2.romaji) && p2.romaji !== cv) {
+          resolvedBatch[cv] = { romaji: p2.romaji, isCV: true };
+        } else {
+          needsTranslation.push(cv);
+        }
+      });
+
+      const localResolvedCount = Object.keys(resolvedBatch).length;
+      const totalLlm = needsTranslation.length;
+
+      if (localResolvedCount > 0) {
+        logTransProgress('⚡ Pass 2: Resolved ' + localResolvedCount + ' tags locally (0 LLM cost).');
+        updateTransProgress(25, '3/5 Saving ' + localResolvedCount + ' local tags to storage...');
+        try {
+          await apiFetch('/api/tags/sync-dict', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ updates: resolvedBatch, newEntries: resolvedBatch })
+          });
+          window.tagDict = Object.assign({}, window.BASE_TAG_DICT || {}, window.tagDict || {}, resolvedBatch);
+        } catch(e) {}
+      }
+
+      if (totalLlm === 0) {
+        logTransProgress('✨ All tags and voice actors in your library are translated & up to date!');
+        if (statusEl) statusEl.textContent = '✨ All tags and voice actors in your library are translated & synced!';
+        finishTransProgress(localResolvedCount, 0);
+        return;
+      }
+
+      const BATCH_SIZE = 75;
+      const totalBatches = Math.ceil(totalLlm / BATCH_SIZE);
+      logTransProgress('🤖 ' + totalLlm + ' tags need DeepSeek AI. Splitting into ' + totalBatches + ' batches (' + BATCH_SIZE + ' tags/batch)...');
+
+      if (btn) btn.disabled = true;
+      let successLlmCount = 0;
+
+      for (let i = 0; i < totalBatches; i++) {
+        let batchNum = i + 1;
+        let start = i * BATCH_SIZE;
+        let chunk = needsTranslation.slice(start, start + BATCH_SIZE);
+
+        let retryCount = 0;
+        let batchCompleted = false;
+
+        while (!batchCompleted) {
+          const percent = Math.round(25 + ((i / totalBatches) * 70));
+          updateTransProgress(percent, '4/5 DeepSeek AI: Batch ' + batchNum + ' of ' + totalBatches + ' (' + chunk.length + ' items)...', successLlmCount + ' / ' + totalLlm + ' translated');
+          logTransProgress('⏳ Batch ' + batchNum + '/' + totalBatches + (retryCount > 0 ? ' (Retry ' + retryCount + ')' : '') + ': Requesting translation for ' + chunk.length + ' tags from DeepSeek AI...');
+
+          try {
+            const res = await apiFetch('/api/tags/translate-batch', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ tags: chunk })
+            });
+            const data = await res.json();
+
+            if (data && data.success && data.translations) {
+              const count = Object.keys(data.translations).length;
+              successLlmCount += count;
+              Object.assign(resolvedBatch, data.translations);
+              window.tagDict = Object.assign({}, window.BASE_TAG_DICT || {}, window.tagDict || {}, data.translations);
+
+              // Persist immediately to KV
+              await apiFetch('/api/tags/sync-dict', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ updates: data.translations, newEntries: data.translations })
+              }).catch(() => {});
+
+              logTransProgress('✅ Batch ' + batchNum + '/' + totalBatches + ': Received ' + count + ' translations and saved to KV storage!');
+              batchCompleted = true;
+            } else {
+              const errMsg = (data && data.error) || 'Translation request failed';
+              logTransProgress('❌ Batch ' + batchNum + '/' + totalBatches + ' failed: ' + errMsg, 'error');
+
+              lastFailedBatchInfo = {
+                batchNum: batchNum,
+                totalBatches: totalBatches,
+                chunk: chunk,
+                error: errMsg,
+                rawResponse: (data && data.rawResponse) || '',
+                timestamp: new Date().toISOString()
+              };
+
+              const reasonEl = document.getElementById('transFailedReason');
+              const failedBar = document.getElementById('transFailedBar');
+              if (reasonEl) reasonEl.textContent = errMsg;
+              if (failedBar) failedBar.style.display = 'block';
+
+              logTransProgress('⏸️ Paused. Choose an action below: [Retry Batch], [Skip & Continue], or [Download Raw Error Log].', 'warn');
+
+              const userAction = await new Promise(resolve => {
+                transUserActionResolver = resolve;
+              });
+
+              if (userAction === 'retry') {
+                retryCount++;
+                logTransProgress('🔄 Retrying Batch ' + batchNum + '...');
+              } else if (userAction === 'skip') {
+                logTransProgress('⏭️ Skipped Batch ' + batchNum + '. Continuing to next batch...');
+                batchCompleted = true;
+              } else {
+                logTransProgress('⏹️ Translation stopped by user.');
+                finishTransProgress(localResolvedCount, successLlmCount);
+                if (btn) btn.disabled = false;
+                return;
+              }
+            }
+          } catch (err) {
+            logTransProgress('❌ Network error on Batch ' + batchNum + ': ' + err.message, 'error');
+
+            lastFailedBatchInfo = {
+              batchNum: batchNum,
+              chunk: chunk,
+              error: err.message,
+              timestamp: new Date().toISOString()
+            };
+
+            const reasonEl = document.getElementById('transFailedReason');
+            const failedBar = document.getElementById('transFailedBar');
+            if (reasonEl) reasonEl.textContent = err.message;
+            if (failedBar) failedBar.style.display = 'block';
+
+            const userAction = await new Promise(resolve => {
+              transUserActionResolver = resolve;
+            });
+
+            if (userAction === 'retry') {
+              retryCount++;
+            } else {
+              batchCompleted = true;
+            }
+          }
+        }
+
+        // Pause between batches
+        if (i < totalBatches - 1) {
+          await new Promise(r => setTimeout(r, 400));
+        }
+      }
+
+      logTransProgress('🎉 Finished! Translated ' + successLlmCount + ' items with DeepSeek AI + ' + localResolvedCount + ' locally.');
+      if (statusEl) statusEl.textContent = '✅ Translated and synced ' + (localResolvedCount + successLlmCount) + ' items!';
+      finishTransProgress(localResolvedCount, successLlmCount);
+      if (btn) btn.disabled = false;
+    }
+
     async function exportBackup() {
       window.location.href = '/api/backup';
     }
@@ -5008,7 +6888,10 @@ const INDEX_HTML = `<!DOCTYPE html>
       } else if (currentWork && currentView === 'work-detail' && normRj(currentWork.rjCode) !== normRj(currentPlayingWork.rjCode) && userTriggered) {
         currentPlayingWork = currentWork;
       }
-      if (!currentPlayingWork || !currentPlayingWork.tracks || !currentPlayingWork.tracks[index]) return;
+      if (!currentPlayingWork || !currentPlayingWork.tracks || currentPlayingWork.tracks.length === 0) return;
+      if (index >= currentPlayingWork.tracks.length) {
+        index = currentPlayingWork.hasHls ? 0 : Math.min(index, currentPlayingWork.tracks.length - 1);
+      }
       currentTrackIndex = index;
       const track = currentPlayingWork.tracks[index];
       const display = getDisplayCover(currentPlayingWork);
@@ -5037,13 +6920,10 @@ const INDEX_HTML = `<!DOCTYPE html>
       // MediaSession Background Audio Metadata API
       setupMediaSession(track, display);
 
-      // Lazy Chapter Fetching after 20s of active playback
-      clearTimeout(lazyChapterTimer);
-      lazyChapterTimer = setTimeout(() => {
-        if (currentPlayingWork && currentPlayingWork.rjCode) {
-          fetchChaptersLazy(currentPlayingWork.rjCode);
-        }
-      }, 20000);
+      // Fetch rich chapters and gallery if not yet loaded
+      if (currentPlayingWork && currentPlayingWork.rjCode && (!currentPlayingWork.chapters || currentPlayingWork.chapters.length <= 1)) {
+        fetchChaptersLazy(currentPlayingWork.rjCode);
+      }
 
       const seekTime = (startTime > 0) ? startTime : (track.startTime || 0);
 
@@ -5055,11 +6935,19 @@ const INDEX_HTML = `<!DOCTYPE html>
     };
 
     function playHlsStream(m3u8Url, startTime = 0, userTriggered = true) {
+      startTime = Math.max(0, parseFloat(startTime) || 0);
       if (hls && loadedHlsUrl === m3u8Url) {
-        if (startTime > 0) {
-          try { audio.currentTime = startTime; } catch(e) {}
+        try { audio.currentTime = startTime; } catch(e) {}
+        if (userTriggered) {
+          const p = audio.play();
+          if (p && p.then) {
+            p.then(() => {
+              if (startTime > 0 && Math.abs(audio.currentTime - startTime) > 1) {
+                try { audio.currentTime = startTime; } catch(e) {}
+              }
+            }).catch(e => console.log('Play error:', e));
+          }
         }
-        if (userTriggered) audio.play().catch(e => console.log('Play error:', e));
         return;
       }
       if (hls) { hls.destroy(); hls = null; }
@@ -5067,9 +6955,9 @@ const INDEX_HTML = `<!DOCTYPE html>
       if (Hls.isSupported()) {
         hls = new Hls({
           enableWorker: true,
-          lowLatencyMode: true,
-          maxBufferLength: 30,
-          startPosition: startTime > 0 ? startTime : -1
+          lowLatencyMode: false,
+          maxBufferLength: 60,
+          startPosition: startTime >= 0 ? startTime : -1
         });
         hls.loadSource(m3u8Url);
         hls.attachMedia(audio);
@@ -5077,28 +6965,56 @@ const INDEX_HTML = `<!DOCTYPE html>
           if (startTime > 0) {
             try { audio.currentTime = startTime; } catch(e) {}
           }
-          if (userTriggered) audio.play().catch(e => console.log('Autoplay handled:', e));
+          if (userTriggered) {
+            const p = audio.play();
+            if (p && p.then) {
+              p.then(() => {
+                if (startTime > 0 && Math.abs(audio.currentTime - startTime) > 1) {
+                  try { audio.currentTime = startTime; } catch(e) {}
+                }
+              }).catch(e => console.log('Autoplay handled:', e));
+            }
+          }
         });
       } else if (audio.canPlayType('application/vnd.apple.mpegurl')) {
         audio.src = m3u8Url;
-        audio.addEventListener('loadedmetadata', () => {
-          if (startTime > 0) {
-            try { audio.currentTime = startTime; } catch(e) {}
+        let seekDone = false;
+        const onReady = () => {
+          if (seekDone) return;
+          seekDone = true;
+          try { audio.currentTime = startTime; } catch(e) {}
+          if (userTriggered) {
+            const p = audio.play();
+            if (p && p.then) {
+              p.then(() => {
+                if (startTime > 0 && Math.abs(audio.currentTime - startTime) > 1) {
+                  try { audio.currentTime = startTime; } catch(e) {}
+                }
+              }).catch(e => console.log('Play:', e));
+            }
           }
-          if (userTriggered) audio.play().catch(e => console.log('Play:', e));
-        }, { once: true });
-        if (userTriggered) audio.play().catch(e => console.log('Play:', e));
+        };
+        audio.addEventListener('loadedmetadata', onReady, { once: true });
+        audio.addEventListener('canplay', onReady, { once: true });
       }
     }
 
     function playDirectAudio(srcUrl, userTriggered = true, startTime = 0) {
+      startTime = Math.max(0, parseFloat(startTime) || 0);
       if (hls) { hls.destroy(); hls = null; loadedHlsUrl = null; }
       const isSameSrc = audio.src && (audio.src === srcUrl || audio.src.endsWith(srcUrl) || (new URL(srcUrl, window.location.origin).href === audio.src));
-      if (isSameSrc && !audio.error) {
-        if (startTime >= 0) {
-          try { audio.currentTime = startTime; } catch(e) {}
+      if (isSameSrc && !audio.error && audio.readyState >= 1) {
+        try { audio.currentTime = startTime; } catch(e) {}
+        if (userTriggered) {
+          const p = audio.play();
+          if (p && p.then) {
+            p.then(() => {
+              if (startTime > 0 && Math.abs(audio.currentTime - startTime) > 1) {
+                try { audio.currentTime = startTime; } catch(e) {}
+              }
+            }).catch(e => console.log('Play error:', e));
+          }
         }
-        if (userTriggered) audio.play().catch(e => console.log('Play error:', e));
         return;
       }
       audio.src = srcUrl;
@@ -5106,16 +7022,22 @@ const INDEX_HTML = `<!DOCTYPE html>
       const onReady = () => {
         if (seekDone) return;
         seekDone = true;
-        if (startTime > 0) {
-          try { audio.currentTime = startTime; } catch(e) {}
-        }
+        try {
+          if (startTime > 0) audio.currentTime = startTime;
+        } catch(e) {}
         if (userTriggered) {
-          audio.play().catch(e => console.log('Play error:', e));
+          const p = audio.play();
+          if (p && p.then) {
+            p.then(() => {
+              if (startTime > 0 && Math.abs(audio.currentTime - startTime) > 1) {
+                try { audio.currentTime = startTime; } catch(e) {}
+              }
+            }).catch(e => console.log('Play error:', e));
+          }
         }
       };
       audio.addEventListener('loadedmetadata', onReady, { once: true });
       audio.addEventListener('canplay', onReady, { once: true });
-      if (userTriggered) audio.play().catch(e => console.log('Play error:', e));
     }
 
     function togglePlayPause() {
@@ -5126,16 +7048,36 @@ const INDEX_HTML = `<!DOCTYPE html>
     audio.addEventListener('loadedmetadata', () => {
       const dur = audio.duration;
       if (dur && !isNaN(dur) && dur > 0 && currentPlayingWork) {
-        if (Array.isArray(currentPlayingWork.chapters) && currentPlayingWork.chapters.some(c => c.startTime >= dur - 2)) {
-          currentPlayingWork.chapters = currentPlayingWork.chapters.filter(c => c.startTime < dur - 2);
+        if (currentPlayingWork.tracks && currentPlayingWork.tracks[currentTrackIndex]) {
+          currentPlayingWork.tracks[currentTrackIndex].duration = Math.round(dur);
+          currentPlayingWork.tracks[currentTrackIndex].formattedTime = formatTime(Math.round(dur));
+        }
+        const numTracks = (currentPlayingWork.tracks) ? currentPlayingWork.tracks.length : 1;
+        if (numTracks <= 1 && Array.isArray(currentPlayingWork.chapters) && currentPlayingWork.chapters.length > 0) {
+          let running = 0;
+          let cutoff = -1;
+          for (let i = 0; i < currentPlayingWork.chapters.length; i++) {
+            running += (currentPlayingWork.chapters[i].duration || 0);
+            if (Math.abs(running - dur) <= 3) {
+              cutoff = i;
+              break;
+            } else if (running > dur + 5) {
+              cutoff = i > 0 ? i - 1 : 0;
+              break;
+            }
+          }
+          if (cutoff >= 0 && cutoff < currentPlayingWork.chapters.length - 1) {
+            currentPlayingWork.chapters = currentPlayingWork.chapters.slice(0, cutoff + 1);
+          } else {
+            currentPlayingWork.chapters = currentPlayingWork.chapters.filter(c => (c.startTime || 0) < dur - 2);
+          }
           if (currentWork && currentWork.rjCode === currentPlayingWork.rjCode) {
             currentWork.chapters = currentPlayingWork.chapters;
             currentWorkChapters = currentPlayingWork.chapters;
-            if (currentView === 'work-detail') loadWorkDetail(currentPlayingWork.rjCode);
+            renderWorkDetailUI(currentWork);
           }
           updatePopupPlayerUI();
         }
-        fetchChaptersLazy(currentPlayingWork.rjCode, false, Math.round(dur));
       }
     });
 
@@ -5169,7 +7111,7 @@ const INDEX_HTML = `<!DOCTYPE html>
         document.getElementById('popupScrubber').value = pct;
       }
 
-      highlightActiveChapter(ct);
+      highlightActiveChapter(ct, currentTrackIndex);
 
       if ('mediaSession' in navigator && 'setPositionState' in navigator.mediaSession && dur > 0 && !isNaN(ct)) {
         try {
@@ -5323,36 +7265,436 @@ const INDEX_HTML = `<!DOCTYPE html>
     }
     function toggleMute() { audio.muted = !audio.muted; }
 
-    function handleSearch(val) {
-      const gSearch = document.getElementById('globalSearch');
-      const mSearch = document.getElementById('mobileSearchInput');
-      if (gSearch && gSearch.value !== val) gSearch.value = val;
-      if (mSearch && mSearch.value !== val) mSearch.value = val;
+    let currentTitleQuery = '';
+    let currentTagQuery = '';
+
+    function handleTitleSearch(val) {
+      currentTitleQuery = val || '';
+      const sidebarSearch = document.getElementById('globalSearch');
+      const mobSearch = document.getElementById('mobileSearchInput');
+      if (sidebarSearch && sidebarSearch.value !== val) sidebarSearch.value = val;
+      if (mobSearch && mobSearch.value !== val) mobSearch.value = val;
       if (currentView !== 'library') {
         switchView('library', { q: val });
         return;
       }
-      const term = val.trim().toLowerCase();
-      if (!term) {
+      applyFilters();
+    }
+
+    function handleTagSearchInput(val) {
+      currentTagQuery = val || '';
+      const sidebarTag = document.getElementById('globalTagSearch');
+      const mobTag = document.getElementById('mobileTagSearchInput');
+      if (sidebarTag && sidebarTag.value !== val) sidebarTag.value = val;
+      if (mobTag && mobTag.value !== val) mobTag.value = val;
+      if (currentView !== 'library') {
+        switchView('library', { tag: val });
+        return;
+      }
+      applyFilters();
+    }
+
+    function handleSearch(val) {
+      handleTitleSearch(val);
+    }
+
+    function applyFilters() {
+      const tQuery = (currentTitleQuery || '').trim().toLowerCase();
+      const rawTagQuery = (currentTagQuery || '').trim();
+
+      if (!tQuery && !rawTagQuery) {
         libraryCurrentPage = 1;
         renderLibraryGrid(allWorks, {});
         return;
       }
-      const dict = window.tagDict || window.BASE_TAG_DICT || {};
-      const filtered = allWorks.filter(w =>
-        w.rjCode.toLowerCase().includes(term) ||
-        w.title.toLowerCase().includes(term) ||
-        (w.circle && w.circle.toLowerCase().includes(term)) ||
-        (w.cv && w.cv.toLowerCase().includes(term)) ||
-        (w.tags && w.tags.some(t => {
-          if (t.toLowerCase().includes(term)) return true;
-          const en = dict[t];
-          return en && en.toLowerCase().includes(term);
-        }))
-      );
+
+      const tagTokens = rawTagQuery ? rawTagQuery.split(/[+,]+/).map(s => s.trim().toLowerCase()).filter(Boolean) : [];
+
+      const filtered = allWorks.filter(w => {
+        // 1. Title / RJ / Circle / CV search
+        if (tQuery) {
+          const matchRj = w.rjCode && w.rjCode.toLowerCase().includes(tQuery);
+          const matchTitle = w.title && w.title.toLowerCase().includes(tQuery);
+          const matchCircle = w.circle && w.circle.toLowerCase().includes(tQuery);
+          const matchCv = w.cv && w.cv.toLowerCase().includes(tQuery);
+          if (!matchRj && !matchTitle && !matchCircle && !matchCv) return false;
+        }
+
+        // 2. Tag '+' multi-filter matching
+        if (tagTokens.length > 0) {
+          const workTags = Array.isArray(w.tags) ? w.tags : [];
+          const allWorkTagStrings = [...workTags];
+          if (w.cv) {
+            w.cv.split(/[,、/&＋+]/).forEach(c => {
+              if (c.trim()) allWorkTagStrings.push(c.trim());
+            });
+          }
+
+          const allTokensMatch = tagTokens.every(token => {
+            return allWorkTagStrings.some(t => {
+              const tLower = t.toLowerCase();
+              if (tLower.includes(token)) return true;
+              const entry = getTagEntry(t);
+              if (entry) {
+                if (entry.romaji && entry.romaji.toLowerCase().includes(token)) return true;
+                if (entry.english && entry.english.toLowerCase().includes(token)) return true;
+              }
+              return false;
+            });
+          });
+
+          if (!allTokensMatch) return false;
+        }
+
+        return true;
+      });
+
       libraryCurrentPage = 1;
-      renderLibraryGrid(filtered, { q: val });
+      renderLibraryGrid(filtered, { q: currentTitleQuery, tag: currentTagQuery });
     }
+
+    // === Zen Browser Style Tag Search Modal ===
+    let zenActiveIndex = -1;
+    let zenSearchResults = [];
+    let zenBackupQuery = '';
+
+    function openZenTagSearch(initialQuery = '') {
+      const modal = document.getElementById('zenTagSearchModal');
+      const input = document.getElementById('zenTagSearchInput');
+      if (!modal || !input) return;
+
+      zenBackupQuery = currentTagQuery || '';
+      modal.style.display = 'flex';
+      renderZenChips();
+      
+      const queryToUse = typeof initialQuery === 'string' && initialQuery.length > 0 ? initialQuery : currentTagQuery;
+      const parts = (queryToUse || '').split('+');
+      const lastToken = parts[parts.length - 1].trim();
+      input.value = lastToken;
+      
+      handleZenTagInput(lastToken);
+      setTimeout(() => input.focus(), 50);
+    }
+
+    function closeZenTagSearch(cancel = false) {
+      const modal = document.getElementById('zenTagSearchModal');
+      if (modal) modal.style.display = 'none';
+      zenActiveIndex = -1;
+
+      if (cancel) {
+        currentTagQuery = zenBackupQuery || '';
+        const sidebarTag = document.getElementById('globalTagSearch');
+        const mobTag = document.getElementById('mobileTagSearchInput');
+        if (sidebarTag) sidebarTag.value = currentTagQuery;
+        if (mobTag) mobTag.value = currentTagQuery;
+      }
+    }
+
+    function applyZenTagSearch() {
+      const input = document.getElementById('zenTagSearchInput');
+      if (input && input.value && input.value.trim()) {
+        const val = input.value.trim();
+        if (zenSearchResults.length > 0 && zenActiveIndex >= 0) {
+          addZenTag(zenSearchResults[zenActiveIndex].tag);
+        } else if (zenSearchResults.length > 0) {
+          addZenTag(zenSearchResults[0].tag);
+        } else {
+          addZenTag(val);
+        }
+      }
+      const pills = getActiveTagPills();
+      currentTagQuery = pills.join(' + ');
+      
+      const sidebarTag = document.getElementById('globalTagSearch');
+      const mobTag = document.getElementById('mobileTagSearchInput');
+      if (sidebarTag) sidebarTag.value = currentTagQuery;
+      if (mobTag) mobTag.value = currentTagQuery;
+
+      closeZenTagSearch(false);
+      if (currentView !== 'library') {
+        savedScrollPositions['library'] = 0;
+        shuffledLibraryWorks = null;
+        switchView('library', { tag: currentTagQuery }, true, 1);
+      } else {
+        applyFilters();
+      }
+    }
+
+    function handleZenOverlayClick(e) {
+      if (e.target.id === 'zenTagSearchModal') {
+        closeZenTagSearch(true);
+      }
+    }
+
+    function getActiveTagPills() {
+      if (!currentTagQuery) return [];
+      return currentTagQuery.split('+').map(t => t.trim()).filter(Boolean);
+    }
+
+    function renderZenChips() {
+      const chipsBar = document.getElementById('zenChipsBar');
+      const chipsList = document.getElementById('zenChipsList');
+      if (!chipsBar || !chipsList) return;
+
+      const pills = getActiveTagPills();
+      if (pills.length === 0) {
+        chipsBar.style.display = 'none';
+        chipsList.innerHTML = '';
+        return;
+      }
+
+      chipsBar.style.display = 'flex';
+      chipsList.innerHTML = pills.map((p, idx) => {
+        const formatted = formatTag(p);
+        return '<span class="zen-chip">' +
+          '<span>' + formatted + '</span>' +
+          '<span class="zen-chip-remove" onclick="removeZenTag(' + idx + ')" title="Remove tag">✕</span>' +
+        '</span>';
+      }).join('');
+    }
+
+    function addZenTag(tag) {
+      if (!tag) return;
+      const pills = getActiveTagPills();
+      if (!pills.includes(tag)) {
+        pills.push(tag);
+      }
+      currentTagQuery = pills.join(' + ') + ' + ';
+      
+      const sidebarTag = document.getElementById('globalTagSearch');
+      const mobTag = document.getElementById('mobileTagSearchInput');
+      if (sidebarTag) sidebarTag.value = currentTagQuery;
+      if (mobTag) mobTag.value = currentTagQuery;
+
+      applyFilters();
+      renderZenChips();
+
+      const input = document.getElementById('zenTagSearchInput');
+      if (input) {
+        input.value = '';
+        handleZenTagInput('');
+        input.focus();
+      }
+    }
+
+    function removeZenTag(index) {
+      const pills = getActiveTagPills();
+      if (index >= 0 && index < pills.length) {
+        pills.splice(index, 1);
+      }
+      currentTagQuery = pills.length > 0 ? pills.join(' + ') + ' + ' : '';
+      
+      const sidebarTag = document.getElementById('globalTagSearch');
+      const mobTag = document.getElementById('mobileTagSearchInput');
+      if (sidebarTag) sidebarTag.value = currentTagQuery;
+      if (mobTag) mobTag.value = currentTagQuery;
+
+      applyFilters();
+      renderZenChips();
+
+      const input = document.getElementById('zenTagSearchInput');
+      if (input) {
+        handleZenTagInput(input.value);
+        input.focus();
+      }
+    }
+
+    function clearAllZenTags() {
+      currentTagQuery = '';
+      const sidebarTag = document.getElementById('globalTagSearch');
+      const mobTag = document.getElementById('mobileTagSearchInput');
+      if (sidebarTag) sidebarTag.value = '';
+      if (mobTag) mobTag.value = '';
+
+      applyFilters();
+      renderZenChips();
+
+      const input = document.getElementById('zenTagSearchInput');
+      if (input) {
+        input.value = '';
+        handleZenTagInput('');
+        input.focus();
+      }
+    }
+
+    function handleZenTagInput(val) {
+      const query = (val || '').trim().toLowerCase();
+      const container = document.getElementById('zenResultsContainer');
+      const countBadge = document.getElementById('zenResultsCountBadge');
+      if (!container) return;
+
+      const baseDict = window.BASE_TAG_DICT || {};
+      const userDict = window.tagDict || {};
+      const allDict = Object.assign({}, baseDict, userDict);
+
+      // Gather tag counts across allWorks
+      const tagCounts = {};
+      const cvCounts = {};
+
+      allWorks.forEach(w => {
+        (w.tags || []).forEach(t => {
+          const clean = t.trim();
+          if (clean) tagCounts[clean] = (tagCounts[clean] || 0) + 1;
+        });
+        if (w.cv && w.cv !== 'N/A') {
+          w.cv.split(/[,、/&＋+]/).forEach(c => {
+            const clean = c.trim();
+            if (clean) cvCounts[clean] = (cvCounts[clean] || 0) + 1;
+          });
+        }
+      });
+
+      const matchedCVs = [];
+      const matchedGenres = [];
+      const activePills = getActiveTagPills();
+      const allTagKeys = new Set([...Object.keys(tagCounts), ...Object.keys(cvCounts), ...Object.keys(allDict)]);
+
+      allTagKeys.forEach(tag => {
+        if (!tag || activePills.includes(tag)) return;
+        const entry = getTagEntry(tag);
+        const count = tagCounts[tag] || cvCounts[tag] || 0;
+        const isCV = (entry && entry.isCV) || !!cvCounts[tag];
+
+        let isMatch = !query;
+        if (query) {
+          const tagLower = tag.toLowerCase();
+          if (tagLower.includes(query)) isMatch = true;
+          if (entry) {
+            if (entry.romaji && entry.romaji.toLowerCase().includes(query)) isMatch = true;
+            if (entry.english && entry.english.toLowerCase().includes(query)) isMatch = true;
+          }
+        }
+
+        if (isMatch) {
+          const item = {
+            tag,
+            count,
+            isCV,
+            romaji: entry ? entry.romaji : '',
+            english: entry ? entry.english : ''
+          };
+          if (isCV) matchedCVs.push(item);
+          else matchedGenres.push(item);
+        }
+      });
+
+      matchedCVs.sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
+      matchedGenres.sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
+
+      const topCVs = matchedCVs.slice(0, 8);
+      const topGenres = matchedGenres.slice(0, 30);
+
+      zenSearchResults = [...topCVs, ...topGenres];
+      zenActiveIndex = zenSearchResults.length > 0 ? 0 : -1;
+
+      if (countBadge) {
+        countBadge.textContent = zenSearchResults.length > 0 ? (zenSearchResults.length + ' matching tags') : '';
+      }
+
+      if (zenSearchResults.length === 0) {
+        container.innerHTML = '<div style="text-align: center; padding: 40px 20px; color: #64748b;">' +
+          '<div style="font-size: 2rem; margin-bottom: 8px;">🔍</div>' +
+          '<div style="font-size: 0.95rem; font-weight: 600; color: #94a3b8;">No matching tags found</div>' +
+          '<div style="font-size: 0.8rem; margin-top: 4px;">Try searching in Japanese (耳かき), Rōmaji (mimikaki), or English (ear cleaning)</div>' +
+        '</div>';
+        return;
+      }
+
+      let html = '';
+      if (topCVs.length > 0) {
+        html += '<div class="zen-category-title">🎙️ Voice Actors</div>';
+        topCVs.forEach((s, idx) => {
+          html += renderZenResultItem(s, idx);
+        });
+      }
+
+      if (topGenres.length > 0) {
+        html += '<div class="zen-category-title">🏷️ Genres & Themes</div>';
+        topGenres.forEach((s, idx) => {
+          html += renderZenResultItem(s, topCVs.length + idx);
+        });
+      }
+
+      container.innerHTML = html;
+    }
+
+    function renderZenResultItem(s, globalIdx) {
+      const isSelected = globalIdx === zenActiveIndex;
+      const countBadge = s.count > 0 ? '<span class="zen-tag-badge">' + s.count + ' works</span>' : '';
+      const safeTag = s.tag.split('"').join('&quot;');
+      
+      let romajiSpan = (s.romaji && s.romaji !== s.tag) ? '<span class="zen-tag-romaji">' + s.romaji + '</span>' : '';
+      let engSpan = (s.english && s.english !== s.tag && s.english !== s.romaji) ? '<span class="zen-tag-eng">' + s.english + '</span>' : '';
+      let sep1 = (romajiSpan || engSpan) ? '<span class="zen-tag-sep">|</span>' : '';
+      let sep2 = (romajiSpan && engSpan) ? '<span class="zen-tag-sep">|</span>' : '';
+
+      return '<div class="zen-result-item ' + (isSelected ? 'selected' : '') + '" data-index="' + globalIdx + '" data-tag="' + safeTag + '" onclick="addZenTag(this.dataset.tag)">' +
+        '<div class="zen-tag-info">' +
+          '<span class="zen-tag-orig">' + s.tag + '</span>' +
+          sep1 +
+          romajiSpan +
+          sep2 +
+          engSpan +
+        '</div>' +
+        '<div style="display: flex; align-items: center; gap: 8px;">' +
+          countBadge +
+          '<span style="color: #a78bfa; font-size: 0.95rem; font-weight: bold; opacity: 0.6;">+</span>' +
+        '</div>' +
+      '</div>';
+    }
+
+    function handleZenTagKeydown(e) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeZenTagSearch(true);
+        return;
+      }
+
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        if (zenActiveIndex >= 0 && zenActiveIndex < zenSearchResults.length) {
+          addZenTag(zenSearchResults[zenActiveIndex].tag);
+        } else {
+          applyZenTagSearch();
+        }
+        return;
+      }
+
+      if (zenSearchResults.length === 0) return;
+
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        zenActiveIndex = (zenActiveIndex + 1) % zenSearchResults.length;
+        updateZenSelection();
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        zenActiveIndex = (zenActiveIndex - 1 + zenSearchResults.length) % zenSearchResults.length;
+        updateZenSelection();
+      }
+    }
+
+    function updateZenSelection() {
+      const items = document.querySelectorAll('#zenResultsContainer .zen-result-item');
+      items.forEach((item, idx) => {
+        if (idx === zenActiveIndex) {
+          item.classList.add('selected');
+          item.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        } else {
+          item.classList.remove('selected');
+        }
+      });
+    }
+
+    // Global ESC key listener to close Tag Search Modal
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') {
+        const modal = document.getElementById('zenTagSearchModal');
+        if (modal && modal.style.display === 'flex') {
+          e.preventDefault();
+          closeZenTagSearch(true);
+        }
+      }
+    });
 
     async function quickAddRj() {
       const rj = prompt('Enter RJ Code to import (e.g. RJ01473335):');

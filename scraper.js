@@ -248,6 +248,28 @@ async function fetchDlsiteMetadata(rjCode) {
     }
   }
 
+  if (dlsiteMeta) {
+    const rawCv = db.getWorkCV ? db.getWorkCV(dlsiteMeta) : (dlsiteMeta.cv || '');
+    const cvNames = [];
+    if (rawCv && rawCv !== 'N/A') {
+      rawCv.split(/[,、/&＋+;・\n|]/).forEach(c => {
+        const clean = db.cleanCVName ? db.cleanCVName(c) : c.trim();
+        if (clean) cvNames.push(clean.toLowerCase());
+      });
+    }
+    if (Array.isArray(dlsiteMeta.tags)) {
+      dlsiteMeta.tags = dlsiteMeta.tags.filter(t => {
+        const clean = String(t || '').trim();
+        if (!clean) return false;
+        if (cvNames.includes(clean.toLowerCase())) return false;
+        const entry = db.BASE_TAG_DICT && db.BASE_TAG_DICT[clean];
+        if (entry && entry.isCV) return false;
+        return true;
+      });
+      if (dlsiteMeta.tags.length === 0) dlsiteMeta.tags = ['ASMR', 'Audio'];
+    }
+  }
+
   return dlsiteMeta;
 }
 
@@ -527,8 +549,10 @@ function parseAsmrTreeData(treeData, hasM3u8 = true, targetDuration = 0) {
             // Combined duration would exceed the stream duration
             continue;
           }
+          bonusTracks.push(...validCandidateBonus);
+        } else if (mainTracks.length === 0) {
+          bonusTracks.push(...validCandidateBonus);
         }
-        bonusTracks.push(...validCandidateBonus);
       }
     }
   } else {
@@ -571,25 +595,48 @@ function parseAsmrTreeData(treeData, hasM3u8 = true, targetDuration = 0) {
   }
 
   let cumulativeTime = 0;
+  let trackCumulativeTime = 0;
+  let currentDetectedTrack = 0;
+  let lastDetectedTrack = -1;
   const chapters = [];
 
   for (let idx = 0; idx < finalAudioList.length; idx++) {
     const t = finalAudioList[idx];
-    const startSecs = cumulativeTime;
-    
-    // Stop if chapter start time exceeds known target stream duration
-    if (targetDuration > 0 && startSecs >= targetDuration - 2) {
-      break;
+    let trackIdx = 0;
+    let startSecs = 0;
+
+    if (hasM3u8 || targetDuration > 0) {
+      trackIdx = 0;
+      startSecs = cumulativeTime;
+      if (targetDuration > 0 && startSecs >= targetDuration - 2) {
+        break;
+      }
+      cumulativeTime += t.duration;
+    } else {
+      const combined = (t.folder ? t.folder + '/' : '') + (t.title || '');
+      const tm = combined.match(/(?:トラック|track|disc|disk|cd|part|vol|volume|side|第)\s*([0-9]+)/i);
+      if (tm && tm[1]) {
+        const num = parseInt(tm[1], 10) - 1;
+        if (num >= 0 && num <= 20) {
+          if (num !== lastDetectedTrack) {
+            lastDetectedTrack = num;
+            currentDetectedTrack = num;
+            trackCumulativeTime = 0;
+          }
+        }
+      }
+      trackIdx = currentDetectedTrack;
+      startSecs = trackCumulativeTime;
+      trackCumulativeTime += t.duration;
     }
 
-    cumulativeTime += t.duration;
     chapters.push({
       id: idx + 1,
       title: t.title,
       startTime: startSecs,
       duration: t.duration,
       formattedTime: formatServerTime(startSecs),
-      trackIndex: hasM3u8 ? 0 : idx
+      trackIndex: trackIdx
     });
   }
 
