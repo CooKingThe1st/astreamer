@@ -107,6 +107,16 @@ Open `http://localhost:3000` in your web browser.
 
 ---
 
+## 📌 Acknowledged Limitations
+
+* **📱 Mobile Lockscreen & Background Auto-Play Interruption**:
+  * On mobile operating systems (iOS Safari, Android Chrome/Samsung Internet), aggressive background power-saving and browser autoplay policies may occasionally prevent automated transitions between tracks when the screen is locked or the browser is in the background. If playback stops at the end of a track, waking the screen or tapping ⏭️ (`Next Track`) via the Lock Screen Media Controls (MediaSession API) resumes the playback sequence immediately.
+* **🏷️ Upstream API Rating & Artwork Ambiguity**:
+  * **SFW / NSFW Classification**: aStreamer relies strictly on the official publisher age category returned by DLsite / ASMR.one (`age_category === 1` or `age_category_string === 'general'`). Some works featuring suggestive or revealing cover illustrations (such as official game voice dramas like `RJ01551365`) may officially carry an all-ages / general rating, while works with relatively modest cover art containing sensual audio (like R-15 works e.g. `RJ296129`) are classified under adult divisions. The rating classifier faithfully follows the upstream platform's official registry rather than AI visual inspection.
+
+---
+
 ## 📜 License
 
 Distributed under the **MIT License**.
+

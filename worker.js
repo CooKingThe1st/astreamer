@@ -1,4 +1,4 @@
-// 26 SFW Cover Arts for PSFW Disguise Mode
+// 26 Curated SFW Cover Arts for PSFW Disguise Mode
 const SFW_DISGUISE_LIST = [
   'RJ01681691', 'RJ01678330', 'RJ01694805', 'RJ01688728', 'RJ01693711',
   'RJ335043', 'RJ01360841', 'RJ346413', 'RJ01229288', 'RJ321035',
@@ -703,6 +703,11 @@ async function resolveRjWork(rjCode) {
           if (!coverUrl && data.mainCoverUrl) coverUrl = data.mainCoverUrl;
           if (!coverUrl && data.thumbnailCoverUrl) coverUrl = data.thumbnailCoverUrl;
           if (!coverUrl && data.samCoverUrl) coverUrl = data.samCoverUrl;
+          if (data.age_category === 1 || data.age_category_string === 'general' || data.rating === 'general') {
+            isAdult = false;
+          } else if (data.age_category === 3 || data.rating === 'adult' || data.rating === 'r18') {
+            isAdult = true;
+          }
           if (title) break;
         }
       }
@@ -748,7 +753,7 @@ async function resolveRjWork(rjCode) {
               if (img.startsWith('http')) coverUrl = img;
             }
           }
-          if (item.age_category === 3 || div === 'maniax' || div === 'girls') isAdult = true;
+          isAdult = (item.age_category === 1 || item.age_category_string === 'general') ? false : true;
           break;
         }
       }
@@ -966,6 +971,99 @@ async function resolveRjWork(rjCode) {
   };
 }
 
+async function resolveWorkMetadataOnly(cleanRj, oldWork) {
+  const cleanNum = cleanRj.replace(/^RJ/i, '');
+  let title = oldWork?.title || '';
+  let circle = oldWork?.circle || '';
+  let cv = oldWork?.cv || '';
+  let tags = oldWork?.tags || [];
+  let tagTranslations = {};
+  let coverUrl = oldWork?.coverUrl || '';
+  let isAdult = oldWork?.isNsfw ?? true;
+
+  // Source 1: ASMR.one Public API (1 fast subrequest)
+  let asmrFetched = false;
+  try {
+    const asmrRes = await fetch(`https://api.asmr-200.com/api/work/${cleanNum}`, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json'
+      }
+    });
+    if (asmrRes.ok) {
+      const data = await asmrRes.json();
+      if (data && data.title) {
+        asmrFetched = true;
+        title = data.title;
+        if (data.circle?.name) circle = data.circle.name;
+        if (Array.isArray(data.vas) && data.vas.length > 0) {
+          cv = data.vas.map(v => v.name).join(', ');
+        }
+        if (Array.isArray(data.tags)) {
+          tags = [];
+          data.tags.forEach(t => {
+            const name = t.name || (typeof t === 'string' ? t : '');
+            if (name && !tags.includes(name)) tags.push(name);
+            const en = t.i18n?.['en-us']?.name || t.i18n?.['en']?.name || (BASE_TAG_DICT[name] || '');
+            if (name && en && name !== en) {
+              tagTranslations[name] = en;
+            }
+          });
+        }
+        let img = data.mainCoverUrl || data.thumbnailCoverUrl || data.samCoverUrl || '';
+        if (img) coverUrl = img;
+
+        isAdult = (data.age_category === 1 || data.age_category_string === 'general' || data.rating === 'general') ? false : true;
+      }
+    }
+  } catch (e) {}
+
+  // Source 2: Official DLsite JSON API (fallback)
+  if (!asmrFetched) {
+    const divisions = ['home', 'maniax', 'girls'];
+    for (const div of divisions) {
+      try {
+        const dlsiteRes = await fetch(`https://www.dlsite.com/${div}/api/=/product.json?workno=${cleanRj}`, {
+          headers: { 'User-Agent': 'Mozilla/5.0' }
+        });
+        if (dlsiteRes.ok) {
+          const data = await dlsiteRes.json();
+          if (data && data.length > 0) {
+            const item = data[0];
+            if (item.work_name) title = item.work_name;
+            if (item.maker_name) circle = item.maker_name;
+            if (Array.isArray(item.voice_actor)) cv = item.voice_actor.join(', ');
+            else if (typeof item.voice_actor === 'string') cv = item.voice_actor;
+            if (Array.isArray(item.genres)) {
+              tags = item.genres.map(g => g.name || g);
+            }
+            isAdult = (item.age_category === 1 || item.age_category_string === 'general') ? false : true;
+            break;
+          }
+        }
+      } catch (e) {}
+    }
+  }
+
+  return {
+    ...(oldWork || {}),
+    rjCode: cleanRj,
+    title: title || oldWork?.title || `Work ${cleanRj}`,
+    circle: circle || oldWork?.circle || 'ASMR Circle',
+    cv: cv || oldWork?.cv || 'N/A',
+    tags: tags.length > 0 ? tags : (oldWork?.tags || ['ASMR', 'Audio']),
+    tagTranslations: Object.keys(tagTranslations).length > 0 ? tagTranslations : (oldWork?.tagTranslations || {}),
+    coverUrl: coverUrl ? (coverUrl.startsWith('/image-proxy') ? coverUrl : `/image-proxy?url=${encodeURIComponent(coverUrl)}`) : (oldWork?.coverUrl || ''),
+    rawCoverUrl: coverUrl || oldWork?.rawCoverUrl || '',
+    hasHls: oldWork?.hasHls || false,
+    isNsfw: isAdult,
+    totalTracks: oldWork?.tracks?.length || oldWork?.totalTracks || 1,
+    tracks: oldWork?.tracks || [],
+    addedAt: oldWork?.addedAt || new Date().toISOString(),
+    favorite: oldWork?.favorite || false
+  };
+}
+
 function isWorkMetadataChanged(oldWork, freshWork) {
   if (!oldWork || !freshWork) return true;
   if ((oldWork.title || '') !== (freshWork.title || '')) return true;
@@ -973,6 +1071,7 @@ function isWorkMetadataChanged(oldWork, freshWork) {
   if ((oldWork.circle || '') !== (freshWork.circle || '')) return true;
   if ((oldWork.coverUrl || '') !== (freshWork.coverUrl || '')) return true;
   if ((oldWork.hasHls || false) !== (freshWork.hasHls || false)) return true;
+  if ((oldWork.isNsfw ?? true) !== (freshWork.isNsfw ?? true)) return true;
 
   const oldTags = (oldWork.tags || []).join('|');
   const newTags = (freshWork.tags || []).join('|');
@@ -1641,12 +1740,15 @@ export default {
     }
 
     // 4.5. Batch Refresh Metadata (1 single KV write ONLY if changes detected)
+    // 4.5. Batch Refresh Metadata
     if (pathname === '/api/library/refresh-batch' && request.method === 'POST') {
       if (!isAuth()) return json({ error: 'Unauthorized' }, 401);
       const body = await request.json().catch(() => ({}));
       const rjList = Array.isArray(body.rjList) ? body.rjList : [];
+      const saveImmediately = body.saveToKv !== false;
       const db = await getDb(env);
-      const results = { total: rjList.length, updated: 0, unchanged: 0, failed: 0, savedToKv: false };
+      const updatedWorksMap = {};
+      const results = { total: rjList.length, updated: 0, unchanged: 0, failed: 0, updatedWorks: {}, savedToKv: false };
       let hasAnyChanges = false;
 
       for (const rj of rjList) {
@@ -1654,14 +1756,16 @@ export default {
         const old = db.works ? db.works[cleanRj] : null;
         if (!old) { results.failed++; continue; }
         try {
-          const fresh = await resolveRjWork(cleanRj, false);
+          const fresh = await resolveWorkMetadataOnly(cleanRj, old);
           if (isWorkMetadataChanged(old, fresh)) {
-            db.works[cleanRj] = {
+            const merged = {
               ...fresh,
               chapters: (Array.isArray(old.chapters) && old.chapters.length > 1) ? old.chapters : fresh.chapters,
               favorite: old.favorite || false,
               addedAt: old.addedAt || fresh.addedAt
             };
+            db.works[cleanRj] = merged;
+            updatedWorksMap[cleanRj] = merged;
             results.updated++;
             hasAnyChanges = true;
           } else {
@@ -1672,11 +1776,29 @@ export default {
         }
       }
 
-      if (hasAnyChanges) {
+      results.updatedWorks = updatedWorksMap;
+
+      if (hasAnyChanges && saveImmediately) {
         await saveDb(env, db);
         results.savedToKv = true;
       }
       return json(results);
+    }
+
+    // 4.6. Save Batch Works directly to KV (Periodic / End of Flush)
+    if (pathname === '/api/library/save-batch-works' && request.method === 'POST') {
+      if (!isAuth()) return json({ error: 'Unauthorized' }, 401);
+      const body = await request.json().catch(() => ({}));
+      const worksToSave = body.works || {};
+      const count = Object.keys(worksToSave).length;
+      if (count > 0) {
+        const db = await getDb(env);
+        db.works = db.works || {};
+        Object.assign(db.works, worksToSave);
+        await saveDb(env, db);
+        return json({ success: true, count, savedToKv: true });
+      }
+      return json({ success: true, count: 0, savedToKv: false });
     }
 
     // Refresh Single Work
@@ -3747,6 +3869,43 @@ const INDEX_HTML = `<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- Library Metadata Refresh Progress Modal -->
+  <div id="refreshProgressModal" class="modal-overlay" style="z-index: 10050;">
+    <div class="modal-content" style="max-width: 560px; width: 92vw; background: #0f172a; border: 1px solid rgba(56, 189, 248, 0.35); box-shadow: 0 20px 50px rgba(0,0,0,0.85); border-radius: 12px; padding: 20px;">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <div style="font-size: 1.6rem;">🔄</div>
+          <div>
+            <h3 class="modal-title" style="margin: 0; font-size: 1.15rem; color: #fff;">Library Metadata Refresh</h3>
+            <div id="refreshModalSubtitle" style="font-size: 0.8rem; color: #94a3b8; margin-top: 2px;">Chunked Smart Scanner (15 works / batch • Periodic Saves)</div>
+          </div>
+        </div>
+        <button id="refreshModalCloseBtn" class="btn-outline" style="padding: 4px 10px; display: none;" onclick="closeRefreshProgressModal()">✖</button>
+      </div>
+
+      <div style="margin-bottom: 14px;">
+        <div style="display: flex; justify-content: space-between; font-size: 0.82rem; margin-bottom: 6px;">
+          <span id="refreshProgressStage" style="font-weight: 600; color: #38bdf8;">Preparing scan...</span>
+          <span id="refreshProgressPercent" style="font-weight: 700; color: #38bdf8;">0%</span>
+        </div>
+        <div style="width: 100%; height: 8px; background: #1e293b; border-radius: 999px; overflow: hidden; position: relative;">
+          <div id="refreshProgressBar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #38bdf8, #818cf8, #34d399); transition: width 0.3s ease; border-radius: 999px;"></div>
+        </div>
+      </div>
+
+      <div id="refreshLogBox" style="background: #090d16; border: 1px solid #1e293b; border-radius: 8px; padding: 12px; height: 160px; overflow-y: auto; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 0.78rem; line-height: 1.45; color: #cbd5e1; margin-bottom: 14px;">
+      </div>
+
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span id="refreshStatsText" style="font-size: 0.8rem; color: #64748b;">Ready</span>
+        <div style="display: flex; gap: 8px;">
+          <button id="refreshModalStopBtn" class="btn-outline" style="padding: 6px 14px; font-size: 0.82rem; color: #f87171; border-color: rgba(248, 113, 113, 0.4);" onclick="stopRefreshProgress()">⏹️ Stop</button>
+          <button id="refreshModalDoneBtn" class="btn-primary" style="display: none; padding: 8px 18px; font-size: 0.85rem;" onclick="closeRefreshProgressModal()">Done</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Floating Corner Player Card (Bottom-Right Docked) -->
   <div id="popupPlayerModal" class="floating-corner-player">
     <div class="popup-header">
@@ -4326,7 +4485,12 @@ const INDEX_HTML = `<!DOCTYPE html>
       if (!el) return;
       el.onerror = null;
       const rj = el.getAttribute('data-rj');
-      el.src = rj ? '/image-proxy?rj=' + rj : '/image-proxy';
+      if (contentMode === 'PSFW') {
+        const display = getDisplayCover({ rjCode: rj || 'RJ000000', coverUrl: '' });
+        el.src = display.coverUrl;
+      } else {
+        el.src = rj ? '/image-proxy?rj=' + rj : '/image-proxy';
+      }
     }
 
     function triggerBackupUpload() {
@@ -4345,6 +4509,8 @@ const INDEX_HTML = `<!DOCTYPE html>
         coverUrl: work.coverUrl,
         cv: work.cv || '',
         circle: work.circle || '',
+        isNsfw: work.isNsfw,
+        tags: work.tags || [],
         playedAt: new Date().toISOString()
       };
 
@@ -4378,24 +4544,77 @@ const INDEX_HTML = `<!DOCTYPE html>
     const audio = document.getElementById('coreAudio');
 
     const SFW_DISGUISE_LIST = ['RJ01681691','RJ01678330','RJ01694805','RJ01688728','RJ01693711','RJ335043','RJ01360841','RJ346413','RJ01229288','RJ321035','RJ317278','RJ387519','RJ370190','RJ343025','RJ373001','RJ01144236','RJ336447','RJ329940','RJ403038','RJ370099','RJ299717','RJ01323001','RJ363741','RJ333531','RJ357211','RJ01040461'];
-    const NSFW_KEYWORDS = ['nsfw','18禁','r18','r-18','adult','erotic','futanari','hentai','手コキ','中出し','オナサポ','乳首責め','乳首','オナホ','セックス','騎乗位','交尾','精飲','フェラ','パイズリ','アナル','潮吹き','痴女','バイブ','拘束','催眠','洗脳','絶頂','連続絶頂','常識改変','インモラル','乱交','射精','射精管理','快楽堕ち','おまんこ','ちんぽ','ちんこ','性力','オホ声','オホ','奉仕','寸止め','ザーメン','搾精','淫乱','発情','メス堕ち','アヘ顔','肉便器','マゾ','サド','調教','言葉責め','責め','愛撫','クンニ','巨乳','爆乳','貧乳','微乳','催眠音声','退廃','背徳','強制','無理矢理','媚び','服従','淫惑','性器','淫具','孕'];
+
+    const NSFW_KEYWORDS = [
+      'nsfw', '18禁', 'r18', 'r-18', 'adult', 'erotic', 'erotica', 'futanari', 'hentai',
+      '手コキ', '足コキ', '中出し', 'オナサポ', '乳首責め', '乳首', 'オナホ', 'セックス',
+      '騎乗位', '交尾', '精飲', 'フェラ', 'パイズリ', 'アナル', '潮吹き', '痴女',
+      'バイブ', '拘束', '催眠', '洗脳', '絶頂', '連続絶頂', '常識改変', 'インモラル',
+      '乱交', '射精', '射精管理', '快楽堕ち', 'おまんこ', 'ちんぽ', 'ちんこ', '性力',
+      'オホ声', 'オホ', '奉仕', '寸止め', 'ザーメン', '搾精', '淫乱', '発情',
+      'メス堕ち', 'アヘ顔', '肉便器', 'マゾ', 'サド', '調教', '言葉責め', '愛撫',
+      'クンニ', '巨乳', '爆乳', '催眠音声', '退廃', '背徳', '強制', '無理矢理',
+      '媚び', '服従', '淫惑', '性器', '淫具', '孕', '媚薬', '触手', '近親相姦',
+      '痴漢', '辱め', '羞恥', '放尿', 'お漏らし', '飲尿', '責め', '処女喪失', '破瓜',
+      '性交', 'オナニー', '自慰', '手淫', 'masturbation', 'handjob', 'blowjob',
+      'fellatio', 'creampie', 'nipple', 'anal', 'squirt', 'vibrator', 'bdsm', 'bondage',
+      'orgasm', 'ejaculation', 'cum', 'semen', 'aphrodisiac', 'tentacle', 'slut', 'lewd',
+      'pussy', 'penis', 'clitoris', 'dildo', 'virgin', 'defloration', 'incest', 'sadism'
+    ];
+
+    function isTagNsfw(tagName) {
+      if (!tagName || typeof tagName !== 'string') return false;
+      const tagLower = tagName.toLowerCase().trim();
+      if (NSFW_KEYWORDS.some(k => tagLower.includes(k.toLowerCase()))) return true;
+      const entry = getTagEntry(tagName);
+      if (entry) {
+        const eng = (entry.english || '').toLowerCase();
+        const rom = (entry.romaji || '').toLowerCase();
+        if (NSFW_KEYWORDS.some(k => eng.includes(k.toLowerCase()) || rom.includes(k.toLowerCase()))) return true;
+      }
+      return false;
+    }
 
     function isWorkNsfw(work) {
       if (!work) return false;
-      if (SFW_DISGUISE_LIST.includes(work.rjCode)) return false;
-      if (work.isNsfw === true) return true;
-      const text = (work.tags || []).join(' ') + ' ' + (work.title || '');
-      return NSFW_KEYWORDS.some(k => text.toLowerCase().includes(k.toLowerCase()));
+      const rj = (work.rjCode || work.id || '').toUpperCase();
+      if (rj && SFW_DISGUISE_LIST.some(s => normRj(s) === normRj(rj))) return false;
+      
+      const fullWork = (rj && allWorks.find(w => normRj(w.rjCode) === normRj(rj))) || work;
+      
+      // 1. Explicit SFW flag from DLsite / ASMR.one API (age_category: 1 / rating: general)
+      if (fullWork.isNsfw === false) return false;
+      if (fullWork.isNsfw === true) return true;
+
+      const tags = fullWork.tags || [];
+      const title = fullWork.title || '';
+      const circle = fullWork.circle || '';
+      const fullText = (tags.join(' ') + ' ' + title + ' ' + circle).toLowerCase();
+
+      // 2. Explicit SFW / General markers in title or tags
+      if (fullText.includes('全年齢') || fullText.includes('一般作品') || fullText.includes('一般向け') || fullText.includes('all-ages') || fullText.includes('general')) {
+        return false;
+      }
+
+      // 3. Explicit NSFW keywords & tags
+      if (NSFW_KEYWORDS.some(k => fullText.includes(k.toLowerCase()))) return true;
+      if (tags.some(t => isTagNsfw(t))) return true;
+
+      // 4. Default: Treat as NSFW in PSFW / SFW mode for 100% cover & content disguise safety
+      return true;
     }
 
     function getDisplayCover(work) {
+      if (!work) return { coverUrl: '', isDisguised: false };
+      const rawCover = work.coverUrl || work.poster || '';
       if (contentMode === 'PSFW' && isWorkNsfw(work)) {
+        const rj = (work.rjCode || work.id || 'RJ000000').toUpperCase();
         let hash = 0;
-        for (let i = 0; i < work.rjCode.length; i++) hash = (hash * 31 + work.rjCode.charCodeAt(i)) >>> 0;
+        for (let i = 0; i < rj.length; i++) hash = (hash * 31 + rj.charCodeAt(i)) >>> 0;
         const sfwRj = SFW_DISGUISE_LIST[hash % SFW_DISGUISE_LIST.length];
         return { coverUrl: '/image-proxy?url=' + encodeURIComponent('https://pic.weeabo0.xyz/' + sfwRj + '_img_main.jpg'), isDisguised: true };
       }
-      return { coverUrl: work.coverUrl, isDisguised: false };
+      return { coverUrl: rawCover, isDisguised: false };
     }
 
     function renderLockedState(title, desc) {
@@ -5082,6 +5301,7 @@ const INDEX_HTML = `<!DOCTYPE html>
       const filteredTags = (work.tags || []).filter(function(t) {
         const clean = (t || '').trim();
         if (!clean) return false;
+        if ((contentMode === 'PSFW' || contentMode === 'SFW') && isTagNsfw(clean)) return false;
         if (cvNamesSet.has(clean.toLowerCase())) return false;
         const entry = getTagEntry(clean);
         if (entry && entry.isCV) return false;
@@ -5570,7 +5790,8 @@ const INDEX_HTML = `<!DOCTYPE html>
         } else {
           html += '<table class="tracks-table"><thead><tr><th style="width: 40px;">#</th><th style="width: 50px;">Art</th><th>RJ Code & Title</th><th>Circle / CV</th><th>Reason / Status</th><th style="width: 140px;">Date Added</th><th style="width: 160px; text-align:right;">Actions</th></tr></thead><tbody>';
           list.forEach((item, idx) => {
-            const cover = item.coverUrl || ('/image-proxy?rj=' + item.rjCode);
+            const displayCover = getDisplayCover(item);
+            const cover = displayCover.coverUrl || ('/image-proxy?rj=' + item.rjCode);
             const dateStr = item.addedAt ? new Date(item.addedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
             html += '<tr class="wishlist-row" id="wishlist-row-' + item.rjCode + '">';
             html += '<td>' + (idx + 1) + '</td>';
@@ -5734,6 +5955,7 @@ const INDEX_HTML = `<!DOCTYPE html>
         }
         let html = '<div class="section-header"><h1 class="section-title">🏷️ Genres & Tags</h1></div><div class="tag-cloud">';
         const filteredTags = tags.filter(function(t) {
+          if ((contentMode === 'PSFW' || contentMode === 'SFW') && isTagNsfw(t.name)) return false;
           const entry = getTagEntry(t.name);
           return !(entry && entry.isCV);
         });
@@ -5787,10 +6009,23 @@ const INDEX_HTML = `<!DOCTYPE html>
         } else {
           html += '<div class="works-grid mode-medium">';
           playlists.forEach(function(p) {
-            const cover = p.coverUrl || (p.items && p.items[0] && p.items[0].poster) || 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" fill="%23181a24"/><text x="50%" y="50%" font-size="40" fill="%239ca3af" text-anchor="middle" dominant-baseline="middle">📜</text></svg>';
+            let cover = p.coverUrl;
+            let firstItem = p.items && p.items[0];
+            let isDisguised = false;
+            if (!cover && firstItem) {
+              const display = getDisplayCover(firstItem);
+              cover = display.coverUrl;
+              isDisguised = display.isDisguised;
+            } else if (cover) {
+              const display = getDisplayCover({ rjCode: (firstItem && firstItem.rjCode) || p.id, coverUrl: cover });
+              cover = display.coverUrl;
+              isDisguised = display.isDisguised;
+            } else {
+              cover = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" fill="%23181a24"/><text x="50%" y="50%" font-size="40" fill="%239ca3af" text-anchor="middle" dominant-baseline="middle">📜</text></svg>';
+            }
             const count = p.items ? p.items.length : 0;
             html += '<div class="work-card" data-pl="' + p.id + '" onclick="navPlaylist(this.dataset.pl)">';
-            html += '<div class="card-cover-wrapper"><img class="card-cover" src="' + cover + '" onerror="handleImgError(this)"></div>';
+            html += '<div class="card-cover-wrapper"><img class="card-cover" src="' + cover + '" data-rj="' + ((firstItem && firstItem.rjCode) || '') + '" onerror="handleImgError(this)">' + (isDisguised ? '<div class="disguised-overlay"><span class="disguised-badge">🎭 Disguised SFW</span></div>' : '') + '</div>';
             html += '<div class="card-badge-row"><span class="card-rj">' + (p.id === 'pl-favorites' ? 'FAVORITES' : 'PLAYLIST') + '</span><span style="font-size:0.8rem; color:var(--text-muted); font-weight:700;">' + count + ' tracks</span></div>';
             html += '<div class="card-title">' + p.name + '</div>';
             html += '<div class="card-sub">' + (p.description || 'Personal curated playlist') + '</div>';
@@ -5826,9 +6061,17 @@ const INDEX_HTML = `<!DOCTYPE html>
 
         const container = document.getElementById('viewContainer');
         const items = pl.items || [];
-        const cover = pl.coverUrl || (items[0] && items[0].poster) || 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" fill="%23181a24"/><text x="50%" y="50%" font-size="40" fill="%239ca3af" text-anchor="middle" dominant-baseline="middle">📜</text></svg>';
+        let cover = pl.coverUrl;
+        let firstItem = items[0];
+        if (!cover && firstItem) {
+          cover = getDisplayCover(firstItem).coverUrl;
+        } else if (cover) {
+          cover = getDisplayCover({ rjCode: (firstItem && firstItem.rjCode) || pl.id, coverUrl: cover }).coverUrl;
+        } else {
+          cover = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" fill="%23181a24"/><text x="50%" y="50%" font-size="40" fill="%239ca3af" text-anchor="middle" dominant-baseline="middle">📜</text></svg>';
+        }
 
-        let html = '<div class="work-detail-banner"><img class="detail-cover" src="' + cover + '" id="playlistDetailCover" onerror="handleImgError(this)"><div class="detail-info"><span class="card-rj" style="width:fit-content; margin-bottom:8px;">' + (pl.id === 'pl-favorites' ? 'FAVORITES' : 'PLAYLIST') + '</span><h1 class="detail-title" id="playlistDetailTitle">' + pl.name + '</h1><div class="detail-meta" id="playlistDetailDesc">' + (pl.description || 'Custom audio playlist') + '</div><div class="detail-meta" id="playlistDetailCount"><strong>Total Tracks:</strong> ' + items.length + '</div><div style="margin-top:auto; padding-top:16px; display:flex; flex-wrap:wrap; gap:10px;">' + (items.length > 0 ? '<button class="btn-primary" id="playAllPlaylistBtn" data-pl="' + pl.id + '" onclick="playPlaylistItem(0, this.dataset.pl)">▶ Play All</button>' : '') + (pl.id !== 'pl-favorites' ? '<button class="btn-outline" data-pl="' + pl.id + '" onclick="deletePlaylistAction(this.dataset.pl)">🗑️ Delete Playlist</button>' : '') + '<button class="btn-outline" data-view="playlists" onclick="switchView(this.dataset.view)">← Back to Playlists</button></div></div></div>';
+        let html = '<div class="work-detail-banner"><img class="detail-cover" src="' + cover + '" id="playlistDetailCover" data-rj="' + ((firstItem && firstItem.rjCode) || '') + '" onerror="handleImgError(this)"><div class="detail-info"><span class="card-rj" style="width:fit-content; margin-bottom:8px;">' + (pl.id === 'pl-favorites' ? 'FAVORITES' : 'PLAYLIST') + '</span><h1 class="detail-title" id="playlistDetailTitle">' + pl.name + '</h1><div class="detail-meta" id="playlistDetailDesc">' + (pl.description || 'Custom audio playlist') + '</div><div class="detail-meta" id="playlistDetailCount"><strong>Total Tracks:</strong> ' + items.length + '</div><div style="margin-top:auto; padding-top:16px; display:flex; flex-wrap:wrap; gap:10px;">' + (items.length > 0 ? '<button class="btn-primary" id="playAllPlaylistBtn" data-pl="' + pl.id + '" onclick="playPlaylistItem(0, this.dataset.pl)">▶ Play All</button>' : '') + (pl.id !== 'pl-favorites' ? '<button class="btn-outline" data-pl="' + pl.id + '" onclick="deletePlaylistAction(this.dataset.pl)">🗑️ Delete Playlist</button>' : '') + '<button class="btn-outline" data-view="playlists" onclick="switchView(this.dataset.view)">← Back to Playlists</button></div></div></div>';
 
         html += '<div class="view-modes-bar">';
         html += '<div style="display:flex; align-items:center; gap:8px;"><span style="font-size:0.82rem; color:var(--text-muted); font-weight:700;">VIEW:</span>';
@@ -5844,11 +6087,12 @@ const INDEX_HTML = `<!DOCTYPE html>
         } else if (playlistViewMode === 'grid') {
           html += '<div class="works-grid mode-medium">';
           items.forEach(function(item, index) {
-            const itemPoster = item.poster || cover;
+            const itemDisplay = getDisplayCover(item);
+            const itemPoster = itemDisplay.coverUrl || cover;
             const isRowActive = currentPlaylistItemIndex === index && currentPlayingWork && normRj(currentPlayingWork.rjCode) === normRj(item.rjCode);
             const cvDisplay = formatCV(item.cv);
             html += '<div class="work-card playlist-card-row ' + (isRowActive ? 'active' : '') + '" data-rj="' + (item.rjCode || '') + '" data-pl-idx="' + index + '" onclick="navWork(this.dataset.rj)">';
-            html += '<div class="card-cover-wrapper"><img class="card-cover" src="' + itemPoster + '" data-rj="' + (item.rjCode || '') + '" onerror="handleImgError(this)"></div>';
+            html += '<div class="card-cover-wrapper"><img class="card-cover" src="' + itemPoster + '" data-rj="' + (item.rjCode || '') + '" onerror="handleImgError(this)">' + (itemDisplay.isDisguised ? '<div class="disguised-overlay"><span class="disguised-badge">🎭 Disguised SFW</span></div>' : '') + '</div>';
             html += '<div class="card-badge-row"><span class="card-rj">' + (item.rjCode || '#' + (index + 1)) + '</span><div style="display:flex; gap:6px; align-items:center;"><button class="btn-primary" style="padding:2px 8px; font-size:0.75rem;" data-pl="' + pl.id + '" data-idx="' + index + '" onclick="event.stopPropagation(); playPlaylistItem(parseInt(this.dataset.idx), this.dataset.pl)">▶ Play</button><span data-pl="' + pl.id + '" data-idx="' + index + '" onclick="event.stopPropagation(); removePlaylistItem(this.dataset.pl, parseInt(this.dataset.idx))" title="Remove Track" style="cursor:pointer; font-size:0.9rem;">🗑️</span></div></div>';
             html += '<div class="card-title">' + item.title + '</div>';
             html += '<div class="card-sub">' + (item.workTitle || cvDisplay || 'Track ' + (index + 1)) + '</div>';
@@ -5858,7 +6102,8 @@ const INDEX_HTML = `<!DOCTYPE html>
         } else {
           html += '<table class="tracks-table playlist-tracks-table"><thead><tr><th style="width: 40px;">#</th><th style="width: 50px;">Art</th><th>Track Title</th><th>Work / RJ</th><th>CV</th><th style="width: 140px; text-align:right;">Actions</th></tr></thead><tbody>';
           items.forEach(function(item, index) {
-            const itemPoster = item.poster || cover;
+            const itemDisplay = getDisplayCover(item);
+            const itemPoster = itemDisplay.coverUrl || cover;
             const isRowActive = currentPlaylistItemIndex === index && currentPlayingWork && normRj(currentPlayingWork.rjCode) === normRj(item.rjCode);
             const workCvText = (item.workTitle || item.rjCode) + (item.cv ? ' • ' + formatCV(item.cv) : '');
             html += '<tr class="playlist-track-row ' + (isRowActive ? 'active' : '') + '" data-rj="' + (item.rjCode || '') + '" data-pl-idx="' + index + '" onclick="navWork(this.dataset.rj)">';
@@ -6020,7 +6265,7 @@ const INDEX_HTML = `<!DOCTYPE html>
 
       html += '<table class="works-list-table history-list-table"><thead><tr><th style="width:50px;">Cover</th><th style="width:110px;">RJ Code</th><th>Work Title</th><th>Voice Actor / Circle</th><th style="width:140px;">Last Played</th><th style="width:90px; text-align:right;">Actions</th></tr></thead><tbody>';
       sorted.forEach(function(item) {
-        const displayCover = getDisplayCover({ rjCode: item.rjCode, coverUrl: item.coverUrl });
+        const displayCover = getDisplayCover(item);
         const relTime = formatRelativeDate(item.playedAt);
         const fullDate = item.playedAt ? new Date(item.playedAt).toLocaleString() : '';
         const cvDisplay = formatCV(item.cv);
@@ -6119,25 +6364,29 @@ const INDEX_HTML = `<!DOCTYPE html>
     }
 
     function updatePopupPlayerUI() {
-      if (!currentWork) return;
-      const track = currentWork.tracks[currentTrackIndex] || currentWork.tracks[0];
-      const display = getDisplayCover(currentWork);
+      const activeWork = currentPlayingWork || currentWork;
+      if (!activeWork) return;
+      const track = (activeWork.tracks && activeWork.tracks[currentTrackIndex]) || (activeWork.tracks && activeWork.tracks[0]);
+      const display = getDisplayCover(activeWork);
 
-      document.getElementById('popupTitle').innerText = track ? track.title : currentWork.title;
-      document.getElementById('popupSub').innerText = currentWork.rjCode + ' • ' + (currentWork.circle || 'Circle N/A');
-      document.getElementById('popupCover').src = display.coverUrl;
+      document.getElementById('popupTitle').innerText = track ? track.title : activeWork.title;
+      document.getElementById('popupSub').innerText = (activeWork.rjCode || '') + ' • ' + (activeWork.circle || 'Circle N/A');
+      const popupCover = document.getElementById('popupCover');
+      if (popupCover) {
+        popupCover.src = display.coverUrl;
+        popupCover.setAttribute('data-rj', activeWork.rjCode || '');
+      }
       document.getElementById('popupHlsBadge').innerText = (track && track.isHls) ? 'HLS Stream' : 'Direct Audio';
       document.getElementById('popupDisguisedBadge').style.display = display.isDisguised ? 'block' : 'none';
-      document.getElementById('popupFavBtn').innerText = currentWork.favorite ? '❤️' : '🤍';
+      document.getElementById('popupFavBtn').innerText = activeWork.favorite ? '❤️' : '🤍';
 
       // CV Badges in Popup
       const cvContainer = document.getElementById('popupCvRow');
-      const rawCv = getWorkCV(currentWork);
-      if (rawCv && rawCv !== 'N/A') {
-        const cvs = rawCv.split(/[,、/&＋+;・\\n|]/).map(function(s) { return cleanCVName(s); }).filter(Boolean);
-        cvContainer.innerHTML = Array.from(new Set(cvs)).map(function(c) {
-          return '<span class="tag-pill" style="font-size:0.75rem; background:rgba(56,189,248,0.15); color:#38bdf8; border-color:rgba(56,189,248,0.3); font-weight:700;" data-cv="' + c.replace(/"/g, '&quot;') + '" onclick="closePopupPlayer(); navCv(this.dataset.cv)">🎙️ ' + formatCV(c) + '</span>';
-        }).join('');
+      const activeWorkCV = getWorkCV(activeWork);
+      if (activeWorkCV && activeWorkCV !== 'N/A') {
+        const cvs = activeWorkCV.split(/[,、/&＋+;・\\n|]/).map(s => cleanCVName(s)).filter(Boolean);
+        const uniqueCvs = Array.from(new Set(cvs));
+        cvContainer.innerHTML = uniqueCvs.map(c => '<span class="tag-pill" style="font-size:0.75rem; background:rgba(56,189,248,0.15); color:#38bdf8; border-color:rgba(56,189,248,0.3); font-weight:700;" data-cv="' + c.replace(/"/g, '&quot;') + '" onclick="closePopupPlayer(); navCv(this.dataset.cv)">🎙️ ' + formatCV(c) + '</span>').join('');
       } else {
         cvContainer.innerHTML = '';
       }
@@ -6326,70 +6575,225 @@ const INDEX_HTML = `<!DOCTYPE html>
       }
     }
 
+    let isRefreshRunning = false;
+    let refreshShouldStop = false;
+
+    function openRefreshProgressModal() {
+      const modal = document.getElementById('refreshProgressModal');
+      const closeBtn = document.getElementById('refreshModalCloseBtn');
+      const doneBtn = document.getElementById('refreshModalDoneBtn');
+      const stopBtn = document.getElementById('refreshModalStopBtn');
+      const logBox = document.getElementById('refreshLogBox');
+      
+      if (modal) modal.style.display = 'flex';
+      if (closeBtn) closeBtn.style.display = 'none';
+      if (doneBtn) doneBtn.style.display = 'none';
+      if (stopBtn) stopBtn.style.display = 'inline-block';
+      if (logBox) logBox.innerHTML = '';
+      
+      updateRefreshProgress(0, 'Initializing metadata scan...', 'Scanning library...');
+    }
+
+    function closeRefreshProgressModal() {
+      const modal = document.getElementById('refreshProgressModal');
+      if (modal) modal.style.display = 'none';
+    }
+
+    function stopRefreshProgress() {
+      refreshShouldStop = true;
+      logRefreshProgress('⏹️ Stop requested. Finishing current batch before stopping...', 'warn');
+    }
+
+    function updateRefreshProgress(percent, stageText, statsText) {
+      const bar = document.getElementById('refreshProgressBar');
+      const pText = document.getElementById('refreshProgressPercent');
+      const sText = document.getElementById('refreshProgressStage');
+      const statEl = document.getElementById('refreshStatsText');
+
+      if (bar) bar.style.width = Math.min(100, Math.max(0, percent)) + '%';
+      if (pText) pText.textContent = Math.round(percent) + '%';
+      if (sText && stageText) sText.textContent = stageText;
+      if (statEl && statsText) statEl.textContent = statsText;
+    }
+
+    function logRefreshProgress(msg, type = 'info') {
+      const logBox = document.getElementById('refreshLogBox');
+      if (!logBox) return;
+      const time = new Date().toLocaleTimeString();
+      let color = '#cbd5e1';
+      if (type === 'success' || msg.includes('✅') || msg.includes('🎉') || msg.includes('💾')) color = '#4ade80';
+      else if (type === 'warn' || msg.includes('⚠️') || msg.includes('⏹️')) color = '#fbbf24';
+      else if (type === 'error' || msg.includes('❌')) color = '#f87171';
+      else if (msg.includes('🔍') || msg.includes('⏳') || msg.includes('🚀')) color = '#38bdf8';
+
+      const line = document.createElement('div');
+      line.style.color = color;
+      line.style.marginBottom = '3px';
+      line.textContent = '[' + time + '] ' + msg;
+      logBox.appendChild(line);
+      logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    function finishRefreshProgress(total, updated, unchanged, failed, kvWrites) {
+      const closeBtn = document.getElementById('refreshModalCloseBtn');
+      const doneBtn = document.getElementById('refreshModalDoneBtn');
+      const stopBtn = document.getElementById('refreshModalStopBtn');
+      if (closeBtn) closeBtn.style.display = 'inline-block';
+      if (doneBtn) doneBtn.style.display = 'inline-block';
+      if (stopBtn) stopBtn.style.display = 'none';
+      
+      updateRefreshProgress(100, '✅ Scan Completed', 'Updated: ' + updated + ' • Unchanged: ' + unchanged + ' • KV Writes: ' + kvWrites);
+      if (currentView === 'library') loadLibrary(currentFilterParams);
+      else if (currentView === 'settings') loadSettings();
+    }
+
     async function refreshAllMetadata() {
-      const btn = document.getElementById('btnRefreshAll');
-      const status = document.getElementById('refreshStatus');
-      if (!btn || !status) return;
-
-      if (isMassRefreshing) {
-        isMassRefreshing = false;
-        btn.innerText = 'Stopping...';
-        btn.disabled = true;
+      if (isRefreshRunning) return;
+      if (!confirm('⚠️ Are you sure you want to scan and refresh metadata for all works in your library?\\n\\nThis will run in safe chunks of 15 works with real-time progress and periodic saves every ~90 works (only modified works are saved to KV).')) {
         return;
       }
 
-      if (!confirm('⚠️ Are you sure you want to re-fetch metadata for ALL works in your library?\\n\\nThis will check and update basic metadata with smart change-detection (0 writes if already matching, max 1 batch write if changes exist).')) {
-        return;
+      if (window.Notification && Notification.permission === 'default') {
+        Notification.requestPermission().catch(() => {});
       }
 
-      isMassRefreshing = true;
-      btn.disabled = false;
-      btn.innerText = '⏹️ Stop Re-Fetch';
-      btn.style.background = '#ef4444';
-      btn.style.borderColor = '#ef4444';
-      status.style.display = 'inline';
+      isRefreshRunning = true;
+      refreshShouldStop = false;
+      openRefreshProgressModal();
 
       try {
+        logRefreshProgress('🔍 Loading library collection from server...');
         const res = await apiFetch('/api/library');
         const works = await res.json();
         if (!Array.isArray(works) || works.length === 0) {
-          status.innerText = 'Library is empty.';
-          btn.innerText = '🔄 Re-Fetch All Metadata';
-          btn.style.background = '';
-          btn.style.borderColor = '';
-          isMassRefreshing = false;
+          logRefreshProgress('⚠️ Library is empty. Nothing to refresh.', 'warn');
+          finishRefreshProgress(0, 0, 0, 0, 0);
+          isRefreshRunning = false;
           return;
         }
 
-        const rjList = works.map(w => w.rjCode);
-        status.innerText = 'Updating metadata for ' + rjList.length + ' works (Single batch KV save)...';
+        const allRjs = works.map(w => w.rjCode);
+        const totalWorks = allRjs.length;
+        const CHUNK_SIZE = 15;
+        const FLUSH_INTERVAL_BATCHES = 6; // Save to KV every 6 batches (~90 works)
+        const totalChunks = Math.ceil(totalWorks / CHUNK_SIZE);
 
-        const batchRes = await apiFetch('/api/library/refresh-batch', {
-          method: 'POST',
-          body: JSON.stringify({ rjList })
-        });
-        const batchData = await batchRes.json().catch(() => ({}));
+        logRefreshProgress('🚀 Found ' + totalWorks + ' works. Splitting into ' + totalChunks + ' safe batches (' + CHUNK_SIZE + ' works/batch, auto-saving every ~90 works)...');
 
-        if (batchData && batchData.total !== undefined) {
-          if (batchData.savedToKv) {
-            status.innerText = '✅ Finished! Updated ' + batchData.updated + ' works (' + (batchData.unchanged || 0) + ' unchanged, ' + (batchData.failed || 0) + ' failed) in 1 single KV write!';
-          } else {
-            status.innerText = '✅ Finished! All ' + (batchData.unchanged || batchData.total) + ' works already have matching metadata. (0 KV writes used)!';
+        let totalUpdated = 0;
+        let totalUnchanged = 0;
+        let totalFailed = 0;
+        let totalKvWrites = 0;
+        let pendingFlushWorks = {};
+
+        for (let i = 0; i < totalChunks; i++) {
+          if (refreshShouldStop) {
+            logRefreshProgress('⏹️ Stop requested. Saving accumulated updates to KV...', 'warn');
+            break;
           }
-        } else {
-          status.innerText = '✅ Batch update completed.';
+
+          const chunk = allRjs.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+          const chunkNum = i + 1;
+          const processedSoFar = Math.min(totalWorks, (i + 1) * CHUNK_SIZE);
+          const percent = Math.min(100, (processedSoFar / totalWorks) * 100);
+
+          document.title = '[' + Math.round(percent) + '%] 🔄 Scanning Metadata - aStreamer';
+
+          updateRefreshProgress(
+            percent,
+            'Scanning Batch ' + chunkNum + '/' + totalChunks + ' (' + chunk[0] + ' - ' + chunk[chunk.length - 1] + ')...',
+            'Processed: ' + processedSoFar + '/' + totalWorks + ' • Updated: ' + totalUpdated + ' • Unchanged: ' + totalUnchanged
+          );
+
+          logRefreshProgress('⏳ Batch ' + chunkNum + '/' + totalChunks + ': Scanning ' + chunk.length + ' works...');
+
+          try {
+            const batchRes = await apiFetch('/api/library/refresh-batch', {
+              method: 'POST',
+              body: JSON.stringify({ rjList: chunk, saveToKv: false })
+            });
+            const batchData = await batchRes.json().catch(() => ({}));
+
+            if (batchData && batchData.total !== undefined) {
+              const updated = batchData.updated || 0;
+              const unchanged = batchData.unchanged || 0;
+              const failed = batchData.failed || 0;
+              totalUpdated += updated;
+              totalUnchanged += unchanged;
+              totalFailed += failed;
+
+              if (batchData.updatedWorks && Object.keys(batchData.updatedWorks).length > 0) {
+                Object.assign(pendingFlushWorks, batchData.updatedWorks);
+              }
+
+              const pendingCount = Object.keys(pendingFlushWorks).length;
+              if (updated > 0) {
+                logRefreshProgress('✨ Batch ' + chunkNum + '/' + totalChunks + ': ' + updated + ' modified (' + pendingCount + ' pending KV save)');
+              } else {
+                logRefreshProgress('⚡ Batch ' + chunkNum + '/' + totalChunks + ': All ' + unchanged + ' works matching ➔ 0 changes');
+              }
+
+              // Periodic Flush: Every 6 batches (~90 works)
+              if (chunkNum % FLUSH_INTERVAL_BATCHES === 0 && pendingCount > 0) {
+                logRefreshProgress('💾 Periodic Flush: Saving ' + pendingCount + ' accumulated works to KV...');
+                const saveRes = await apiFetch('/api/library/save-batch-works', {
+                  method: 'POST',
+                  body: JSON.stringify({ works: pendingFlushWorks })
+                });
+                const saveData = await saveRes.json().catch(() => ({}));
+                if (saveData && saveData.savedToKv) {
+                  totalKvWrites++;
+                  logRefreshProgress('✅ Saved ' + pendingCount + ' works to KV (Write #' + totalKvWrites + ')', 'success');
+                  pendingFlushWorks = {};
+                }
+              }
+            } else {
+              totalFailed += chunk.length;
+              logRefreshProgress('❌ Batch ' + chunkNum + '/' + totalChunks + ' failed: Unexpected server response', 'error');
+            }
+          } catch (err) {
+            totalFailed += chunk.length;
+            logRefreshProgress('❌ Network error on Batch ' + chunkNum + ': ' + err.message, 'error');
+          }
+
+          // Gentle pause between chunks to ensure smooth browser UI
+          if (i < totalChunks - 1) {
+            await new Promise(r => setTimeout(r, 200));
+          }
         }
-      } catch (e) {
-        if (e.message !== 'Unauthorized') {
-          status.innerText = 'Error: ' + e.message;
+
+        // Final Flush: Save any remaining pending works
+        const finalPendingCount = Object.keys(pendingFlushWorks).length;
+        if (finalPendingCount > 0) {
+          logRefreshProgress('💾 Final Flush: Saving remaining ' + finalPendingCount + ' updated works to KV...');
+          const saveRes = await apiFetch('/api/library/save-batch-works', {
+            method: 'POST',
+            body: JSON.stringify({ works: pendingFlushWorks })
+          });
+          const saveData = await saveRes.json().catch(() => ({}));
+          if (saveData && saveData.savedToKv) {
+            totalKvWrites++;
+            logRefreshProgress('✅ Final Flush: ' + finalPendingCount + ' works safely saved to KV (Write #' + totalKvWrites + ')', 'success');
+            pendingFlushWorks = {};
+          }
         }
+
+        document.title = '✅ Scan Complete (' + totalUpdated + ' updated) - aStreamer';
+        if (window.Notification && Notification.permission === 'granted') {
+          new Notification('aStreamer Library Update', {
+            body: 'Finished scanning ' + totalWorks + ' works! ' + totalUpdated + ' works updated (' + totalKvWrites + ' KV writes used).',
+            icon: '/favicon.ico'
+          });
+        }
+        showToast('✅ Metadata refresh completed: ' + totalUpdated + ' works updated (' + totalKvWrites + ' KV writes used).', 4000);
+
+        logRefreshProgress('🎉 Finished! Processed ' + (totalUpdated + totalUnchanged + totalFailed) + '/' + totalWorks + ' works. Updated: ' + totalUpdated + ', Unchanged: ' + totalUnchanged + ', Failed: ' + totalFailed + ', Total KV Writes: ' + totalKvWrites + '.', 'success');
+        finishRefreshProgress(totalWorks, totalUpdated, totalUnchanged, totalFailed, totalKvWrites);
+      } catch (err) {
+        logRefreshProgress('❌ Fatal error: ' + err.message, 'error');
+        finishRefreshProgress(0, 0, 0, 0, 0);
       } finally {
-        isMassRefreshing = false;
-        btn.disabled = false;
-        btn.style.background = '';
-        btn.style.borderColor = '';
-        btn.innerText = '🔄 Re-Fetch All Metadata';
-        setTimeout(() => { loadLibrary(); }, 1200);
+        isRefreshRunning = false;
       }
     }
 
@@ -6830,10 +7234,25 @@ const INDEX_HTML = `<!DOCTYPE html>
       contentMode = mode;
       localStorage.setItem('astreamer_content_mode', mode);
       await apiFetch('/api/settings', { method: 'POST', body: JSON.stringify({ contentMode: mode }) });
+      
+      const activeWork = currentPlayingWork || currentWork;
+      if (activeWork) {
+        const display = getDisplayCover(activeWork);
+        const playerCover = document.getElementById('playerCover');
+        if (playerCover) {
+          playerCover.src = display.coverUrl;
+          playerCover.setAttribute('data-rj', activeWork.rjCode || '');
+        }
+      }
+      updatePopupPlayerUI();
+
       if (currentView === 'settings') loadSettings();
       else if (currentView === 'library') renderLibraryGrid(allWorks, currentFilterParams);
-      else if (currentView === 'work-detail' && currentWork) loadWorkDetail(currentWork.rjCode);
-      if (currentWork) updatePopupPlayerUI();
+      else if (currentView === 'work-detail' && currentWork) renderWorkDetailUI(currentWork);
+      else if (currentView === 'playlists') loadPlaylists();
+      else if (currentView === 'playlist-detail' && currentPlaylist) loadPlaylistDetail(currentPlaylist.id);
+      else if (currentView === 'history') loadHistory();
+      else if (currentView === 'wishlist') loadWishlist();
     }
 
     function setupMediaSessionHandlers() {
@@ -6898,7 +7317,11 @@ const INDEX_HTML = `<!DOCTYPE html>
 
       document.getElementById('playerTitle').innerText = track.title || 'Track ' + (index + 1);
       document.getElementById('playerSub').innerText = (currentPlayingWork.rjCode || '') + ' • ' + (currentPlayingWork.title || '');
-      document.getElementById('playerCover').src = display.coverUrl;
+      const playerCover = document.getElementById('playerCover');
+      if (playerCover) {
+        playerCover.src = display.coverUrl;
+        playerCover.setAttribute('data-rj', currentPlayingWork.rjCode || '');
+      }
 
       const knownDur = track.duration || 0;
       const initialTotal = knownDur > 0 ? formatTime(knownDur) : (track.formattedTime || '--:--');
@@ -7551,6 +7974,7 @@ const INDEX_HTML = `<!DOCTYPE html>
 
       allTagKeys.forEach(tag => {
         if (!tag || activePills.includes(tag)) return;
+        if ((contentMode === 'PSFW' || contentMode === 'SFW') && isTagNsfw(tag)) return;
         const entry = getTagEntry(tag);
         const count = tagCounts[tag] || cvCounts[tag] || 0;
         const isCV = (entry && entry.isCV) || !!cvCounts[tag];

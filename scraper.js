@@ -78,6 +78,8 @@ async function fetchDlsiteMetadata(rjCode) {
       let imgUrl = data.mainCoverUrl || data.thumbnailCoverUrl || data.samCoverUrl || '';
       if (imgUrl.startsWith('//')) imgUrl = 'https:' + imgUrl;
 
+      const isAdult = (data.age_category === 1 || data.age_category_string === 'general' || data.rating === 'general') ? false : true;
+
       if (data.title) {
         dlsiteMeta = {
           title: data.title,
@@ -86,7 +88,7 @@ async function fetchDlsiteMetadata(rjCode) {
           rawCoverUrl: imgUrl,
           tags: tags,
           tagTranslations: tagTranslations,
-          isNsfw: true
+          isNsfw: isAdult ?? true
         };
       }
     }
@@ -118,8 +120,7 @@ async function fetchDlsiteMetadata(rjCode) {
         let imgUrl = dlsiteMeta?.rawCoverUrl || (typeof item.image_main === 'string' ? item.image_main : (item.image_main?.url || item.work_image || ''));
         if (imgUrl.startsWith('//')) imgUrl = 'https:' + imgUrl;
 
-        const isAdult = item.age_category === 3 || div === 'maniax' || div === 'girls' ||
-                        item.age_category_string === 'adult';
+        const isAdult = (item.age_category === 1 || item.age_category_string === 'general') ? false : true;
 
         const genres = (item.genres || []).map(g => g.name || g);
         const tags = Array.from(new Set([...(dlsiteMeta?.tags || []), ...genres]));
@@ -755,6 +756,7 @@ function isWorkMetadataChanged(oldWork, freshWork) {
   if ((oldWork.circle || '') !== (freshWork.circle || '')) return true;
   if ((oldWork.coverUrl || '') !== (freshWork.coverUrl || '')) return true;
   if ((oldWork.hasHls || false) !== (freshWork.hasHls || false)) return true;
+  if ((oldWork.isNsfw ?? true) !== (freshWork.isNsfw ?? true)) return true;
 
   const oldTags = (oldWork.tags || []).join('|');
   const newTags = (freshWork.tags || []).join('|');
