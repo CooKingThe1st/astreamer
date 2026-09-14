@@ -13,7 +13,7 @@ async function inspectTsChunk() {
       httpAgent,
       httpsAgent,
       headers: {
-        'Referer': 'https://japaneseasmr.com/',
+        'Referer': 'https://hentaiasmr.moe/',
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
       },
       responseType: 'arraybuffer'

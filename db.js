@@ -207,7 +207,68 @@ const BASE_TAG_DICT = {
   "たみやすともえ": { romaji: "Tamiyasu Tomoe", isCV: true },
   "秋野花": { romaji: "Akino Hana", isCV: true },
   "秋野かえで": { romaji: "Akino Kaede", isCV: true },
-  "陽向葵ゅか": { romaji: "Hinata Aoiyuka", isCV: true },
+  "陽向葵ゅか": { romaji: "Hinata Yuka", isCV: true },
+  "柚木つばめ": { romaji: "Yuzuki Tsubame", isCV: true },
+  "大山チロル": { romaji: "Oyama Chiroru", isCV: true },
+  "涼花みなせ": { romaji: "Suzuka Minase", isCV: true },
+  "御子柴泉": { romaji: "Mikoshiba Izumi", isCV: true },
+  "餅梨あむ": { romaji: "Mochinashi Amu", isCV: true },
+  "逢坂成美": { romaji: "Osaka Narumi", isCV: true },
+  "桜音のん": { romaji: "Sakurane Non", isCV: true },
+  "山田じぇみ子": { romaji: "Yamada Jemiko", isCV: true },
+  "分倍河原シホ": { romaji: "Bubaigawara Shiho", isCV: true },
+  "みもりあいの": { romaji: "Mimori Aino", isCV: true },
+  "秋山はるる": { romaji: "Akiyama Haruru", isCV: true },
+  "浅木式": { romaji: "Asagi Shiki", isCV: true },
+  "コミック": { romaji: "Komikku", isCV: true },
+  "藤宮きせき": { romaji: "Fujimiya Kiseki", isCV: true },
+  "涼貴涼": { romaji: "Suzuki Ryou", isCV: true },
+  "天知遥": { romaji: "Amachi Haruka", isCV: true },
+  "雲八はち": { romaji: "Kumoya Hachi", isCV: true },
+  "藤村莉央": { romaji: "Fujimura Rio", isCV: true },
+  "西瓜すいか": { romaji: "Suika Suika", isCV: true },
+  "恋鈴桃歌": { romaji: "Koisuzu Momoka", isCV: true },
+  "花杜めい": { romaji: "Hanamori Mei", isCV: true },
+  "空峰羽奈": { romaji: "Soramine Hana", isCV: true },
+  "加々美澪": { romaji: "Kagami Mio", isCV: true },
+  "高梨はなみ": { romaji: "Takanashi Hanami", isCV: true },
+  "剣崎葵": { romaji: "Kenzaki Aoi", isCV: true },
+  "乙倉ゆい": { romaji: "Otokura Yui", isCV: true },
+  "赤井リア": { romaji: "Akai Ria", isCV: true },
+  "野上菜月": { romaji: "Nogami Natsuki", isCV: true },
+  "琴音有波": { romaji: "Kotone Arina", isCV: true },
+  "鵜飼ちよ": { romaji: "Ukai Chiyo", isCV: true },
+  "篠守ゆきこ": { romaji: "Shinomori Yukiko", isCV: true },
+  "葉山真紘": { romaji: "Hayama Mahiro", isCV: true },
+  "沢野ぽぷら": { romaji: "Sawano Popura", isCV: true },
+  "小花衣こっこ": { romaji: "Kohaneko Koko", isCV: true },
+  "ありのりあ": { romaji: "Arino Ria", isCV: true },
+  "小波すず": { romaji: "Sazanami Suzu", isCV: true },
+  "夏和小": { romaji: "Natsukawako", isCV: true },
+  "美空なつひ": { romaji: "Misora Natsuhi", isCV: true },
+  "春乃いろは": { romaji: "Haruno Iroha", isCV: true },
+  "和央きりか": { romaji: "Wao Kirika", isCV: true },
+  "猫村ゆき": { romaji: "Nekomura Yuki", isCV: true },
+  "白砂沙帆": { romaji: "Shirasu Saho", isCV: true },
+  "陽月ひかり": { romaji: "Hizuki Hikari", isCV: true },
+  "羽鳥まりえ": { romaji: "Hatori Marie", isCV: true },
+  "星咲イリア": { romaji: "Hoshizaki Iria", isCV: true },
+  "有栖川みや美": { romaji: "Arisugawa Miyabi", isCV: true },
+  "百千るか": { romaji: "Momochi Ruka", isCV: true },
+  "犬飼あお": { romaji: "Inukai Ao", isCV: true },
+  "水瀬沙季": { romaji: "Minase Saki", isCV: true },
+  "伊ヶ崎綾香": { romaji: "Igasaki Ayaka", isCV: true },
+  "餅月ひまり": { romaji: "Mochizuki Himari", isCV: true },
+  "藍沢夏癒": { romaji: "Aizawa Natsu", isCV: true },
+  "八ッ橋しなもん": { romaji: "Yatsuhashi Shinamon", isCV: true },
+  "夜乃ネネ": { romaji: "Yoruno Nene", isCV: true },
+  "天海あずさ": { romaji: "Amami Azusa", isCV: true },
+  "七海こころ": { romaji: "Nanami Kokoro", isCV: true },
+  "恋羽ひより": { romaji: "Koihane Hiyori", isCV: true },
+  "綾瀬あかり": { romaji: "Ayase Akari", isCV: true },
+  "葵ゆり": { romaji: "Aoi Yuri", isCV: true },
+  "神代麻耶": { romaji: "Kamishiro Maya", isCV: true },
+  "真宮ゆず": { romaji: "Mamiya Yuzu", isCV: true },
   "音霊魂子": { romaji: "Onrei Tamako", isCV: true },
   "猫舐つな": { romaji: "Nekoname Tsuna", isCV: true },
   "桃山いおん": { romaji: "Momoyama Ion", isCV: true },
@@ -230,11 +291,7 @@ const BASE_TAG_DICT = {
   "薄井友里": { romaji: "Usui Yuri", isCV: true },
   "小原好美": { romaji: "Kohara Konomi", isCV: true },
   "竹達彩奈": { romaji: "Taketatsu Ayana", isCV: true },
-  "みもりあいの": { romaji: "Mimori Aino", isCV: true },
-  "桜音のん": { romaji: "Sakurane Non", isCV: true },
-  "逢坂成美": { romaji: "Oosaka Narumi", isCV: true },
   "水純なな歩": { romaji: "Mizujun Nanaho", isCV: true },
-  "空峰羽奈": { romaji: "Soramine Hana", isCV: true },
   "こまる": { romaji: "Komaru", isCV: true },
   "佐倉綾音": { romaji: "Sakura Ayane", isCV: true },
   "鬼頭明里": { romaji: "Kitou Akari", isCV: true },
@@ -274,7 +331,6 @@ const BASE_TAG_DICT = {
   "御手洗かりん": { romaji: "Mitarai Karin", isCV: true },
   "柚原みう": { romaji: "Yuzuhara Miu", isCV: true },
   "恋羽ここ": { romaji: "Kohane Koko", isCV: true },
-  "天知遥": { romaji: "Amachi Haruka", isCV: true },
   "羽高なる": { romaji: "Hadaka Naru", isCV: true },
   "月城まひる": { romaji: "Tsukishiro Mahiru", isCV: true },
   "蒼乃むすび": { romaji: "Aono Musubi", isCV: true },
@@ -472,14 +528,34 @@ function formatCV(cv, tagDict = BASE_TAG_DICT) {
     }
 
     let entry = (tagDict && tagDict[jaName]);
-    if (!entry && BASE_TAG_DICT && BASE_TAG_DICT[jaName]) {
-      entry = BASE_TAG_DICT[jaName];
-    }
-    if (typeof entry === 'string') {
-      entry = { romaji: entry, isCV: true };
+    const baseEntry = (BASE_TAG_DICT && BASE_TAG_DICT[jaName]);
+
+    let romaji = '';
+    if (entry) {
+      if (typeof entry === 'string') {
+        if (/[a-zA-Z]/.test(entry) && entry.toLowerCase() !== jaName.toLowerCase()) {
+          romaji = entry;
+        }
+      } else if (typeof entry === 'object') {
+        const r = entry.romaji || entry.english || '';
+        if (r && /[a-zA-Z]/.test(r) && r.toLowerCase() !== jaName.toLowerCase()) {
+          romaji = r;
+        }
+      }
     }
 
-    let romaji = (entry && (entry.romaji || entry.english)) ? (entry.romaji || entry.english) : existingRomaji;
+    if (!romaji && baseEntry) {
+      if (typeof baseEntry === 'string') {
+        romaji = baseEntry;
+      } else if (typeof baseEntry === 'object') {
+        romaji = baseEntry.romaji || baseEntry.english || '';
+      }
+    }
+
+    if (!romaji && existingRomaji) {
+      romaji = existingRomaji;
+    }
+
     if (romaji) {
       romaji = normalizeCVRomaji(jaName, romaji);
     }
@@ -502,23 +578,41 @@ function mergeTagDict(db, newTags) {
   if (translations && typeof translations === 'object') {
     for (const [ja, val] of Object.entries(translations)) {
       if (!ja || !val) continue;
+      const cleanJa = ja.trim();
+      if (!cleanJa) continue;
+
+      const base = BASE_TAG_DICT[cleanJa];
+      const existing = db.tagDict[cleanJa] || base || {};
+
       if (typeof val === 'string') {
-        const base = BASE_TAG_DICT[ja];
-        const normalized = (base && typeof base === 'object') ? base : { romaji: '', english: val };
-        if (!db.tagDict[ja] || JSON.stringify(db.tagDict[ja]) !== JSON.stringify(normalized)) {
-          db.tagDict[ja] = normalized;
+        const cleanVal = val.trim();
+        if (!cleanVal) continue;
+        const isValLatin = /[a-zA-Z]/.test(cleanVal);
+        if (!isValLatin && (existing.english || existing.romaji)) {
+          continue; // Don't overwrite existing latin translation with non-latin text
+        }
+        const updated = Object.assign({}, existing, { english: cleanVal });
+        if (JSON.stringify(db.tagDict[cleanJa]) !== JSON.stringify(updated)) {
+          db.tagDict[cleanJa] = updated;
           changed = true;
         }
       } else if (typeof val === 'object') {
-        const item = Object.assign({}, val);
-        if (item.romaji) {
-          item.romaji = normalizeCVRomaji(ja, item.romaji);
+        const item = Object.assign({}, existing);
+        if (val.isCV !== undefined) item.isCV = !!val.isCV;
+        if (typeof val.isNsfw === 'boolean') item.isNsfw = val.isNsfw;
+        
+        if (val.romaji && typeof val.romaji === 'string' && val.romaji.trim() && /[a-zA-Z]/.test(val.romaji)) {
+          item.romaji = normalizeCVRomaji(cleanJa, val.romaji.trim());
         }
-        if (item.english && (item.english === val.romaji || item.isCV)) {
+        if (val.english && typeof val.english === 'string' && val.english.trim() && /[a-zA-Z]/.test(val.english)) {
+          item.english = val.english.trim();
+        }
+        if (item.isCV && item.romaji && (!item.english || item.english === cleanJa)) {
           item.english = item.romaji;
         }
-        if (!db.tagDict[ja] || JSON.stringify(db.tagDict[ja]) !== JSON.stringify(item)) {
-          db.tagDict[ja] = item;
+
+        if (JSON.stringify(db.tagDict[cleanJa]) !== JSON.stringify(item)) {
+          db.tagDict[cleanJa] = item;
           changed = true;
         }
       }
@@ -657,6 +751,9 @@ function saveWork(work) {
     favorite: db.works[cleanRj]?.favorite || false
   };
   delete db.works[cleanRj].chapters;
+  if (db.wishlist) {
+    db.wishlist = db.wishlist.filter(w => w.rjCode !== cleanRj);
+  }
   writeDb(db);
   return db.works[cleanRj];
 }
@@ -825,8 +922,28 @@ function getAllArtists() {
   works.forEach(w => {
     const rawCv = getWorkCV(w);
     if (rawCv && rawCv !== 'N/A') {
-      const cvList = rawCv.split(/[,、/&＋+;・\n|]/).map(s => cleanCVName(s)).filter(Boolean);
-      Array.from(new Set(cvList)).forEach(cv => {
+      const cvParts = rawCv.split(/[,、;&\n]/).map(s => s.trim()).filter(Boolean);
+      const extractedCvs = [];
+      for (const part of cvParts) {
+        let ja = '';
+        const bracketMatch = part.match(/【([^】]+)】|（([^）]+)）|\(([^)]+)\)|\[([^\]]+)\]/);
+        if (bracketMatch) {
+          const inside = (bracketMatch[1] || bracketMatch[2] || bracketMatch[3] || bracketMatch[4] || '').trim();
+          const outside = part.replace(bracketMatch[0], '').trim();
+          const isInsideJa = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(inside);
+          if (isInsideJa) ja = inside;
+          else ja = outside || inside;
+        } else if (part.includes('/')) {
+          const sub = part.split('/').map(x => x.trim()).filter(Boolean);
+          const jaSub = sub.find(x => /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(x));
+          ja = jaSub || sub[0];
+        } else {
+          ja = part;
+        }
+        ja = cleanCVName(ja);
+        if (ja && ja !== 'N/A') extractedCvs.push(ja);
+      }
+      Array.from(new Set(extractedCvs)).forEach(cv => {
         artistCounts[cv] = (artistCounts[cv] || 0) + 1;
       });
     }
@@ -923,6 +1040,57 @@ function removeWishlistItem(rjCode) {
   return db.wishlist;
 }
 
+function preStashWishlistItems(items) {
+  const db = readDb();
+  if (!db.wishlist) db.wishlist = [];
+  if (!db.works) db.works = {};
+  if (!Array.isArray(items) || items.length === 0) return db.wishlist;
+
+  let addedCount = 0;
+  for (const it of items) {
+    if (!it) continue;
+    let cleanRj = '';
+    let entry = {};
+    if (typeof it === 'string') {
+      const match = it.match(/(?:RJ|VJ|BJ)[ -]*([0-9]{4,10})/i) || it.match(/[0-9]{4,10}/);
+      if (match) {
+        const prefMatch = it.match(/(RJ|VJ|BJ)/i);
+        const pref = prefMatch ? prefMatch[1].toUpperCase() : 'RJ';
+        cleanRj = pref + (match[1] || match[0]);
+      }
+    } else if (typeof it === 'object') {
+      cleanRj = (it.rjCode || it.rj || it.id || '').toUpperCase().trim();
+      entry = it;
+    }
+
+    if (!cleanRj) continue;
+    if (db.works[cleanRj]) continue;
+
+    const item = {
+      rjCode: cleanRj,
+      title: entry.title || `Work ${cleanRj}`,
+      coverUrl: entry.coverUrl || '',
+      cv: entry.cv || '',
+      circle: entry.circle || '',
+      reason: entry.reason || 'Pending batch crawler / audio stream',
+      addedAt: entry.addedAt || new Date().toISOString()
+    };
+
+    const idx = db.wishlist.findIndex(w => w.rjCode === cleanRj);
+    if (idx >= 0) {
+      db.wishlist[idx] = { ...db.wishlist[idx], ...item };
+    } else {
+      db.wishlist.unshift(item);
+    }
+    addedCount++;
+  }
+
+  if (addedCount > 0) {
+    writeDb(db);
+  }
+  return db.wishlist;
+}
+
 function clearWishlist() {
   const db = readDb();
   db.wishlist = [];
@@ -951,6 +1119,7 @@ module.exports = {
   clearHistory,
   getWishlist,
   saveWishlistItem,
+  preStashWishlistItems,
   removeWishlistItem,
   clearWishlist,
   readDb,

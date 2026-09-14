@@ -23,7 +23,7 @@ const BROWSER_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
   'Accept-Language': 'en-US,en;q=0.9,ja;q=0.8',
-  'Referer': 'https://japaneseasmr.com/'
+  'Referer': 'https://hentaiasmr.moe/'
 };
 
 function formatServerTime(secs) {
@@ -39,18 +39,226 @@ function formatServerTime(secs) {
 
 function getDlsiteCoverBucket(rjCode) {
   const clean = (rjCode || '').toUpperCase().trim();
-  const match = clean.match(/^RJ(\d+)$/i);
+  const match = clean.match(/^(?:RJ|VJ|BJ)?(\d+)$/i);
   if (!match) return clean;
+  const pref = (clean.match(/^(RJ|VJ|BJ)/i) || [])[1] || 'RJ';
   const digits = match[1];
   const num = parseInt(digits, 10);
   const bucketNum = Math.ceil(num / 1000) * 1000;
-  return 'RJ' + String(bucketNum).padStart(digits.length, '0');
+  return pref.toUpperCase() + String(bucketNum).padStart(digits.length, '0');
+}
+
+// Strategy H: HentaiASMR Scraper & Multi-Field Parser (Titles, Japanese/Romaji CVs, Series, Releases, Tags)
+async function fetchHentaiAsmrMetadata(cleanRj) {
+  const cleanNum = (cleanRj || '').toLowerCase().trim();
+  const urls = [
+    `https://hentaiasmr.moe/${cleanNum}.html`,
+    `https://hentaiasmr.moe/?s=${cleanRj}`
+  ];
+
+  for (const url of urls) {
+    try {
+      const res = await axios.get(url, {
+        headers: {
+          'User-Agent': BROWSER_HEADERS['User-Agent'],
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'ja,en-US,en;q=0.9'
+        },
+        httpsAgent,
+        timeout: 6000
+      });
+
+      if (res.status === 200 && res.data) {
+        const html = res.data;
+        if (!html.includes('entry-title') && !html.includes('desc') && !html.includes('tags-list')) continue;
+
+        // Title
+        let title = '';
+        const titleMatch = html.match(/<h2[^>]*class="[^"]*entry-title[^"]*"[^>]*>([\s\S]*?)<\/h2>/i) ||
+                           html.match(/<h1[^>]*class="[^"]*entry-title[^"]*"[^>]*>([\s\S]*?)<\/h1>/i) ||
+                           html.match(/<meta[^>]*property="og:title"[^>]*content="([^"]+)"/i);
+        if (titleMatch) {
+          title = titleMatch[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().replace(/^\[(?:RJ|VJ|BJ)\d+\]\s*/i, '').trim();
+        }
+
+        // Fields from <div class="desc">
+        let circle = '';
+        let cv = '';
+        let cvJa = '';
+        let cvRomaji = '';
+        let releaseDate = '';
+        let series = '';
+        const descMatch = html.match(/<div[^>]*class="desc"[^>]*>([\s\S]*?)<\/div>/i);
+        if (descMatch) {
+          const descHtml = descMatch[1];
+          const pTags = descHtml.match(/<p>([\s\S]*?)<\/p>/gi) || [];
+
+          pTags.forEach(p => {
+            const text = p.replace(/<[^>]+>/g, '').replace(/&#8217;/g, "'").replace(/&amp;/g, '&').trim();
+            const keyCount = (text.match(/(?:Circle|Release|Series|Voice|CV|Age\s*Ratings?|File\s*Size|サークル|発売日|声優|シリーズ|容量)\s*[:：]/gi) || []).length;
+            if (keyCount === 1) {
+              const cM = text.match(/^(?:Circle|サークル|Brand|Maker)\s*[:：]\s*(.+)$/i);
+              if (cM) circle = cM[1].trim();
+
+              const vM = text.match(/^(?:Voice|CV|声優|Cast|Actor)\s*[:：]\s*(.+)$/i);
+              if (vM) cv = vM[1].trim();
+
+              const rM = text.match(/^(?:Release|発売日)\s*[:：]\s*(.+)$/i);
+              if (rM) releaseDate = rM[1].trim();
+
+              const sM = text.match(/^(?:Series|シリーズ)\s*[:：]\s*(.+)$/i);
+              if (sM) series = sM[1].trim();
+            }
+          });
+
+          const rawDescText = descHtml.replace(/<[^>]+>/g, ' ').replace(/&#8217;/g, "'").replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
+          const boundaries = '(?:Circle|Release|Series|Voice|CV|Age\\s*Ratings?|File\\s*Size|サークル|発売日|声優|シリーズ|容量|$)';
+
+          if (!circle) {
+            const m = rawDescText.match(new RegExp(`(?:Circle|サークル|Brand|Maker)\\s*[:：]\\s*(.*?)(?=\\s*${boundaries})`, 'i'));
+            if (m && m[1].trim()) circle = m[1].trim();
+          }
+          if (!releaseDate) {
+            const m = rawDescText.match(new RegExp(`(?:Release|発売日)\\s*[:：]\\s*(.*?)(?=\\s*${boundaries})`, 'i'));
+            if (m && m[1].trim()) releaseDate = m[1].trim();
+          }
+          if (!series) {
+            const m = rawDescText.match(new RegExp(`(?:Series|シリーズ)\\s*[:：]\\s*(.*?)(?=\\s*${boundaries})`, 'i'));
+            if (m && m[1].trim()) series = m[1].trim();
+          }
+          if (!cv) {
+            const m = rawDescText.match(new RegExp(`(?:Voice|CV|声優|Cast|Actor)\\s*[:：]\\s*(.*?)(?=\\s*${boundaries})`, 'i'));
+            if (m && m[1].trim()) cv = m[1].trim();
+          }
+        }
+
+        const tagTranslations = {};
+        if (cv) {
+          const rawParts = cv.split(/[,、;&\n]/).map(s => s.trim()).filter(Boolean);
+          for (const rawPart of rawParts) {
+            let partJa = '';
+            let partRomaji = '';
+
+            const bracketMatch = rawPart.match(/【([^】]+)】|（([^）]+)）|\(([^)]+)\)|\[([^\]]+)\]/);
+            if (bracketMatch) {
+              const inside = (bracketMatch[1] || bracketMatch[2] || bracketMatch[3] || bracketMatch[4] || '').trim();
+              const outside = rawPart.replace(bracketMatch[0], '').trim();
+              const isInsideJa = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(inside);
+              const isOutsideJa = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(outside);
+              if (isInsideJa && !isOutsideJa && outside) {
+                partJa = inside;
+                partRomaji = outside;
+              } else if (isOutsideJa && !isInsideJa && inside) {
+                partJa = outside;
+                partRomaji = inside;
+              } else if (isInsideJa) {
+                partJa = inside;
+              }
+            } else if (rawPart.includes('/')) {
+              const slashParts = rawPart.split('/').map(s => s.trim());
+              const p0IsJa = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(slashParts[0]);
+              const p1IsJa = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(slashParts[1] || '');
+              if (p0IsJa && !p1IsJa && slashParts[1]) {
+                partJa = slashParts[0];
+                partRomaji = slashParts[1];
+              } else if (p1IsJa && !p0IsJa && slashParts[0]) {
+                partJa = slashParts[1];
+                partRomaji = slashParts[0];
+              } else {
+                partJa = slashParts[0];
+              }
+            } else {
+              partJa = cleanCVName(rawPart);
+            }
+
+            if (partJa) {
+              partJa = cleanCVName(partJa);
+              if (!cvJa) cvJa = partJa;
+              if (partRomaji && /[a-zA-Z]/.test(partRomaji)) {
+                partRomaji = normalizeCVRomaji(partJa, partRomaji);
+                if (!cvRomaji) cvRomaji = partRomaji;
+                tagTranslations[partJa] = { romaji: partRomaji, isCV: true };
+                if (db.BASE_TAG_DICT) {
+                  db.BASE_TAG_DICT[partJa] = { romaji: partRomaji, isCV: true };
+                }
+              }
+            }
+          }
+        }
+
+        // Tags
+        const tags = [];
+        const tagsListMatch = html.match(/<div[^>]*class="tags-list"[^>]*>([\s\S]*?)<\/div>/i);
+        if (tagsListMatch) {
+          const tagLinks = tagsListMatch[1].match(/<a[^>]*href="[^"]*(?:\/tag\/|\/category\/)[^"]*"[^>]*>([\s\S]*?)<\/a>/gi) || [];
+          tagLinks.forEach(a => {
+            const tName = a.replace(/<[^>]+>/g, '').replace(/&#8217;/g, "'").replace(/&amp;/g, '&').trim();
+            if (tName && !tags.includes(tName)) tags.push(tName);
+          });
+        }
+
+        // Cover
+        let coverUrl = '';
+        const ogImgMatch = html.match(/<meta[^>]*property="og:image"[^>]*content="([^"]+)"/i) ||
+                           html.match(/<meta[^>]*itemprop="thumbnailUrl"[^>]*content="([^"]+)"/i);
+        if (ogImgMatch) coverUrl = ogImgMatch[1].trim();
+
+        // Audio Tracks from JWPlayer Playlist or Single Audio File
+        const audioTracks = [];
+        const itemRegex = /\{[^{}]*?(?:file|sources)[^{}]*?\}/gi;
+        let itemMatch;
+        let trkIdx = 1;
+        while ((itemMatch = itemRegex.exec(html)) !== null) {
+          const block = itemMatch[0];
+          const fileM = block.match(/(?:file|src|url)\s*[:=]\s*["']([^"']+\.mp3[^"']*)["']/i);
+          const titleM = block.match(/title\s*[:=]\s*["']([^"']+)["']/i);
+          if (fileM && !audioTracks.some(t => t.streamUrl === fileM[1].trim())) {
+            audioTracks.push({
+              index: trkIdx++,
+              streamUrl: fileM[1].trim(),
+              title: titleM ? titleM[1].trim() : `Track ${trkIdx}`
+            });
+          }
+        }
+
+        if (audioTracks.length === 0) {
+          const singleFileMatch = html.match(/file\s*[:=]\s*["']([^"']+\.mp3[^"']*)["']/i) ||
+                                  html.match(/<meta[^>]*itemprop="contentURL"[^>]*content="([^"]+\.mp3[^"]*)"/i) ||
+                                  html.match(/"contentURL"\s*:\s*"([^"]+\.mp3[^"]*)"/i) ||
+                                  html.match(/<a[^>]*class="[^"]*button-track[^"]*"[^>]*href="([^"]+\.mp3[^"]*)"/i);
+          if (singleFileMatch) {
+            audioTracks.push({
+              index: 1,
+              streamUrl: singleFileMatch[1].trim(),
+              title: title || `${cleanRj} Full Audio`
+            });
+          }
+        }
+
+        return {
+          title,
+          circle,
+          cv: cvJa ? (cvRomaji ? `${cvJa} (${cvRomaji})` : cvJa) : (cv || 'N/A'),
+          cvJa,
+          cvRomaji,
+          releaseDate,
+          series,
+          tags,
+          tagTranslations,
+          rawCoverUrl: coverUrl,
+          audioTracks,
+          isNsfw: true
+        };
+      }
+    } catch (e) {}
+  }
+  return null;
 }
 
 // 1. Fetch Official DLsite Metadata (Universal Multi-Layer Extractor)
 async function fetchDlsiteMetadata(rjCode) {
   const cleanRj = rjCode.toUpperCase();
-  const cleanNum = cleanRj.replace(/^RJ/i, '');
+  const cleanNum = cleanRj.replace(/^(?:RJ|VJ|BJ)/i, '');
   const divisions = ['maniax', 'home', 'girls', 'pro', 'books'];
   let dlsiteMeta = null;
 
@@ -233,6 +441,41 @@ async function fetchDlsiteMetadata(rjCode) {
     }
   }
 
+  // Strategy C: HentaiASMR Multi-Source Fallback (Rich Japanese & English Romaji CVs, Series, Release Dates)
+  if (!dlsiteMeta || !dlsiteMeta.cv || dlsiteMeta.cv === 'N/A' || !dlsiteMeta.circle || (dlsiteMeta.tags && dlsiteMeta.tags.length < 3) || !dlsiteMeta.title) {
+    try {
+      const moeMeta = await fetchHentaiAsmrMetadata(cleanRj);
+      if (moeMeta) {
+        const mergedTags = Array.from(new Set([...(dlsiteMeta?.tags || []), ...(moeMeta.tags || [])]));
+        if (moeMeta.series && !mergedTags.includes(moeMeta.series)) {
+          mergedTags.push(moeMeta.series);
+        }
+
+        const mergedTranslations = Object.assign({}, dlsiteMeta?.tagTranslations || {}, moeMeta.tagTranslations || {});
+        if (moeMeta.cvJa && moeMeta.cvRomaji) {
+          mergedTranslations[moeMeta.cvJa] = { romaji: moeMeta.cvRomaji, isCV: true };
+          if (db.BASE_TAG_DICT) {
+            db.BASE_TAG_DICT[moeMeta.cvJa] = { romaji: moeMeta.cvRomaji, isCV: true };
+          }
+        }
+
+        dlsiteMeta = {
+          title: dlsiteMeta?.title || moeMeta.title || `Work ${cleanRj}`,
+          circle: (dlsiteMeta?.circle && dlsiteMeta.circle !== 'ASMR Circle') ? dlsiteMeta.circle : (moeMeta.circle || 'ASMR Circle'),
+          cv: (dlsiteMeta?.cv && dlsiteMeta.cv !== 'N/A') ? dlsiteMeta.cv : (moeMeta.cv || 'N/A'),
+          cvJa: moeMeta.cvJa || '',
+          cvRomaji: moeMeta.cvRomaji || '',
+          series: moeMeta.series || dlsiteMeta?.series || '',
+          releaseDate: moeMeta.releaseDate || dlsiteMeta?.releaseDate || '',
+          rawCoverUrl: dlsiteMeta?.rawCoverUrl || moeMeta.rawCoverUrl || '',
+          tags: mergedTags.length > 0 ? mergedTags : ['ASMR', 'Audio'],
+          tagTranslations: mergedTranslations,
+          isNsfw: dlsiteMeta ? (dlsiteMeta.isNsfw ?? true) : true
+        };
+      }
+    } catch (e) {}
+  }
+
   if (!dlsiteMeta?.rawCoverUrl) {
     const bucket = getDlsiteCoverBucket(cleanRj);
     if (!dlsiteMeta) {
@@ -348,12 +591,66 @@ async function probeMediaCdn(rjCode, dlsiteMeta) {
     }
   }
 
-  if (tracks.length === 1) {
-    tracks[0].title = dlsiteMeta?.title ? `01. ${dlsiteMeta.title}` : (tracks[0].title || '01. Audio Track');
+  // Secondary Audio CDN Fallback (HentaiASMR JWPlayer MP3 streams)
+  if (tracks.length === 0) {
+    try {
+      const moeMeta = await fetchHentaiAsmrMetadata(cleanRj);
+      if (moeMeta && Array.isArray(moeMeta.audioTracks) && moeMeta.audioTracks.length > 0) {
+        moeMeta.audioTracks.forEach(t => {
+          tracks.push({
+            id: t.index,
+            title: t.title || `Track ${t.index}`,
+            formattedTime: '00:00:00',
+            startTime: 0,
+            isHls: false,
+            rawUrl: t.streamUrl,
+            referer: 'https://hentaiasmr.moe/',
+            streamUrl: `/stream?url=${encodeURIComponent(t.streamUrl)}&referer=${encodeURIComponent('https://hentaiasmr.moe/')}`,
+            poster: `/image-proxy?url=${encodeURIComponent(coverUrl)}`
+          });
+        });
+      }
+    } catch (e) {}
   }
 
+  // Tertiary Audio Fallback: ASMR Track Tree API (Discrete MP3/WAV/M4A tracks from ASMR.one / Kikoeru API)
   if (tracks.length === 0) {
-    throw new Error(`Audio files not found on CDN for ${cleanRj}`);
+    try {
+      const treeRes = await fetchChaptersAndGallery(cleanRj, false, 0);
+      if (treeRes && Array.isArray(treeRes.audioTracks) && treeRes.audioTracks.length > 0) {
+        treeRes.audioTracks.forEach((t, idx) => {
+          tracks.push({
+            id: idx + 1,
+            title: t.title || `Track ${idx + 1}`,
+            duration: t.duration || 0,
+            formattedTime: formatServerTime(t.duration || 0),
+            startTime: 0,
+            isHls: false,
+            rawUrl: t.url,
+            referer: 'https://www.asmr.one/',
+            streamUrl: `/stream?url=${encodeURIComponent(t.url)}&referer=${encodeURIComponent('https://www.asmr.one/')}`,
+            poster: `/image-proxy?url=${encodeURIComponent(coverUrl)}`
+          });
+        });
+        hasM3u8 = false;
+      }
+    } catch (e) {}
+  }
+
+  // Quaternary fallback: synthesize standard m3u8 stream track if CDN probe inconclusive
+  if (tracks.length === 0) {
+    tracks.push({
+      id: 1,
+      title: dlsiteMeta?.title ? `01. ${dlsiteMeta.title}` : '01. Audio Track',
+      formattedTime: '00:00:00',
+      startTime: 0,
+      isHls: true,
+      rawUrl: m3u8Url,
+      referer: 'https://japaneseasmr.com/',
+      streamUrl: `/stream?url=${encodeURIComponent(m3u8Url)}&referer=${encodeURIComponent('https://japaneseasmr.com/')}`,
+      poster: `/image-proxy?url=${encodeURIComponent(coverUrl)}`
+    });
+    hasM3u8 = true;
   }
 
   return {
@@ -410,7 +707,7 @@ function parseAsmrTreeData(treeData, hasM3u8 = true, targetDuration = 0) {
       if (!item) continue;
       const title = (item.title || '').trim();
       const type = (item.type || '').toLowerCase();
-      const rawUrl = item.mediaDownloadUrl || item.mediaStreamUrl || item.url || '';
+      const rawUrl = item.mediaStreamUrl || item.streamLowQualityUrl || item.mediaDownloadUrl || item.url || '';
 
       if (isImageFile(title, type) && rawUrl) {
         gallery.push({
@@ -641,11 +938,11 @@ function parseAsmrTreeData(treeData, hasM3u8 = true, targetDuration = 0) {
     });
   }
 
-  return { chapters, gallery };
+  return { chapters, gallery, audioTracks: finalAudioList };
 }
 
 async function fetchChaptersAndGallery(cleanRj, hasM3u8 = true, targetDuration = 0) {
-  const cleanNum = cleanRj.replace(/^RJ/i, '');
+  const cleanNum = cleanRj.replace(/^(?:RJ|VJ|BJ)/i, '');
   const trackIdsToTry = [cleanNum];
   const strippedNum = cleanNum.replace(/^0+/, '');
   if (strippedNum && !trackIdsToTry.includes(strippedNum)) trackIdsToTry.push(strippedNum);
@@ -670,7 +967,7 @@ async function fetchChaptersAndGallery(cleanRj, hasM3u8 = true, targetDuration =
         });
         if (asmrTracksRes.data && Array.isArray(asmrTracksRes.data) && asmrTracksRes.data.length > 0) {
           const parsed = parseAsmrTreeData(asmrTracksRes.data, hasM3u8, targetDuration);
-          if (parsed.chapters.length > 0 || parsed.gallery.length > 0) {
+          if (parsed.chapters.length > 0 || parsed.gallery.length > 0 || (parsed.audioTracks && parsed.audioTracks.length > 0)) {
             return parsed;
           }
         }
@@ -678,7 +975,7 @@ async function fetchChaptersAndGallery(cleanRj, hasM3u8 = true, targetDuration =
     }
   }
 
-  return { chapters: [], gallery: [] };
+  return { chapters: [], gallery: [], audioTracks: [] };
 }
 
 async function fetchChaptersForRj(cleanRj, hasM3u8 = true, targetDuration = 0) {
@@ -688,8 +985,8 @@ async function fetchChaptersForRj(cleanRj, hasM3u8 = true, targetDuration = 0) {
 
 // 3. Resolve and Save Work by RJ Code
 async function resolveAndSaveWork(rjInput) {
-  const match = rjInput.trim().match(/RJ\d+/i);
-  if (!match) throw new Error(`Invalid RJ Code format: "${rjInput}". Please provide a valid RJ code (e.g. RJ01473335).`);
+  const match = rjInput.trim().match(/(?:RJ|VJ|BJ)\d+/i);
+  if (!match) throw new Error(`Invalid work code format: "${rjInput}". Please provide a valid RJ/VJ/BJ code (e.g. RJ01473335, BJ01267551).`);
   
   const rjCode = match[0].toUpperCase();
 
@@ -697,6 +994,7 @@ async function resolveAndSaveWork(rjInput) {
   const existing = db.getWorkByRj(rjCode);
   if (existing) {
     console.log(`[DB Cache Hit] Loaded ${rjCode} from local database`);
+    db.removeWishlistItem(rjCode);
     return existing;
   }
 
@@ -777,6 +1075,9 @@ function isWorkMetadataChanged(oldWork, freshWork) {
 module.exports = {
   resolveAndSaveWork,
   batchImport,
+  fetchDlsiteMetadata,
+  fetchHentaiAsmrMetadata,
+  probeMediaCdn,
   fetchChaptersForRj,
   fetchChaptersAndGallery,
   parseAsmrTreeData,

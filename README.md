@@ -53,6 +53,14 @@
 * **🏷️ Self-Learning Bilingual Tag Dictionary**:
   * JapaneseASMR-style dynamic tag formatting (e.g. `耳かき (Ear Cleaning)`).
   * Automatically fetches and accumulates English translations from the ASMR.one API into Cloudflare KV with zero-write diff protection.
+* **🌐 Robust Multi-Source Metadata & Stream Pipeline**:
+  * **Layered Extraction**: Cascades across **ASMR.one Public API** ➔ **DLsite Official Product APIs** ➔ **DLsite HTML Store Pages** ➔ **HentaiASMR (`hentaiasmr.moe`) Fallback Engine**.
+  * **Adaptive Audio Resolving**: Supports both multi-track playlist arrays and single merged continuous session audio streams (e.g. `RJ01668482`).
+  * **Automatic Bilingual Voice Actors**: Automatically extracts Japanese CV names with native English/Romaji romanizations (e.g. `雲八はち / Hachi Kumoya`), eliminating translation lookups.
+  * **Series & Release Tracking**: Automatically indexes work series franchises (e.g. `しつけあい！`) and release dates into the tag explorer.
+* **📥 Background Batch Ingestion & Dock Mode**:
+  * **Non-Blocking Ingestion**: Batch imports can be minimized to a floating background dock (`🗕 Background`), letting you browse the library, play audio, or manage playlists without interruption.
+  * **Tab Protection**: Integrated `beforeunload` warning prevents accidental page refresh or tab closure while an import is in flight.
 
 ---
 
@@ -65,6 +73,10 @@ aStreamer dynamically detects and routes stream playback based on the work's int
 | **HLS Multi-Track (Master M3U8)** | Master stream playlist containing segmented audio streams | Proxied through `/hls-proxy` with live TS segment rewrite for zero-buffering playback. |
 | **Multi-Track Audio (Direct)** | Raw multi-file directory with individual track audio files | Direct proxy streaming through `/stream-proxy` with seamless track queueing and chapter jumps. |
 | **Single Full Session Audio** | Long single continuous audio track | Integrated chapter timestamp jump parser with interactive chapter markers. |
+
+> [!NOTE]
+> **Secondary Stream & Download Provider Availability (Planned/Backup)**:
+> The metadata ingestion layer on `hentaiasmr.moe` parses direct JWPlayer MP3 playlists (`https://cdn.hentaiasmr.moe/mf/{id}/{track}.mp3`) and direct Mega zip mirrors. These endpoints are verified and ready for future dual-CDN failover routing if primary HLS streams are ever unavailable.
 
 ---
 

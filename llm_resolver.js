@@ -27,7 +27,7 @@ PRINCIPLES (not exceptions):
    - Do NOT split into separate words
    - Use the CORRECT reading (not obvious on'yomi/kun'yomi)
    - Example: 音霊魂子 → "Onrei Tamako" (NOT "Otodama Tamako")
-   - Example: 陽向葵ゅか → "Hinata Aoiyuka" (one full name)
+   - Example: 陽向葵ゅか → "Hinata Yuka" (one full name)
    - Example: 秋野かえで → "Akino Kaede"
    - Output the Rōmaji name in BOTH columns
 
@@ -235,8 +235,103 @@ function formatAsCsv(translationDict) {
   return csvRows.join('\n');
 }
 
+const CLASSIFY_SYSTEM_PROMPT = `You are an expert specialist in Japanese doujin culture, ASMR content rating, and age-appropriateness classification.
+Your task is to classify Japanese tags/genres into Safe For Work (SFW / All-Ages) vs. Not Safe For Work (NSFW / Adult / 18+ / Ecchi).
+
+CLASSIFICATION RULES:
+1. **Mark as NSFW (true)**:
+   - Any explicit sexual acts, sexual positions, sexual intercourse (e.g., 手コキ, 中出し, セックス, 騎乗位, フェラ, クンニ, パイズリ, イラマチオ)
+   - Bodily fluids and ejaculation (e.g., 射精, ザーメン, 潮吹き, 搾精, 精飲, 放尿, 飲尿)
+   - Erotic stimulation, sexual pleasure, and orgasm control (e.g., オナサポ, 乳首責め, 絶頂, 連続絶頂, 快楽堕ち, メス堕ち, オホ声, 寸止め, オナホ)
+   - Adult tropes, fetishes, erotic corruptions, and NTR (e.g., 痴女, 淫乱, 発情, 媚薬, 触手, 淫紋, 寝取られ, 寝取り, 寝取らせ, 悪堕ち, 肉便器)
+   - BDSM, bondage, extreme sadistic/masochistic erotic play (e.g., 拘束, 調教, BDSM)
+   - General explicit 18+ terms (e.g., 18禁, R18, NSFW, エロ)
+
+2. **Mark as SFW (false)**:
+   - Wholesome audio triggers & binaural recording techniques (e.g., ASMR, バイノーラル, 立体音響, KU100, ダミヘ, 耳かき, 耳掃除, 吐息, 囁き, タッピング, 咀嚼音, 水音, 雨音, 炭酸, 心音, シャンプー, マッサージ)
+   - Wholesome/Comforting themes and non-sexual roleplay (e.g., 癒やし, 甘やかし, 全肯定, 添い寝, 睡眠導入, 安眠, 朗読, ドラマCD, シチュエーションボイス)
+   - General character archetypes when non-erotic (e.g., メイド, お姉さん, 幼馴染, 後輩, 先輩, 妹, エルフ, 獣耳, 猫耳, 巫女, ギャル)
+   - Wholesome romance and non-explicit sweetness (e.g., 純愛, 告白, デート)
+
+Output strictly in JSON format where the key is the exact original Japanese tag and value is boolean:
+{
+  "tag_1": true,
+  "tag_2": false
+}`;
+
+/**
+ * Classify a batch of tags as NSFW (true) or SFW (false) using OpenRouter LLM
+ */
+async function classifyTagsWithLLM(tags) {
+  if (!Array.isArray(tags) || tags.length === 0) return {};
+
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    throw new Error("OPENROUTER_API_KEY is not set in environment or .env file.");
+  }
+
+  try {
+    const res = await axios.post('https://openrouter.ai/api/v1/chat/completions', {
+      model: 'deepseek/deepseek-v3.2',
+      messages: [
+        { role: 'system', content: CLASSIFY_SYSTEM_PROMPT },
+        { role: 'user', content: JSON.stringify(tags) }
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.1,
+      max_tokens: 4096
+    }, {
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://astreamer.local',
+        'X-Title': 'aStreamer Tag Classifier'
+      },
+      timeout: 45000
+    });
+
+    const content = res.data?.choices?.[0]?.message?.content;
+    if (!content) {
+      throw new Error("Empty response received from OpenRouter LLM");
+    }
+
+    let cleaned = String(content).replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+    const jsonBlockMatch = cleaned.match(/\{[\s\S]*\}/);
+    if (jsonBlockMatch) cleaned = jsonBlockMatch[0];
+
+    let parsed = {};
+    try {
+      parsed = JSON.parse(cleaned);
+    } catch (e) {
+      const extracted = {};
+      const boolRegex = /"([^"]+)"\s*:\s*(true|false)/g;
+      let match;
+      while ((match = boolRegex.exec(content)) !== null) {
+        extracted[match[1]] = match[2] === 'true';
+      }
+      if (Object.keys(extracted).length > 0) {
+        parsed = extracted;
+      } else {
+        throw new Error(`Invalid JSON: ${e.message}\nRaw content: ${content.slice(0, 300)}`);
+      }
+    }
+
+    const results = {};
+    for (const [k, v] of Object.entries(parsed)) {
+      results[k] = Boolean(v);
+    }
+    return results;
+  } catch (err) {
+    const errorMsg = err.response?.data?.error?.message || err.message;
+    console.error(`[LLM Classifier Error] ${errorMsg}`);
+    throw new Error(errorMsg);
+  }
+}
+
 module.exports = {
   translateTagsWithLLM,
+  classifyTagsWithLLM,
   formatAsCsv,
   getApiKey
 };
+

@@ -17,7 +17,7 @@ PRINCIPLES (not exceptions):
 1. **Voice Actor Names** (CVs / seiyuu):
    - Read the full name as a single unit
    - Do not split into separate words
-   - Example: 陽向葵ゅか → "Hinata Aoiyuka" (one name)
+   - Example: 陽向葵ゅか → "Hinata Yuka" (one name)
    - Example: 秋野かえで → "Akino Kaede"
    - Output the Rōmaji name in BOTH columns (no English translation needed)
 
