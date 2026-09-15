@@ -22,7 +22,7 @@ const http = require('http');
 const https = require('https');
 
 const db = require('./db');
-const { resolveAndSaveWork, batchImport, fetchChaptersForRj, fetchChaptersAndGallery, isWorkMetadataChanged } = require('./scraper');
+const { resolveAndSaveWork, batchImport, fetchChaptersForRj, fetchChaptersAndGallery, resolveLazyWorkAudio, isWorkMetadataChanged } = require('./scraper');
 
 const httpAgent = new http.Agent({ family: 4 });
 const httpsAgent = new https.Agent({ family: 4 });
@@ -275,11 +275,33 @@ app.post('/api/library/resolve', checkAuth, async (req, res) => {
 
   try {
     const work = await resolveAndSaveWork(rjCode);
-    res.json({ success: true, work });
+    res.json({ success: true, work, moeDiagnostic: work?.moeDiagnostic || null });
   } catch (err) {
     console.error(`[Resolve Error] ${rjCode}:`, err.message);
     res.status(500).json({ error: err.message });
   }
+});
+
+// On-Demand Lazy Audio Stream Resolution
+app.post(['/api/work/:rjCode/resolve-stream', '/api/work/:rjCode/resolve'], async (req, res) => {
+  const { rjCode } = req.params;
+  const cleanRj = (rjCode || '').toUpperCase();
+  let work = db.getWorkByRj(cleanRj);
+  if (!work) return res.status(404).json({ error: 'Work not found' });
+
+  if (work.hasLazyAudio) {
+    try {
+      const resolved = await resolveLazyWorkAudio(work);
+      if (resolved && (!resolved.hasLazyAudio || (resolved.tracks && resolved.tracks.length > 0 && !resolved.tracks[0].isLazyPlaceholder))) {
+        db.saveWork(resolved);
+        work = resolved;
+      }
+    } catch (e) {
+      console.error(`[Resolve Lazy Stream Error] ${cleanRj}:`, e.message);
+    }
+  }
+
+  return res.json({ success: true, work });
 });
 
 // Batch Import (Array of RJ codes or multiline string)
@@ -911,9 +933,10 @@ const INDEX_HTML = `<!DOCTYPE html>
       --bg-card: #12131a;
       --bg-card-hover: #181a24;
       --border: rgba(255, 255, 255, 0.08);
-      --accent: #ff3366;
-      --accent-hover: #e02456;
-      --accent-glow: rgba(255, 51, 102, 0.35);
+      --accent: #ff7a00;
+      --accent-hover: #ea6c00;
+      --accent-glow: rgba(255, 122, 0, 0.35);
+      --accent-gradient: linear-gradient(135deg, #ff7a00, #ff9500);
       --text-main: #f3f4f6;
       --text-muted: #9ca3af;
       --sidebar-w: 240px;
@@ -941,7 +964,7 @@ const INDEX_HTML = `<!DOCTYPE html>
       z-index: 50;
     }
     .logo-area { display: flex; align-items: center; gap: 10px; padding: 0 10px; margin-bottom: 32px; cursor: pointer; }
-    .logo-icon { width: 38px; height: 38px; background: linear-gradient(135deg, #0284c7, #06b6d4); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 1.35rem; box-shadow: 0 0 16px rgba(56, 189, 248, 0.35); flex-shrink: 0; }
+    .logo-icon { width: 38px; height: 38px; background: var(--accent-gradient, linear-gradient(135deg, #ff7a00, #ff9500)); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 1.35rem; box-shadow: 0 0 16px var(--accent-glow); flex-shrink: 0; }
     .logo-title { font-weight: 800; font-size: 1.25rem; letter-spacing: -0.02em; background: linear-gradient(90deg, #fff, #94a3b8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
     .nav-section { display: flex; flex-direction: column; gap: 4px; }
     .nav-title { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); padding: 12px 10px 6px; font-weight: 700; }
@@ -1282,6 +1305,8 @@ const INDEX_HTML = `<!DOCTYPE html>
     .btn-outline:hover { background: var(--bg-card-hover); border-color: rgba(255,255,255,0.2); }
     .btn-icon { background: var(--bg-card); border: 1px solid var(--border); color: #fff; width: 38px; height: 38px; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; font-size: 1.05rem; cursor: pointer; transition: 0.15s; }
     .btn-icon:hover { background: var(--bg-card-hover); border-color: rgba(255,255,255,0.2); }
+    @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    .spin { display: inline-block; animation: spin 1s linear infinite; }
 
     /* View Modes & Explorer Toolbar */
     .view-modes-bar {
@@ -2332,39 +2357,39 @@ const INDEX_HTML = `<!DOCTYPE html>
     <div class="modal-content" style="max-width: 640px; max-height: 84vh; overflow-y: auto;">
       <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
         <div style="display: flex; align-items: center; gap: 10px;">
-          <div style="width: 36px; height: 36px; border-radius: 10px; background: linear-gradient(135deg, #0284c7, #06b6d4); display: flex; align-items: center; justify-content: center; font-size: 1.3rem;">🐧</div>
+          <div style="width: 36px; height: 36px; border-radius: 10px; background: var(--accent-gradient, linear-gradient(135deg, #ff7a00, #ff9500)); display: flex; align-items: center; justify-content: center; font-size: 1.3rem; box-shadow: 0 0 14px var(--accent-glow);">🚀</div>
           <div>
             <h3 style="font-size: 1.3rem; font-weight: 800;">aStreamer Release Notes</h3>
-            <span style="font-size: 0.8rem; color: #38bdf8; font-weight: 700;">Version 1.5 Official Release</span>
+            <span style="font-size: 0.8rem; color: var(--accent); font-weight: 700;">Version 2.0 Official Milestone Release</span>
           </div>
         </div>
         <button class="btn-outline" style="padding: 4px 10px;" onclick="closeChangelogModal()">✖</button>
       </div>
       
       <div style="color: #d1d5db; font-size: 0.9rem; line-height: 1.6; display: flex; flex-direction: column; gap: 14px;">
-        <div style="background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.2); padding: 14px; border-radius: 10px;">
-          <h4 style="color: #38bdf8; font-weight: 700; margin-bottom: 4px;">🏷️ Zen Tag & CV Command Search</h4>
-          <p style="color: var(--text-muted); font-size: 0.85rem;">Floating tag & Voice Actor autocompleter with live Japanese/Romaji/English translations, multi-tag filter combination (<code>+</code>), keyboard navigation (<code>↑</code>/<code>↓</code>/<code>↵</code>), and clean <code>Esc</code> key dismiss.</p>
+        <div style="background: rgba(255, 122, 0, 0.08); border: 1px solid rgba(255, 122, 0, 0.25); padding: 14px; border-radius: 10px;">
+          <h4 style="color: #ff7a00; font-weight: 700; margin-bottom: 4px;">⚡ Instant Batch Ingestion &amp; Parallel Fast-Probing</h4>
+          <p style="color: var(--text-muted); font-size: 0.85rem;">Eliminated Cloudflare 503 Worker timeouts. Batch imports now probe JapaneseASMR with lightweight 2-URL parallel checks in ~150ms. Works not on JapaneseASMR are instantly ingested via REST API without expensive sequential CDN path guessing.</p>
         </div>
 
-        <div style="background: rgba(168, 85, 247, 0.08); border: 1px solid rgba(168, 85, 247, 0.2); padding: 14px; border-radius: 10px;">
-          <h4 style="color: #c084fc; font-weight: 700; margin-bottom: 4px;">🎧 Intelligent Multi-Track & Chapter Tree Engine</h4>
-          <p style="color: var(--text-muted); font-size: 0.85rem;">Advanced hierarchy parser automatically separates master session audio tracks from bonus files/alt versions, guaranteeing accurate track counts and chapter markers without timestamps exceeding track durations.</p>
+        <div style="background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); padding: 14px; border-radius: 10px;">
+          <h4 style="color: #38bdf8; font-weight: 700; margin-bottom: 4px;">🎧 On-Demand Lazy Audio Stream Resolution</h4>
+          <p style="color: var(--text-muted); font-size: 0.85rem;">Works from HentaiASMR Moe are gentle-scraped only when a user opens or plays the work, extracting the exact JWPlayer playlist and permanently caching it in KV for seamless instant replays.</p>
         </div>
 
-        <div style="background: rgba(255, 51, 102, 0.08); border: 1px solid rgba(255, 51, 102, 0.2); padding: 14px; border-radius: 10px;">
-          <h4 style="color: var(--accent); font-weight: 700; margin-bottom: 4px;">🖼️ Adaptive Artwork Gallery & Touch Carousel</h4>
-          <p style="color: var(--text-muted); font-size: 0.85rem;">Fluid touch-friendly horizontal swipe reader mode with snap-to-card and full uncropped display for 100+ manga/doujin scans. Includes one-tap <code>⊞ Grid / ↔ Carousel</code> mode switcher and Lightbox viewer.</p>
+        <div style="background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.25); padding: 14px; border-radius: 10px;">
+          <h4 style="color: #f59e0b; font-weight: 700; margin-bottom: 4px;">🎨 Theme Accent Color Switcher (Orange Default)</h4>
+          <p style="color: var(--text-muted); font-size: 0.85rem;">Customize your app aesthetic in Settings. Choose from 🍊 Hyper Orange (v2.0 signature), 🌊 Cyber Sky Blue, 🔮 Electric Purple, 🍃 Emerald Green, 🌸 Sakura Rose, and ⚡ Golden Amber.</p>
         </div>
 
-        <div style="background: rgba(34, 197, 94, 0.08); border: 1px solid rgba(34, 197, 94, 0.2); padding: 14px; border-radius: 10px;">
-          <h4 style="color: #22c55e; font-weight: 700; margin-bottom: 4px;">📱 Mobile UI Overhaul (Compact 2-Row Cards & Player Bar)</h4>
-          <p style="color: var(--text-muted); font-size: 0.85rem;">Re-architected Chapter Lists, Audio Tracks, Playlists, and History into consistent ~58px responsive mobile cards, paired with a dedicated 3-row thumb-friendly docked bottom player.</p>
+        <div style="background: rgba(34, 197, 94, 0.08); border: 1px solid rgba(34, 197, 94, 0.25); padding: 14px; border-radius: 10px;">
+          <h4 style="color: #22c55e; font-weight: 700; margin-bottom: 4px;">🔊 Streamlined Player Controls</h4>
+          <p style="color: var(--text-muted); font-size: 0.85rem;">Volume is defaulted to 100% max output across all audio tracks with redundant sliders removed, giving a clean and unobstructed floating &amp; bottom player bar with quick one-click Mute / Unmute.</p>
         </div>
 
-        <div style="background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border); padding: 14px; border-radius: 10px;">
-          <h4 style="color: #fff; font-weight: 700; margin-bottom: 4px;">🛡️ Privacy SFW Mode & Playlist Management</h4>
-          <p style="color: var(--text-muted); font-size: 0.85rem;">One-tap track additions with floating toast feedback, non-interrupting playback navigation, and 3 privacy levels including <code>🎭 PSFW</code> disguise covers.</p>
+        <div style="background: rgba(168, 85, 247, 0.08); border: 1px solid rgba(168, 85, 247, 0.25); padding: 14px; border-radius: 10px;">
+          <h4 style="color: #c084fc; font-weight: 700; margin-bottom: 4px;">🏷️ Self-Learning AI Tag &amp; CV Dictionary</h4>
+          <p style="color: var(--text-muted); font-size: 0.85rem;">Bilingual Japanese / Rōmaji / English tag autocompletion, DeepSeek AI SFW/NSFW classification, and high-resolution artwork gallery reader with touch-carousel.</p>
         </div>
       </div>
 
@@ -2692,8 +2717,7 @@ const INDEX_HTML = `<!DOCTYPE html>
 
       <div class="popup-secondary-row">
         <div style="display: flex; align-items: center; gap: 8px;">
-          <button class="ctrl-btn" onclick="toggleMute()" style="font-size: 1rem;">🔊</button>
-          <input type="range" id="popupVolumeSlider" class="volume-slider" min="0" max="1" step="0.05" value="1" oninput="setVolume(this.value)">
+          <button id="popupMuteBtn" class="ctrl-btn" onclick="toggleMute()" style="font-size: 1rem;" title="Mute / Unmute">🔊</button>
         </div>
         <div style="display: flex; align-items: center; gap: 8px;">
           <span id="popupFavBtn" style="font-size: 1.15rem; cursor: pointer;" title="Toggle Favorite" onclick="toggleCurrentWorkFav()">🤍</span>
@@ -2761,7 +2785,7 @@ const INDEX_HTML = `<!DOCTYPE html>
       <div class="logo-icon">🐧</div>
       <div>
         <div class="logo-title">aStreamer</div>
-        <span style="font-size: 0.65rem; color: #38bdf8; font-weight: 700; background: rgba(56,189,248,0.15); padding: 1px 6px; border-radius: 4px; border: 1px solid rgba(56,189,248,0.3);">v1.5 Official</span>
+        <span id="appVersionTag" style="font-size: 0.65rem; color: var(--accent); font-weight: 700; background: var(--accent-glow); padding: 1px 6px; border-radius: 4px; border: 1px solid var(--accent);">v2.0 Official</span>
       </div>
     </a>
 
@@ -2870,8 +2894,7 @@ const INDEX_HTML = `<!DOCTYPE html>
       <button class="ctrl-btn" title="Add Playing Track to Playlist" onclick="addCurrentPlayingTrackToPlaylist()" style="font-size: 1.05rem; margin-right: 2px;">➕</button>
       <button class="ctrl-btn" title="View Playing Work Details" onclick="jumpToCurrentWorkDetail()" style="font-size: 1.05rem; margin-right: 2px;">👁️</button>
       <button id="playerBarChapterBtn" class="ctrl-btn" onclick="openPopupPlayerWithChapters()" title="View Chapters & Cue Points" style="font-size: 1.1rem; margin-right: 4px;">📑</button>
-      <button class="ctrl-btn" onclick="toggleMute()" title="Mute/Unmute">🔊</button>
-      <input type="range" id="volumeSlider" class="volume-slider" min="0" max="1" step="0.05" value="1" oninput="setVolume(this.value)">
+      <button id="muteBtn" class="ctrl-btn" onclick="toggleMute()" title="Mute / Unmute">🔊</button>
       <button class="player-expand-btn" style="margin-left: 6px;" title="Expand/Collapse Floating Player" onclick="togglePopupPlayer()">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="15 3 21 3 21 9"></polyline>
@@ -3275,6 +3298,78 @@ const INDEX_HTML = `<!DOCTYPE html>
     let historySortMode = 'date-desc'; // date-desc, date-asc, title-asc, rj-asc
     let isShuffle = false;
     let playbackHistoryStack = [];
+
+    const ACCENT_THEMES = {
+      orange: {
+        name: '🍊 Hyper Orange (v2.0)',
+        hex: '#ff7a00',
+        hover: '#ea6c00',
+        glow: 'rgba(255, 122, 0, 0.35)',
+        gradient: 'linear-gradient(135deg, #ff7a00, #ff9500)'
+      },
+      blue: {
+        name: '🌊 Cyber Sky Blue',
+        hex: '#38bdf8',
+        hover: '#0284c7',
+        glow: 'rgba(56, 189, 248, 0.35)',
+        gradient: 'linear-gradient(135deg, #0284c7, #38bdf8)'
+      },
+      purple: {
+        name: '🔮 Electric Purple',
+        hex: '#a855f7',
+        hover: '#9333ea',
+        glow: 'rgba(168, 85, 247, 0.35)',
+        gradient: 'linear-gradient(135deg, #7c3aed, #a855f7)'
+      },
+      emerald: {
+        name: '🍃 Emerald Green',
+        hex: '#10b981',
+        hover: '#059669',
+        glow: 'rgba(16, 185, 129, 0.35)',
+        gradient: 'linear-gradient(135deg, #059669, #10b981)'
+      },
+      rose: {
+        name: '🌸 Sakura Rose',
+        hex: '#ff3366',
+        hover: '#e02456',
+        glow: 'rgba(255, 51, 102, 0.35)',
+        gradient: 'linear-gradient(135deg, #e11d48, #ff3366)'
+      },
+      amber: {
+        name: '⚡ Golden Amber',
+        hex: '#f59e0b',
+        hover: '#d97706',
+        glow: 'rgba(245, 158, 11, 0.35)',
+        gradient: 'linear-gradient(135deg, #d97706, #f59e0b)'
+      }
+    };
+
+    let currentAccent = 'orange';
+    try { currentAccent = localStorage.getItem('astreamer_accent_color') || 'orange'; } catch(e) {}
+
+    function setAccentTheme(themeKey, persist = true) {
+      currentAccent = themeKey;
+      const theme = ACCENT_THEMES[themeKey] || ACCENT_THEMES.orange;
+      document.documentElement.style.setProperty('--accent', theme.hex);
+      document.documentElement.style.setProperty('--accent-hover', theme.hover);
+      document.documentElement.style.setProperty('--accent-glow', theme.glow);
+      document.documentElement.style.setProperty('--accent-gradient', theme.gradient);
+      
+      const vTag = document.getElementById('appVersionTag');
+      if (vTag) {
+        vTag.style.color = theme.hex;
+        vTag.style.borderColor = theme.hex;
+        vTag.style.background = theme.glow;
+      }
+      
+      if (persist) {
+        try { localStorage.setItem('astreamer_accent_color', themeKey); } catch(e) {}
+        if (currentView === 'settings') {
+          loadSettings();
+        }
+      }
+    }
+    setAccentTheme(currentAccent, false);
 
     try { contentMode = localStorage.getItem('astreamer_content_mode') || 'NSFW'; } catch(e) {}
     try { libraryViewMode = localStorage.getItem('astreamer_view_mode') || 'medium'; } catch(e) {}
@@ -4286,20 +4381,29 @@ const INDEX_HTML = `<!DOCTYPE html>
       currentWorkChapters = chaptersList;
 
       const galleryCount = (Array.isArray(work.gallery) ? work.gallery.length : 0);
-      let html = '<div class="work-detail-banner"><img class="detail-cover" src="' + display.coverUrl + '" onerror="handleImgError(this)"><div class="detail-info"><div style="display:flex; gap:8px; margin-bottom:8px;"><span class="card-rj">' + work.rjCode + '</span><span style="background:#0e7490; color:#fff; font-size:0.75rem; font-weight:700; padding:2px 8px; border-radius:4px;">' + (work.hasHls ? 'HLS Chapters' : 'Multi-Track') + '</span></div><h1 class="detail-title">' + work.title + '</h1><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Voice Actor (CV):</strong> ' + cvPills + '</div><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Circle:</strong> ' + circlePill + '</div><div class="tags-row">' + tagPills + '</div><div style="margin-top:auto; padding-top:16px; display:flex; flex-wrap:wrap; gap:10px;"><button class="btn-primary" onclick="playTrack(0, true)">▶ Play All</button><button class="btn-outline" id="btnWorkGallery" data-rj="' + work.rjCode + '" onclick="openWorkGalleryModal()" style="display:' + (galleryCount > 0 ? 'inline-flex' : 'none') + ';">🖼️ Gallery (<span id="btnWorkGalleryCount">' + galleryCount + '</span>)</button><button class="btn-outline" data-rj="' + work.rjCode + '" onclick="addWorkToPlaylistAction(this.dataset.rj)">➕ Add Work to Playlist</button><button class="btn-outline" data-rj="' + work.rjCode + '" onclick="refreshSingleWork(this.dataset.rj)">🔄 Refresh</button><button class="btn-outline" data-rj="' + work.rjCode + '" onclick="deleteWorkItem(this.dataset.rj)">🗑️ Remove</button><button class="btn-outline" onclick="navBack()">← Back</button></div></div></div>';
+      let html = '<div class="work-detail-banner"><img class="detail-cover" src="' + display.coverUrl + '" onerror="handleImgError(this)"><div class="detail-info"><div style="display:flex; gap:8px; margin-bottom:8px;"><span class="card-rj">' + work.rjCode + '</span><span style="background:#0e7490; color:#fff; font-size:0.75rem; font-weight:700; padding:2px 8px; border-radius:4px;">' + (work.hasHls ? 'HLS Chapters' : 'Multi-Track') + '</span></div><h1 class="detail-title">' + work.title + '</h1><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Voice Actor (CV):</strong> ' + cvPills + '</div><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Circle:</strong> ' + circlePill + '</div><div class="tags-row">' + tagPills + '</div><div style="margin-top:auto; padding-top:16px; display:flex; flex-wrap:wrap; gap:10px;"><button class="btn-primary" onclick="playTrack(0, true)">▶ Play All</button><button class="btn-outline" id="btnWorkGallery" data-rj="' + work.rjCode + '" onclick="openWorkGalleryModal()" style="display:' + (galleryCount > 0 ? 'inline-flex' : 'none') + ';">🖼️ Gallery (<span id="btnWorkGalleryCount">' + galleryCount + '</span>)</button><button class="btn-outline" data-rj="' + work.rjCode + '" onclick="addWorkToPlaylistAction(this.dataset.rj)">➕ Add Work to Playlist</button><button class="btn-outline" id="btnWorkRefresh" data-rj="' + work.rjCode + '" onclick="refreshSingleWork(this.dataset.rj, this)">🔄 Refresh</button><button class="btn-outline" data-rj="' + work.rjCode + '" onclick="deleteWorkItem(this.dataset.rj)">🗑️ Remove</button><button class="btn-outline" onclick="navBack()">← Back</button></div></div></div>';
 
       // 1. Physical Audio Tracklist Section
       html += '<h3 style="font-size:1.2rem; font-weight:700; margin-top:24px; margin-bottom:12px; display:flex; align-items:center; gap:8px;"><span>🎵 Audio Tracks (' + tracksList.length + ')</span></h3>';
       html += '<table class="tracks-table audio-tracks-table"><thead><tr><th style="width: 40px;">#</th><th>Track Title</th><th style="width: 120px;">Stream Format</th><th style="width: 160px; text-align:right;">Action</th></tr></thead><tbody>';
 
       tracksList.forEach(function(t, i) {
+        let catBadge = '';
+        if (t.category === 'freetalk' || /(?:フリートーク|free[\s_-]?talk|talk)/i.test(t.title)) {
+          catBadge = '<span style="font-size:0.75rem; background:rgba(236,72,153,0.18); color:#f472b6; border:1px solid rgba(244,114,182,0.35); padding:2px 8px; border-radius:4px; font-weight:700; margin-right:6px;">🎙️ Free Talk</span>';
+        } else if (t.category === 'bonus' || /(?:おまけ|bonus|特典)/i.test(t.title)) {
+          catBadge = '<span style="font-size:0.75rem; background:rgba(234,179,8,0.18); color:#facc15; border:1px solid rgba(250,204,21,0.35); padding:2px 8px; border-radius:4px; font-weight:700; margin-right:6px;">🎁 Bonus</span>';
+        } else if (tracksList.length > 1) {
+          catBadge = '<span style="font-size:0.75rem; background:rgba(59,130,246,0.15); color:#60a5fa; border:1px solid rgba(96,165,250,0.3); padding:2px 8px; border-radius:4px; font-weight:700; margin-right:6px;">🎵 Main</span>';
+        }
         const formatBadge = t.isHls ? '<span style="font-size:0.75rem; background:rgba(14,116,144,0.2); color:#38bdf8; border:1px solid rgba(56,189,248,0.3); padding:2px 8px; border-radius:4px; font-weight:700;">HLS Master</span>' : '<span style="font-size:0.75rem; background:rgba(255,255,255,0.06); color:#d1d5db; border:1px solid var(--border); padding:2px 8px; border-radius:4px; font-weight:700;">Direct MP3</span>';
-        html += '<tr class="track-row" id="track-row-' + i + '" data-idx="' + i + '" onclick="playTrack(parseInt(this.dataset.idx), true)"><td>' + t.id + '</td><td><strong>' + t.title + '</strong></td><td>' + formatBadge + '</td><td style="text-align:right;"><div style="display:inline-flex; gap:6px;"><button class="btn-primary" style="padding: 4px 10px; font-size: 0.75rem;" data-idx="' + i + '" onclick="event.stopPropagation(); playTrack(parseInt(this.dataset.idx), true)">▶ Play</button><button class="btn-outline" style="padding: 4px 10px; font-size: 0.75rem;" data-idx="' + i + '" onclick="event.stopPropagation(); addTrackToPlaylistAction(parseInt(this.dataset.idx))">➕ Playlist</button></div></td></tr>';
+        const durStr = t.duration ? (' <span style="color:var(--text-muted); font-size:0.8rem; font-weight:normal; margin-left:6px;">(' + formatTime(t.duration) + ')</span>') : '';
+        html += '<tr class="track-row" id="track-row-' + i + '" data-idx="' + i + '" onclick="playTrack(parseInt(this.dataset.idx), true)"><td>' + t.id + '</td><td><div style="display:flex; align-items:center; flex-wrap:wrap; gap:4px;">' + catBadge + '<strong>' + t.title + '</strong>' + durStr + '</div></td><td>' + formatBadge + '</td><td style="text-align:right;"><div style="display:inline-flex; gap:6px;"><button class="btn-primary" style="padding: 4px 10px; font-size: 0.75rem;" data-idx="' + i + '" onclick="event.stopPropagation(); playTrack(parseInt(this.dataset.idx), true)">▶ Play</button><button class="btn-outline" style="padding: 4px 10px; font-size: 0.75rem;" data-idx="' + i + '" onclick="event.stopPropagation(); addTrackToPlaylistAction(parseInt(this.dataset.idx))">➕ Playlist</button></div></td></tr>';
       });
       html += '</tbody></table>';
 
-      // 2. Chapters & Cue Points Section (if present)
-      if (chaptersList.length > 0) {
+      // 2. Chapters & Cue Points Section (temporarily hidden pending chapter alignment overhaul)
+      if (false && chaptersList.length > 0) {
         const isMultiTrack = tracksList.length > 1;
         const trackColorThemes = [
           { border: '#38bdf8', bg: 'rgba(56, 189, 248, 0.12)', text: '#38bdf8' },
@@ -4324,10 +4428,17 @@ const INDEX_HTML = `<!DOCTYPE html>
             ? '<td><span class="tag-pill" style="font-size:0.75rem; padding: 2px 8px; border-radius: 4px; font-weight:700; background:' + trkTheme.bg + '; color:' + trkTheme.text + '; border: 1px solid ' + trkTheme.border + '; display:inline-flex; align-items:center; gap:4px;">🎵 Track ' + (trackIdx + 1) + '</span></td>'
             : '';
 
+          let cCatBadge = '';
+          if (c.category === 'freetalk' || /(?:フリートーク|free[\s_-]?talk|talk)/i.test(c.title)) {
+            cCatBadge = '<span style="font-size:0.7rem; background:rgba(236,72,153,0.18); color:#f472b6; border:1px solid rgba(244,114,182,0.35); padding:1px 6px; border-radius:4px; font-weight:700; margin-right:4px;">🎙️ Talk</span>';
+          } else if (c.category === 'bonus' || /(?:おまけ|bonus|特典)/i.test(c.title)) {
+            cCatBadge = '<span style="font-size:0.7rem; background:rgba(234,179,8,0.18); color:#facc15; border:1px solid rgba(250,204,21,0.35); padding:1px 6px; border-radius:4px; font-weight:700; margin-right:4px;">🎁 Bonus</span>';
+          }
+
           html += '<tr class="chapter-row" id="chapter-row-' + i + '" data-idx="' + i + '" data-start="' + startTime + '" data-track="' + trackIdx + '"' + rowStyle + ' onclick="jumpToChapter(' + startTime + ', ' + trackIdx + ')">';
           html += '<td>' + (c.id || (i + 1)) + '</td>';
           if (isMultiTrack) html += trkBadge;
-          html += '<td><strong>' + c.title + '</strong></td>';
+          html += '<td><div style="display:flex; align-items:center; flex-wrap:wrap; gap:4px;">' + cCatBadge + '<strong>' + c.title + '</strong>' + (c.duration ? (' <span style="color:var(--text-muted); font-size:0.75rem; font-weight:normal; margin-left:4px;">(' + formatTime(c.duration) + ')</span>') : '') + '</div></td>';
           html += '<td><button class="timestamp-btn" onclick="event.stopPropagation(); jumpToChapter(' + startTime + ', ' + trackIdx + ')" title="Jump to ' + timeStr + '">⏱️ ' + timeStr + '</button></td>';
           html += '<td style="text-align:right;"><div style="display:inline-flex; gap:6px;"><button class="btn-primary" style="padding: 4px 10px; font-size: 0.75rem;" onclick="event.stopPropagation(); jumpToChapter(' + startTime + ', ' + trackIdx + ')">▶ Jump</button><button class="btn-outline" style="padding: 4px 10px; font-size: 0.75rem;" data-idx="' + i + '" onclick="event.stopPropagation(); addChapterToPlaylistAction(parseInt(this.dataset.idx))">➕ Playlist</button></div></td>';
           html += '</tr>';
@@ -4336,6 +4447,16 @@ const INDEX_HTML = `<!DOCTYPE html>
       }
 
       container.innerHTML = html;
+    }
+
+    const workAutoRefreshedInSession = new Set();
+
+    async function autoRefreshWorkDetail(rjCode) {
+      const cleanKey = normRj(rjCode);
+      if (workAutoRefreshedInSession.has(cleanKey)) return; // Only auto-refresh once per browser session
+      workAutoRefreshedInSession.add(cleanKey);
+
+      await refreshSingleWork(rjCode, null, true);
     }
 
     async function loadWorkDetail(rjCode) {
@@ -4370,8 +4491,14 @@ const INDEX_HTML = `<!DOCTYPE html>
 
       renderWorkDetailUI(work);
 
-      // Instantly check and fetch rich chapters/gallery in background
-      fetchChaptersLazy(work.rjCode);
+      const cleanKey = normRj(work.rjCode);
+      if (!workAutoRefreshedInSession.has(cleanKey)) {
+        // Auto-refresh tracks & metadata on first visit in session, triggering the refresh button's visual progress
+        autoRefreshWorkDetail(work.rjCode);
+      } else {
+        // Instantly check and fetch rich chapters/gallery in background if already refreshed in session
+        fetchChaptersLazy(work.rjCode);
+      }
     }
 
     let currentLightboxGallery = [];
@@ -5133,6 +5260,21 @@ const INDEX_HTML = `<!DOCTYPE html>
       const container = document.getElementById('viewContainer');
       let html = '<div class="section-header"><h1 class="section-title">⚙️ App Settings</h1></div>';
       
+      // 🎨 Theme Accent Color Card (v2.0)
+      html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🎨 Theme Accent Color (v2.0)</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Customize your personal theme aesthetic across all playback controls, action buttons, and active tabs.</p>';
+      html += '<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px;">';
+      for (const [key, t] of Object.entries(ACCENT_THEMES)) {
+        const isSelected = (currentAccent === key);
+        html += '<div class="accent-option-item" data-accent-key="' + key + '" onclick="setAccentTheme(this.dataset.accentKey)" style="display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: ' + (isSelected ? 'rgba(255,255,255,0.08)' : 'var(--bg-card)') + '; border: 1.5px solid ' + (isSelected ? t.hex : 'var(--border)') + '; border-radius: 10px; cursor: pointer; transition: all 0.15s;' + (isSelected ? 'box-shadow: 0 0 14px ' + t.glow + ';' : '') + '">';
+        html += '<div style="width: 22px; height: 22px; border-radius: 50%; background: ' + t.hex + '; box-shadow: 0 0 8px ' + t.glow + '; flex-shrink: 0;"></div>';
+        html += '<div style="font-size: 0.86rem; font-weight: ' + (isSelected ? '700' : '600') + '; color: ' + (isSelected ? '#fff' : 'var(--text-muted)') + ';">' + t.name + '</div>';
+        if (isSelected) {
+          html += '<span style="margin-left: auto; font-size: 0.85rem; color: ' + t.hex + '; font-weight: 800;">✓</span>';
+        }
+        html += '</div>';
+      }
+      html += '</div></div>';
+
       html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🛡️ Content Privacy & Disguise Mode</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 18px;">Control how adult (NSFW) cover art and tags are presented on your screen.</p>';
       html += '<div class="settings-option ' + (contentMode === 'NSFW' ? 'selected' : '') + '" data-mode="NSFW" onclick="setContentMode(this.dataset.mode)"><input type="radio" name="contentMode" value="NSFW" class="settings-radio" ' + (contentMode === 'NSFW' ? 'checked' : '') + '><div><div class="settings-label">🌶️ NSFW (Full Adult - Default)</div><div class="settings-desc">Show all original high-resolution cover arts, adult tags, and uncensored catalog.</div></div></div>';
       html += '<div class="settings-option ' + (contentMode === 'PSFW' ? 'selected' : '') + '" data-mode="PSFW" onclick="setContentMode(this.dataset.mode)"><input type="radio" name="contentMode" value="PSFW" class="settings-radio" ' + (contentMode === 'PSFW' ? 'checked' : '') + '><div><div class="settings-label">🎭 PSFW (Pseudo-SFW / Disguise Covers)</div><div class="settings-desc">Full audio remains playable, but adult cover arts are disguised with glowing stylized SFW artwork. (Press Esc to quickly toggle).</div></div></div>';
@@ -5152,8 +5294,8 @@ const INDEX_HTML = `<!DOCTYPE html>
       html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🔑 Admin Authentication Session</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Lock your session or switch admin credentials.</p>';
       html += '<button class="btn-outline" style="border-color: rgba(255,51,102,0.4); color: #ff3366;" onclick="toggleAdminModal()">🚪 Lock / Log Out Admin</button></div>';
 
-      html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🐧 aStreamer v1.5 Milestone Release</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Featuring Self-Learning Bilingual Tag Dictionary, Adaptive Artwork Carousel Gallery, and Mobile 2-Row Card Layouts.</p>';
-      html += '<button class="btn-outline" onclick="openChangelogModal()">📜 View Version 1.5 Release Notes & Architecture</button></div>';
+      html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🚀 aStreamer v2.0 Milestone Release</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Instant Batch Ingestion with Parallel Fast-Probing, On-Demand Lazy Audio Stream Extraction, Custom Accent Color Themes (Orange Default), and Streamlined Audio Controls.</p>';
+      html += '<button class="btn-outline" onclick="openChangelogModal()">📜 View Version 2.0 Release Notes & Architecture</button></div>';
 
       container.innerHTML = html;
     }
@@ -5680,7 +5822,15 @@ const INDEX_HTML = `<!DOCTYPE html>
       }
     }
 
-    async function refreshSingleWork(rjCode) {
+    async function refreshSingleWork(rjCode, btnEl, isAuto = false) {
+      workAutoRefreshedInSession.add(normRj(rjCode));
+      const btn = btnEl || document.getElementById('btnWorkRefresh') || document.querySelector('button[onclick*="refreshSingleWork"]');
+      const origHtml = btn ? btn.innerHTML : '🔄 Refresh';
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spin">🔄</span> Refreshing...';
+      }
+
       try {
         chapterFetchCache.delete(rjCode);
         chapterFetchCache.delete(normRj(rjCode));
@@ -5713,18 +5863,53 @@ const INDEX_HTML = `<!DOCTYPE html>
           asmrMsg = ' (' + chapsCount + ' chapters, ' + galleryCount + ' art)';
         }
 
+        const updatedBtn = document.getElementById('btnWorkRefresh') || document.querySelector('button[onclick*="refreshSingleWork"]');
+
         if (data.success) {
           if (data.changed) {
             showToast('✅ Work refreshed! Metadata updated' + asmrMsg, 3200);
+            if (updatedBtn) {
+              updatedBtn.disabled = true;
+              updatedBtn.innerHTML = '✅ Updated!';
+              setTimeout(() => {
+                const b = document.getElementById('btnWorkRefresh');
+                if (b) { b.disabled = false; b.innerHTML = '🔄 Refresh'; }
+              }, 1800);
+            }
           } else {
-            showToast('✅ Work refreshed! Up-to-date' + asmrMsg, 3200);
+            if (!isAuto) {
+              showToast('✅ Work refreshed! Up-to-date' + asmrMsg, 3200);
+            }
+            if (updatedBtn) {
+              updatedBtn.disabled = true;
+              updatedBtn.innerHTML = '✅ Up-to-date!';
+              setTimeout(() => {
+                const b = document.getElementById('btnWorkRefresh');
+                if (b) { b.disabled = false; b.innerHTML = '🔄 Refresh'; }
+              }, 1800);
+            }
           }
         } else {
-          showToast('❌ Refresh failed: ' + (data.error || 'Unknown error'), 4000);
+          if (!isAuto) {
+            showToast('❌ Refresh failed: ' + (data.error || 'Unknown error'), 4000);
+          }
+          if (updatedBtn) {
+            updatedBtn.disabled = true;
+            updatedBtn.innerHTML = '❌ Failed';
+            setTimeout(() => {
+              const b = document.getElementById('btnWorkRefresh');
+              if (b) { b.disabled = false; b.innerHTML = '🔄 Refresh'; }
+            }, 2500);
+          }
         }
       } catch (e) {
-        if (e.message !== 'Unauthorized') {
+        if (!isAuto && e.message !== 'Unauthorized') {
           showToast('❌ Error: ' + e.message, 4000);
+        }
+        const b = document.getElementById('btnWorkRefresh') || btn;
+        if (b) {
+          b.disabled = false;
+          b.innerHTML = origHtml;
         }
       }
     }
@@ -6412,6 +6597,22 @@ const INDEX_HTML = `<!DOCTYPE html>
       return u;
     }
 
+    async function resolveWorkLazyStream(rjCode) {
+      if (!rjCode) return null;
+      try {
+        const res = await apiFetch('/api/work/' + encodeURIComponent(rjCode) + '/resolve-stream', {
+          method: 'POST'
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.work) return data.work;
+        }
+      } catch (e) {
+        console.error('Failed to resolve lazy stream:', e);
+      }
+      return null;
+    }
+
     let playbackRecoveryAttempt = 0;
 
     window.playTrack = function(index, userTriggered = true, targetWork = null, startTime = 0) {
@@ -6427,6 +6628,31 @@ const INDEX_HTML = `<!DOCTYPE html>
         currentPlayingWork = currentWork;
       }
       if (!currentPlayingWork) return;
+
+      // On-demand lazy stream resolution
+      if (currentPlayingWork.hasLazyAudio || (currentPlayingWork.tracks && currentPlayingWork.tracks[0]?.isLazy) || (!currentPlayingWork.tracks?.[0]?.streamUrl && !currentPlayingWork.tracks?.[0]?.rawUrl)) {
+        document.getElementById('playerTitle').innerText = 'Resolving Audio Stream...';
+        document.getElementById('playerSub').innerText = (currentPlayingWork.rjCode || '') + ' • Fetching tracks from source...';
+        resolveWorkLazyStream(currentPlayingWork.rjCode).then((freshWork) => {
+          if (freshWork && freshWork.tracks && freshWork.tracks.length > 0) {
+            currentPlayingWork.tracks = freshWork.tracks;
+            currentPlayingWork.hasLazyAudio = false;
+            currentPlayingWork.totalTracks = freshWork.tracks.length;
+            if (currentWork && normRj(currentWork.rjCode) === normRj(currentPlayingWork.rjCode)) {
+              currentWork.tracks = freshWork.tracks;
+              currentWork.hasLazyAudio = false;
+              currentWork.totalTracks = freshWork.tracks.length;
+              if (currentView === 'work-detail') renderWorkDetailUI(currentWork);
+            }
+            playTrack(index, userTriggered, currentPlayingWork, startTime);
+          } else {
+            alert('Failed to resolve audio streams for ' + (currentPlayingWork.rjCode || 'work'));
+          }
+        }).catch((err) => {
+          console.error('Lazy resolution error:', err);
+        });
+        return;
+      }
 
       if (!currentPlayingWork.tracks || currentPlayingWork.tracks.length === 0) {
         const cleanRj = currentPlayingWork.rjCode || '';
@@ -6849,12 +7075,26 @@ const INDEX_HTML = `<!DOCTYPE html>
         }
       }
     }
-    function setVolume(val) {
-      audio.volume = parseFloat(val);
-      document.getElementById('volumeSlider').value = val;
-      document.getElementById('popupVolumeSlider').value = val;
+    function toggleMute() {
+      audio.muted = !audio.muted;
+      updateMuteUI();
     }
-    function toggleMute() { audio.muted = !audio.muted; }
+
+    function updateMuteUI() {
+      const isMuted = audio.muted || audio.volume === 0;
+      const icon = isMuted ? '🔇' : '🔊';
+      const mBtn = document.getElementById('muteBtn');
+      const pmBtn = document.getElementById('popupMuteBtn');
+      if (mBtn) {
+        mBtn.innerText = icon;
+        mBtn.title = isMuted ? 'Unmute' : 'Mute';
+      }
+      if (pmBtn) {
+        pmBtn.innerText = icon;
+        pmBtn.title = isMuted ? 'Unmute' : 'Mute';
+      }
+    }
+    audio.addEventListener('volumechange', updateMuteUI);
 
     let currentTitleQuery = '';
     let currentTagQuery = '';
@@ -7462,6 +7702,8 @@ const INDEX_HTML = `<!DOCTYPE html>
 
         const pctColor = job.status === 'completed' ? '#34d399' : (job.status === 'stopped' ? '#ef4444' : '#38bdf8');
         const stopBtnHtml = canStop ? ('<button type="button" onclick="stopBatchJob(' + job.id + ')" class="btn-outline" style="padding: 1px 6px; font-size: 0.72rem; color: #f87171; border-color: rgba(248,113,113,0.4);" title="Stop this batch">⏹️</button>') : '';
+        const downloadBtnHtml = ((job.status === 'completed' || job.status === 'stopped') && job.failedItems && job.failedItems.length > 0) ? ('<button type="button" onclick="downloadJobFailureListById(' + job.id + ')" class="btn-outline" style="padding: 1px 7px; font-size: 0.72rem; color: #f59e0b; border-color: rgba(245,158,11,0.4);" title="Download ' + job.failedItems.length + ' failed items (.txt)">📥 ' + job.failedItems.length + ' Failed .txt</button>') : '';
+        const moeDiagBtnHtml = ((job.status === 'completed' || job.status === 'stopped') && job.moeDiagnostics && job.moeDiagnostics.length > 0) ? ('<button type="button" onclick="downloadMoeDiagnosticListById(' + job.id + ')" class="btn-outline" style="padding: 1px 7px; font-size: 0.72rem; color: #c084fc; border-color: rgba(192,132,252,0.4);" title="Download ' + job.moeDiagnostics.length + ' Moe pattern diagnostic log(s)">⚠️ ' + job.moeDiagnostics.length + ' Moe Pattern Log</button>') : '';
 
         html += '<div class="batch-job-card" style="background: #111420; border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 10px 12px;">' +
           '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: 0.82rem;">' +
@@ -7473,6 +7715,8 @@ const INDEX_HTML = `<!DOCTYPE html>
               '<span style="font-weight: 700; color: ' + pctColor + '; font-size: 0.8rem;">' +
                 progressPct + '% (' + job.current + '/' + job.total + ')' +
               '</span>' +
+              downloadBtnHtml +
+              moeDiagBtnHtml +
               stopBtnHtml +
             '</div>' +
           '</div>' +
@@ -7567,6 +7811,98 @@ const INDEX_HTML = `<!DOCTYPE html>
         job.currentStatusText = 'Stopping...';
       }
       renderBatchQueueUI();
+    }
+
+    function downloadJobFailureList(job) {
+      if (!job || !job.failedItems || job.failedItems.length === 0) return;
+      const rjList = [...new Set(job.failedItems.map(f => f.rjCode).filter(Boolean))];
+      if (rjList.length === 0) return;
+      const content = rjList.join(String.fromCharCode(10));
+      const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const safeName = (job.name || 'batch_import').replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
+      a.download = safeName + '_failed_wishlist_' + new Date().toISOString().slice(0, 10) + '.txt';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        if (a.parentNode) a.parentNode.removeChild(a);
+        URL.revokeObjectURL(url);
+      }, 1000);
+    }
+
+    function downloadJobFailureListById(jobId) {
+      const job = importBatchQueue.find(j => j.id === jobId);
+      if (job) downloadJobFailureList(job);
+    }
+
+    function downloadMoeDiagnosticList(job) {
+      if (!job || !job.moeDiagnostics || job.moeDiagnostics.length === 0) return;
+      const lines = [
+        '# HentaiASMR Moe Audio Pattern Diagnostic Log',
+        '# Generated: ' + new Date().toISOString(),
+        '# Batch: ' + (job.name || 'batch_import'),
+        '# Note: The following works had missing CDN audio under standard Moe patterns (/merge/{RJ}.mp3 or /{track}.mp3).',
+        '============================================================'
+      ];
+      for (const diag of job.moeDiagnostics) {
+        lines.push('');
+        lines.push('[Work: ' + diag.rjCode + ']');
+        lines.push('Title: ' + (diag.title || 'N/A'));
+        lines.push('Post ID: ' + (diag.postId || 'N/A'));
+        lines.push('Post Slug: ' + (diag.slug || 'N/A'));
+        if (diag.postLink) lines.push('Post Link: ' + diag.postLink);
+        lines.push('');
+        lines.push('Sources Availability Breakdown:');
+        if (diag.sourcesBreakdown) {
+          const sb = diag.sourcesBreakdown;
+          lines.push('  • JapaneseASMR (weeab0o.xyz CDN): ' + (sb.japaneseAsmr && sb.japaneseAsmr.found ? ('✅ AVAILABLE (' + (sb.japaneseAsmr.isHls ? 'HLS .m3u8 stream' : sb.japaneseAsmr.trackCount + ' discrete MP3s') + ' -> ' + sb.japaneseAsmr.sampleUrl + ')') : '❌ NOT FOUND (404)'));
+          lines.push('  • HentaiASMR Moe CDN (cdn.hentaiasmr.moe): ' + (sb.hentaiAsmrMoe && sb.hentaiAsmrMoe.found ? ('✅ AVAILABLE (' + (sb.hentaiAsmrMoe.pattern === 'merge' ? 'Single Merged Track' : sb.hentaiAsmrMoe.trackCount + ' Multi-tracks') + ' -> ' + sb.hentaiAsmrMoe.sampleUrl + ')') : '❌ NOT FOUND (404 on known CDN paths)'));
+        } else {
+          lines.push('  • HentaiASMR Moe CDN (cdn.hentaiasmr.moe): ❌ NOT FOUND (404 on known CDN paths)');
+        }
+        lines.push('');
+        lines.push('Moe CDN Probed URLs (Failed / 404):');
+        if (diag.triedUrls && diag.triedUrls.length > 0) {
+          diag.triedUrls.forEach(u => lines.push('  - ' + u));
+        } else {
+          lines.push('  - (No probe URLs recorded)');
+        }
+        lines.push('');
+        if (diag.isWorkingAudioFound && diag.chosenTracks && diag.chosenTracks.length > 0) {
+          lines.push('Final Chosen Working Audio Source: ' + (diag.selectedSource || 'Alternative Source'));
+          lines.push('Final Working Audio Tracks (' + diag.chosenTracks.length + ' tracks):');
+          diag.chosenTracks.forEach((t, i) => {
+            lines.push('  [' + (i + 1) + '] ' + (t.title || 'Track') + (t.isHls ? ' [HLS]' : ''));
+            lines.push('      Direct Audio Link: ' + (t.rawUrl || t.streamUrl));
+          });
+        } else {
+          lines.push('Final Chosen Working Audio Source: NONE (All tried sources failed - Work Wishlisted)');
+          if (diag.failureReason) {
+            lines.push('Failure Reason: ' + diag.failureReason);
+          }
+        }
+        lines.push('------------------------------------------------------------');
+      }
+      const content = lines.join(String.fromCharCode(10));
+      const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const safeName = (job.name || 'batch_import').replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
+      a.download = safeName + '_moe_unresolved_patterns_' + new Date().toISOString().slice(0, 10) + '.txt';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        if (a.parentNode) a.parentNode.removeChild(a);
+        URL.revokeObjectURL(url);
+      }, 1000);
+    }
+
+    function downloadMoeDiagnosticListById(jobId) {
+      const job = importBatchQueue.find(j => j.id === jobId);
+      if (job) downloadMoeDiagnosticList(job);
     }
 
     function stopImportFromDock() {
@@ -8056,24 +8392,30 @@ const INDEX_HTML = `<!DOCTYPE html>
         return;
       }
 
-      // Pre-stash fail-safe to DB Wishlist in 1 single call
-      try {
-        const preStashPayload = (options.rawItems && Array.isArray(options.rawItems)) ? options.rawItems : cleanList;
-        const preRes = await apiFetch('/api/wishlist/pre-stash', {
-          method: 'POST',
-          body: JSON.stringify({ items: preStashPayload })
-        });
-        const preData = await preRes.json().catch(() => ({}));
-        if (preData && Array.isArray(preData.wishlist)) {
-          updateWishlistBadge(preData.wishlist.length);
-        } else {
-          await updateWishlistBadge();
+      // Pre-stash fail-safe to DB Wishlist with automatic retry
+      const preStashPayload = (options.rawItems && Array.isArray(options.rawItems)) ? options.rawItems : cleanList;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          const preRes = await apiFetch('/api/wishlist/pre-stash', {
+            method: 'POST',
+            body: JSON.stringify({ items: preStashPayload })
+          });
+          if (preRes.ok) {
+            const preData = await preRes.json().catch(() => ({}));
+            if (preData && Array.isArray(preData.wishlist)) {
+              updateWishlistBadge(preData.wishlist.length);
+            } else {
+              await updateWishlistBadge();
+            }
+            if (window.location.hash === '#/wishlist') {
+              loadWishlist();
+            }
+            break;
+          }
+        } catch (e) {
+          console.warn('[PreStash Attempt ' + attempt + ' Failed]', e);
+          if (attempt < 3) await new Promise(r => setTimeout(r, 350 * attempt));
         }
-        if (window.location.hash === '#/wishlist') {
-          loadWishlist();
-        }
-      } catch (e) {
-        console.warn('[PreStash Error]', e);
       }
 
       const job = {
@@ -8084,6 +8426,7 @@ const INDEX_HTML = `<!DOCTYPE html>
         current: 0,
         succeeded: 0,
         failed: 0,
+        failedItems: [],
         status: 'queued',
         currentStatusText: 'Waiting in queue...',
         stopRequested: false
@@ -8195,6 +8538,25 @@ const INDEX_HTML = `<!DOCTYPE html>
               break;
             }
 
+            if (data && data.moeDiagnostic) {
+              const diag = data.moeDiagnostic;
+              if (data.work && Array.isArray(data.work.tracks) && data.work.tracks.length > 0) {
+                if (!diag.chosenTracks || diag.chosenTracks.length === 0) {
+                  diag.isWorkingAudioFound = true;
+                  diag.selectedSource = data.work.tracks[0]?.isHls ? 'JapaneseASMR (HLS Stream)' : (data.work.hasHls ? 'HLS Stream' : 'Alternative Source');
+                  diag.chosenTracks = data.work.tracks.map(t => ({
+                    title: t.title || '',
+                    rawUrl: t.rawUrl || t.streamUrl || '',
+                    streamUrl: t.streamUrl || '',
+                    isHls: !!t.isHls,
+                    category: t.category || 'main'
+                  }));
+                }
+              }
+              activeJob.moeDiagnostics = activeJob.moeDiagnostics || [];
+              activeJob.moeDiagnostics.push(diag);
+            }
+
             if (data && data.work) {
               activeJob.succeeded++;
               if (logs) {
@@ -8205,21 +8567,85 @@ const INDEX_HTML = `<!DOCTYPE html>
               }
             } else {
               activeJob.failed++;
+              const failReason = (data && data.error) || ('HTTP ' + res.status + ' ' + (res.statusText || 'Error'));
+              activeJob.failedItems = activeJob.failedItems || [];
+              activeJob.failedItems.push({ rjCode: rj, reason: failReason });
+
+              // Ensure failed works are always recorded in the diagnostic report!
+              activeJob.moeDiagnostics = activeJob.moeDiagnostics || [];
+              const existingDiag = activeJob.moeDiagnostics.find(d => d.rjCode === rj);
+              if (existingDiag) {
+                existingDiag.isWorkingAudioFound = false;
+                existingDiag.failureReason = failReason;
+              } else {
+                activeJob.moeDiagnostics.push({
+                  rjCode: rj,
+                  postId: 'N/A',
+                  slug: rj.toLowerCase(),
+                  title: 'Work ' + rj,
+                  sourcesBreakdown: {
+                    japaneseAsmr: { found: false },
+                    hentaiAsmrMoe: { found: false }
+                  },
+                  triedUrls: [],
+                  isWorkingAudioFound: false,
+                  selectedSource: 'NONE (Failed / Saved to Wishlist)',
+                  failureReason: failReason
+                });
+              }
+
               if (logs) {
                 const logEntry = document.createElement('div');
                 logEntry.style.color = '#f59e0b';
-                logEntry.innerText = '⚠️ ' + rj + ': ' + ((data && data.error) || 'Audio pending') + ' -> Saved to Wishlist 📋';
+                logEntry.innerText = '⚠️ ' + rj + ': ' + failReason + ' -> Saved to Wishlist 📋';
                 logs.appendChild(logEntry);
+              }
+              // Explicit client-side backup save to wishlist if resolve failed with 503/error
+              if (!data || !data.wishlisted) {
+                apiFetch('/api/wishlist', {
+                  method: 'POST',
+                  body: JSON.stringify({ rjCode: rj, reason: failReason })
+                }).catch(() => {});
               }
             }
           } catch (e) {
             activeJob.failed++;
+            activeJob.failedItems = activeJob.failedItems || [];
+            activeJob.failedItems.push({ rjCode: rj, reason: e.message || 'Network/503 error' });
+
+            // Ensure network error failures are also in diagnostic log
+            activeJob.moeDiagnostics = activeJob.moeDiagnostics || [];
+            const existingDiag = activeJob.moeDiagnostics.find(d => d.rjCode === rj);
+            if (existingDiag) {
+              existingDiag.isWorkingAudioFound = false;
+              existingDiag.failureReason = e.message || 'Network/503 error';
+            } else {
+              activeJob.moeDiagnostics.push({
+                rjCode: rj,
+                postId: 'N/A',
+                slug: rj.toLowerCase(),
+                title: 'Work ' + rj,
+                sourcesBreakdown: {
+                  japaneseAsmr: { found: false },
+                  hentaiAsmrMoe: { found: false }
+                },
+                triedUrls: [],
+                isWorkingAudioFound: false,
+                selectedSource: 'NONE (Failed / Saved to Wishlist)',
+                failureReason: e.message || 'Network/503 error'
+              });
+            }
+
             if (logs) {
               const logEntry = document.createElement('div');
               logEntry.style.color = '#f59e0b';
               logEntry.innerText = '⚠️ ' + rj + ': ' + e.message + ' -> Saved to Wishlist 📋';
               logs.appendChild(logEntry);
             }
+            apiFetch('/api/wishlist', {
+              method: 'POST',
+              body: JSON.stringify({ rjCode: rj, reason: e.message || 'Network/503 error' })
+            }).catch(() => {});
           }
           if (logs) logs.scrollTop = logs.scrollHeight;
           renderBatchQueueUI();
@@ -8233,6 +8659,30 @@ const INDEX_HTML = `<!DOCTYPE html>
         if (activeJob.status !== 'stopped') {
           activeJob.status = 'completed';
           activeJob.currentStatusText = '🎉 Completed: ' + activeJob.succeeded + ' added, ' + activeJob.failed + ' wishlist';
+        }
+
+        // Auto-download failsafe if there are any failed/503 works in this job
+        if (activeJob.failedItems && activeJob.failedItems.length > 0) {
+          downloadJobFailureList(activeJob);
+          if (logs) {
+            const logEntry = document.createElement('div');
+            logEntry.style.color = '#38bdf8';
+            logEntry.innerText = '📥 Auto-downloaded ' + activeJob.failedItems.length + ' failed work codes to your browser as .txt';
+            logs.appendChild(logEntry);
+            logs.scrollTop = logs.scrollHeight;
+          }
+        }
+
+        // Auto-download Moe diagnostic pattern logs if any works had missing CDN audio
+        if (activeJob.moeDiagnostics && activeJob.moeDiagnostics.length > 0) {
+          downloadMoeDiagnosticList(activeJob);
+          if (logs) {
+            const logEntry = document.createElement('div');
+            logEntry.style.color = '#a855f7';
+            logEntry.innerText = '⚠️ Auto-downloaded ' + activeJob.moeDiagnostics.length + ' Moe audio pattern diagnostic log(s) to your browser as .txt';
+            logs.appendChild(logEntry);
+            logs.scrollTop = logs.scrollHeight;
+          }
         }
 
         renderBatchQueueUI();

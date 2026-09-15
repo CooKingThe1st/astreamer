@@ -754,209 +754,305 @@ function getCoverCandidates(targetUrl, rjCode) {
   return candidates;
 }
 
-// Strategy H: HentaiASMR Scraper & Multi-Field Parser (Titles, Japanese/Romaji CVs, Series, Releases, Tags)
-async function fetchHentaiAsmrMetadata(cleanRj) {
-  const cleanNum = (cleanRj || '').toLowerCase().trim();
-  const urls = [
-    `https://hentaiasmr.moe/${cleanNum}.html`,
-    `https://hentaiasmr.moe/?s=${cleanRj}`
+function parseIsoDuration(str) {
+  if (!str) return 0;
+  const m = str.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/i);
+  if (m && (m[1] || m[2] || m[3])) {
+    const h = parseInt(m[1] || '0', 10);
+    const min = parseInt(m[2] || '0', 10);
+    const s = parseInt(m[3] || '0', 10);
+    return h * 3600 + min * 60 + s;
+  }
+  const hm = str.match(/(?:(\d+)\s*h(?:ours?)?)?\s*(?:(\d+)\s*m(?:in(?:utes?)?)?)?\s*(?:(\d+)\s*s(?:ec(?:onds?)?)?)?/i);
+  if (hm && (hm[1] || hm[2] || hm[3])) {
+    return parseInt(hm[1] || '0', 10) * 3600 + parseInt(hm[2] || '0', 10) * 60 + parseInt(hm[3] || '0', 10);
+  }
+  const col = str.match(/(?:(\d+):)?(\d+):(\d+)/);
+  if (col) {
+    if (col[1]) return parseInt(col[1], 10) * 3600 + parseInt(col[2], 10) * 60 + parseInt(col[3], 10);
+    return parseInt(col[2], 10) * 60 + parseInt(col[3], 10);
+  }
+  return 0;
+}
+
+function parseFileSizeToBytes(str) {
+  if (!str) return 0;
+  const m = str.match(/([0-9.]+)\s*(GB|MB|KB|G|M|K)B?/i);
+  if (!m) return 0;
+  const val = parseFloat(m[1]);
+  const unit = m[2].toUpperCase();
+  if (unit.startsWith('G')) return Math.round(val * 1024 * 1024 * 1024);
+  if (unit.startsWith('M')) return Math.round(val * 1024 * 1024);
+  if (unit.startsWith('K')) return Math.round(val * 1024);
+  return Math.round(val);
+}
+
+// Strategy H: HentaiASMR REST API & Direct Media CDN Probe (Zero HTML scraping)
+async function fetchHentaiAsmrMetadata(cleanRj, options = {}) {
+  const cleanUpper = (cleanRj || '').toUpperCase().trim();
+  const cleanLower = (cleanRj || '').toLowerCase().trim();
+  if (!cleanUpper) return null;
+  const skipAudioProbe = Boolean(options && options.skipAudioProbe);
+
+  // 1. Query WordPress REST API by slug (e.g. ?slug=rj01702393) then fallback to ?search=RJ01702393
+  const apiUrls = [
+    `https://hentaiasmr.moe/wp-json/wp/v2/posts?slug=${encodeURIComponent(cleanLower)}&_embed=1`,
+    `https://hentaiasmr.moe/wp-json/wp/v2/posts?search=${encodeURIComponent(cleanUpper)}&_embed=1`
   ];
 
-  for (const url of urls) {
+  let post = null;
+  for (const url of apiUrls) {
     try {
       const res = await fetch(url, {
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'ja,en-US,en;q=0.9'
+          'Accept': 'application/json, text/plain, */*'
         }
       });
-
       if (res.ok) {
-        const html = await res.text();
-        if (!html.includes('entry-title') && !html.includes('desc') && !html.includes('tags-list')) continue;
-
-        // Title
-        let title = '';
-        const titleMatch = html.match(/<h2[^>]*class="[^"]*entry-title[^"]*"[^>]*>([\s\S]*?)<\/h2>/i) ||
-                           html.match(/<h1[^>]*class="[^"]*entry-title[^"]*"[^>]*>([\s\S]*?)<\/h1>/i) ||
-                           html.match(/<meta[^>]*property="og:title"[^>]*content="([^"]+)"/i);
-        if (titleMatch) {
-          title = titleMatch[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().replace(/^\[(?:RJ|VJ|BJ)\d+\]\s*/i, '').trim();
-        }
-
-        // Fields from <div class="desc">
-        let circle = '';
-        let cv = '';
-        let cvJa = '';
-        let cvRomaji = '';
-        let releaseDate = '';
-        let series = '';
-        const descMatch = html.match(/<div[^>]*class="desc"[^>]*>([\s\S]*?)<\/div>/i);
-        if (descMatch) {
-          const descHtml = descMatch[1];
-          const pTags = descHtml.match(/<p>([\s\S]*?)<\/p>/gi) || [];
-
-          pTags.forEach(p => {
-            const text = p.replace(/<[^>]+>/g, '').replace(/&#8217;/g, "'").replace(/&amp;/g, '&').trim();
-            const keyCount = (text.match(/(?:Circle|Release|Series|Voice|CV|Age\s*Ratings?|File\s*Size|サークル|発売日|声優|シリーズ|容量)\s*[:：]/gi) || []).length;
-            if (keyCount === 1) {
-              const cM = text.match(/^(?:Circle|サークル|Brand|Maker)\s*[:：]\s*(.+)$/i);
-              if (cM) circle = cM[1].trim();
-
-              const vM = text.match(/^(?:Voice|CV|声優|Cast|Actor)\s*[:：]\s*(.+)$/i);
-              if (vM) cv = vM[1].trim();
-
-              const rM = text.match(/^(?:Release|発売日)\s*[:：]\s*(.+)$/i);
-              if (rM) releaseDate = rM[1].trim();
-
-              const sM = text.match(/^(?:Series|シリーズ)\s*[:：]\s*(.+)$/i);
-              if (sM) series = sM[1].trim();
-            }
-          });
-
-          const rawDescText = descHtml.replace(/<[^>]+>/g, ' ').replace(/&#8217;/g, "'").replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
-          const boundaries = '(?:Circle|Release|Series|Voice|CV|Age\\s*Ratings?|File\\s*Size|サークル|発売日|声優|シリーズ|容量|$)';
-
-          if (!circle) {
-            const m = rawDescText.match(new RegExp(`(?:Circle|サークル|Brand|Maker)\\s*[:：]\\s*(.*?)(?=\\s*${boundaries})`, 'i'));
-            if (m && m[1].trim()) circle = m[1].trim();
-          }
-          if (!releaseDate) {
-            const m = rawDescText.match(new RegExp(`(?:Release|発売日)\\s*[:：]\\s*(.*?)(?=\\s*${boundaries})`, 'i'));
-            if (m && m[1].trim()) releaseDate = m[1].trim();
-          }
-          if (!series) {
-            const m = rawDescText.match(new RegExp(`(?:Series|シリーズ)\\s*[:：]\\s*(.*?)(?=\\s*${boundaries})`, 'i'));
-            if (m && m[1].trim()) series = m[1].trim();
-          }
-          if (!cv) {
-            const m = rawDescText.match(new RegExp(`(?:Voice|CV|声優|Cast|Actor)\\s*[:：]\\s*(.*?)(?=\\s*${boundaries})`, 'i'));
-            if (m && m[1].trim()) cv = m[1].trim();
+        const posts = await res.json();
+        if (Array.isArray(posts) && posts.length > 0) {
+          const match = posts.find(p => {
+            const pSlug = (p.slug || '').toLowerCase();
+            const pTitle = (p.title?.rendered || '').toUpperCase();
+            return pSlug === cleanLower || pTitle.includes(cleanUpper) || (p.content?.rendered || '').includes(cleanUpper);
+          }) || posts[0];
+          if (match) {
+            post = match;
+            break;
           }
         }
-
-        const tagTranslations = {};
-        if (cv) {
-          const rawParts = cv.split(/[,、;&\n]/).map(s => s.trim()).filter(Boolean);
-          for (const rawPart of rawParts) {
-            let partJa = '';
-            let partRomaji = '';
-
-            const bracketMatch = rawPart.match(/【([^】]+)】|（([^）]+)）|\(([^)]+)\)|\[([^\]]+)\]/);
-            if (bracketMatch) {
-              const inside = (bracketMatch[1] || bracketMatch[2] || bracketMatch[3] || bracketMatch[4] || '').trim();
-              const outside = rawPart.replace(bracketMatch[0], '').trim();
-              const isInsideJa = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(inside);
-              const isOutsideJa = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(outside);
-              if (isInsideJa && !isOutsideJa && outside) {
-                partJa = inside;
-                partRomaji = outside;
-              } else if (isOutsideJa && !isInsideJa && inside) {
-                partJa = outside;
-                partRomaji = inside;
-              } else if (isInsideJa) {
-                partJa = inside;
-              }
-            } else if (rawPart.includes('/')) {
-              const slashParts = rawPart.split('/').map(s => s.trim());
-              const p0IsJa = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(slashParts[0]);
-              const p1IsJa = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(slashParts[1] || '');
-              if (p0IsJa && !p1IsJa && slashParts[1]) {
-                partJa = slashParts[0];
-                partRomaji = slashParts[1];
-              } else if (p1IsJa && !p0IsJa && slashParts[0]) {
-                partJa = slashParts[1];
-                partRomaji = slashParts[0];
-              } else {
-                partJa = slashParts[0];
-              }
-            } else {
-              partJa = cleanCVName(rawPart);
-            }
-
-            if (partJa) {
-              partJa = cleanCVName(partJa);
-              if (!cvJa) cvJa = partJa;
-              if (partRomaji && /[a-zA-Z]/.test(partRomaji)) {
-                partRomaji = normalizeCVRomaji(partJa, partRomaji);
-                if (!cvRomaji) cvRomaji = partRomaji;
-                tagTranslations[partJa] = { romaji: partRomaji, isCV: true };
-                if (typeof BASE_TAG_DICT !== 'undefined') {
-                  BASE_TAG_DICT[partJa] = { romaji: partRomaji, isCV: true };
-                }
-              }
-            }
-          }
-        }
-
-        // Tags
-        const tags = [];
-        const tagsListMatch = html.match(/<div[^>]*class="tags-list"[^>]*>([\s\S]*?)<\/div>/i);
-        if (tagsListMatch) {
-          const tagLinks = tagsListMatch[1].match(/<a[^>]*href="[^"]*(?:\/tag\/|\/category\/)[^"]*"[^>]*>([\s\S]*?)<\/a>/gi) || [];
-          tagLinks.forEach(a => {
-            const tName = a.replace(/<[^>]+>/g, '').replace(/&#8217;/g, "'").replace(/&amp;/g, '&').trim();
-            if (tName && !tags.includes(tName)) tags.push(tName);
-          });
-        }
-
-        // Cover
-        let coverUrl = '';
-        const ogImgMatch = html.match(/<meta[^>]*property="og:image"[^>]*content="([^"]+)"/i) ||
-                           html.match(/<meta[^>]*itemprop="thumbnailUrl"[^>]*content="([^"]+)"/i);
-        if (ogImgMatch) coverUrl = ogImgMatch[1].trim();
-
-        // Audio Tracks from JWPlayer Playlist or Single Audio File
-        const audioTracks = [];
-        const itemRegex = /\{[^{}]*?(?:file|sources)[^{}]*?\}/gi;
-        let itemMatch;
-        let trkIdx = 1;
-        while ((itemMatch = itemRegex.exec(html)) !== null) {
-          const block = itemMatch[0];
-          const fileM = block.match(/(?:file|src|url)\s*[:=]\s*["']([^"']+\.mp3[^"']*)["']/i);
-          const titleM = block.match(/title\s*[:=]\s*["']([^"']+)["']/i);
-          if (fileM && !audioTracks.some(t => t.streamUrl === fileM[1].trim())) {
-            audioTracks.push({
-              index: trkIdx++,
-              streamUrl: fileM[1].trim(),
-              title: titleM ? titleM[1].trim() : `Track ${trkIdx}`
-            });
-          }
-        }
-
-        if (audioTracks.length === 0) {
-          const singleFileMatch = html.match(/file\s*[:=]\s*["']([^"']+\.mp3[^"']*)["']/i) ||
-                                  html.match(/<meta[^>]*itemprop="contentURL"[^>]*content="([^"]+\.mp3[^"]*)"/i) ||
-                                  html.match(/"contentURL"\s*:\s*"([^"]+\.mp3[^"]*)"/i) ||
-                                  html.match(/<a[^>]*class="[^"]*button-track[^"]*"[^>]*href="([^"]+\.mp3[^"]*)"/i);
-          if (singleFileMatch) {
-            audioTracks.push({
-              index: 1,
-              streamUrl: singleFileMatch[1].trim(),
-              title: title || `${cleanRj} Full Audio`
-            });
-          }
-        }
-
-        return {
-          title,
-          circle,
-          cv: cvJa ? (cvRomaji ? `${cvJa} (${cvRomaji})` : cvJa) : (cv || 'N/A'),
-          cvJa,
-          cvRomaji,
-          releaseDate,
-          series,
-          tags,
-          tagTranslations,
-          rawCoverUrl: coverUrl,
-          audioTracks,
-          isNsfw: true
-        };
       }
     } catch (e) {}
   }
-  return null;
+
+  if (!post || !post.id) return null;
+
+  const postId = post.id;
+  const rawTitle = (post.title?.rendered || '')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&#8217;/g, "'")
+    .replace(/&amp;/g, '&')
+    .replace(/&#038;/g, '&')
+    .replace(/^\[(?:RJ|VJ|BJ)\d+\]\s*/i, '')
+    .trim();
+
+  // Cover image
+  let coverUrl = '';
+  if (post._embedded && post._embedded['wp:featuredmedia'] && post._embedded['wp:featuredmedia'][0]) {
+    const media = post._embedded['wp:featuredmedia'][0];
+    coverUrl = media.source_url || media.media_details?.sizes?.full?.source_url || '';
+  }
+
+  // Terms: tags, actors, categories
+  const tags = [];
+  const tagTranslations = {};
+  const cvList = [];
+  let cvJa = '';
+  let cvRomaji = '';
+
+  if (post._embedded && Array.isArray(post._embedded['wp:term'])) {
+    for (const group of post._embedded['wp:term']) {
+      if (!Array.isArray(group)) continue;
+      for (const term of group) {
+        if (!term || !term.name) continue;
+        const tName = term.name.trim();
+        const taxonomy = term.taxonomy || '';
+        
+        let rawSlug = term.slug || '';
+        try { rawSlug = decodeURIComponent(rawSlug); } catch (e) {}
+
+        if (taxonomy === 'actors' || taxonomy === 'cv') {
+          tName.split(/[,、/&＋+;・]/).forEach(c => {
+            const cleanC = c.replace(/様|さん|氏|他|'/g, '').trim();
+            if (cleanC && cleanC.length >= 2 && !cvList.includes(cleanC)) {
+              cvList.push(cleanC);
+            }
+          });
+          if (!cvJa && cvList.length > 0) cvJa = cvList[0];
+          if (rawSlug && /[a-zA-Z]/.test(rawSlug)) {
+            const rom = normalizeCVRomaji(tName, rawSlug.replace(/-/g, ' '));
+            if (!cvRomaji) cvRomaji = rom;
+            tagTranslations[tName] = { romaji: rom, isCV: true };
+            if (typeof BASE_TAG_DICT !== 'undefined') {
+              BASE_TAG_DICT[tName] = { romaji: rom, isCV: true };
+            }
+          }
+        } else if (taxonomy === 'post_tag' || taxonomy === 'category') {
+          if (tName && !tags.includes(tName) && !['NSFW', 'SFW', 'Uncategorized'].includes(tName)) {
+            tags.push(tName);
+          }
+        }
+      }
+    }
+  }
+
+  const cv = cvList.join(', ');
+
+  // 2. Direct Media CDN Probe for Audio Files (Skip if skipAudioProbe is requested)
+  const singleTrackCandidates = [];
+
+  // Unescape content HTML and extract embedded audio URLs
+  const unescapedContent = (post.content?.rendered || '')
+    .replace(/\\\//g, '/')
+    .replace(/&#8217;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, '&');
+  const contentUrls = unescapedContent.match(/https?:\/\/[^\s"'<>]+\.(?:mp3|m4a|wav|ogg|flac|m3u8)/gi) || [];
+  contentUrls.forEach(u => {
+    if (u && !singleTrackCandidates.includes(u)) singleTrackCandidates.push(u);
+  });
+
+  // Discovered Single-Track Patterns across CDN endpoints
+  const singlePatterns = [
+    `https://cdn16.hentaiasmr.moe/audio/${postId}.mp3`,
+    `https://cdn.hentaiasmr.moe/audio/${postId}.mp3`,
+    `https://cdn-otome.hentaiasmr.moe/audio/${postId}.mp3`,
+    `https://cdn.hentaiasmr.moe/mp4/${postId}.mp3`,
+    `https://cdn16.hentaiasmr.moe/mp4/${postId}.mp3`,
+    `https://cdn-otome.hentaiasmr.moe/mp4/${postId}.mp3`,
+    `https://cdn.hentaiasmr.moe/mf/${postId}/merge/${cleanUpper}.mp3`,
+    `https://cdn16.hentaiasmr.moe/mf/${postId}/merge/${cleanUpper}.mp3`,
+    `https://cdn-otome.hentaiasmr.moe/mf/${postId}/merge/${cleanUpper}.mp3`,
+    `https://cdn.hentaiasmr.moe/audio/${cleanUpper}.mp3`,
+    `https://cdn16.hentaiasmr.moe/audio/${cleanUpper}.mp3`
+  ];
+  singlePatterns.forEach(u => {
+    if (!singleTrackCandidates.includes(u)) singleTrackCandidates.push(u);
+  });
+
+  const probeReferer = post.link || `https://hentaiasmr.moe/${cleanLower}.html`;
+  const probeHeaders = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Referer': probeReferer,
+    'Origin': 'https://hentaiasmr.moe',
+    'Accept': '*/*'
+  };
+
+  async function probeMediaCandidate(targetUrl) {
+    if (!targetUrl) return null;
+    try {
+      let res = await fetch(encodeURI(targetUrl), {
+        method: 'GET',
+        headers: {
+          ...probeHeaders,
+          'Range': 'bytes=0-0'
+        }
+      });
+      if (!res.ok && res.status !== 206 && res.status !== 301 && res.status !== 302 && res.status !== 307) {
+        try {
+          const headRes = await fetch(encodeURI(targetUrl), {
+            method: 'HEAD',
+            headers: probeHeaders
+          });
+          if (headRes.ok || (headRes.status >= 200 && headRes.status < 400)) {
+            res = headRes;
+          }
+        } catch (he) {}
+      }
+      if (res.ok || res.status === 206 || (res.status >= 200 && res.status < 400)) {
+        let size = 0;
+        const cr = res.headers.get('content-range');
+        if (cr) {
+          const m = cr.match(/\/(\d+)/);
+          if (m) size = parseInt(m[1], 10);
+        }
+        if (!size) size = parseInt(res.headers.get('content-length') || '0', 10);
+        return { ok: true, size };
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  const audioTracks = [];
+  let foundPattern = null;
+  const triedUrls = [];
+
+  if (!skipAudioProbe) {
+    for (const mergeUrl of singleTrackCandidates) {
+      triedUrls.push(mergeUrl);
+      const probe = await probeMediaCandidate(mergeUrl);
+      if (probe && probe.ok) {
+        audioTracks.push({
+          index: 1,
+          title: `${rawTitle || cleanUpper} (Full)`,
+          rawTitle: `${cleanUpper}.mp3`,
+          streamUrl: mergeUrl,
+          category: 'main',
+          _size: probe.size || 0,
+          isHls: false
+        });
+        foundPattern = mergeUrl.includes('/audio/') ? 'audio_direct' : (mergeUrl.includes('/mp4/') ? 'mp4_direct' : 'merge');
+        break;
+      }
+    }
+
+    // Variation B: Multi-track -> /mf/{id}/1.mp3, 2.mp3, 3.mp3...
+    if (audioTracks.length === 0) {
+      const cdnBases = [
+        'https://cdn.hentaiasmr.moe/mf/',
+        'https://cdn16.hentaiasmr.moe/mf/',
+        'https://cdn-otome.hentaiasmr.moe/mf/'
+      ];
+
+      for (const cdn of cdnBases) {
+        let trackNum = 1;
+        let consecutiveMisses = 0;
+        while (trackNum <= 40 && consecutiveMisses === 0) {
+          const tUrl = `${cdn}${postId}/${trackNum}.mp3`;
+          triedUrls.push(tUrl);
+          const probe = await probeMediaCandidate(tUrl);
+          if (probe && probe.ok) {
+            audioTracks.push({
+              index: trackNum,
+              title: `Track ${trackNum}`,
+              rawTitle: `${trackNum}.mp3`,
+              streamUrl: tUrl,
+              category: trackNum === 1 ? 'main' : (trackNum === 2 ? 'freetalk' : 'bonus'),
+              _size: probe.size || 0,
+              isHls: false
+            });
+            foundPattern = 'multitrack';
+            trackNum++;
+          } else {
+            consecutiveMisses++;
+          }
+        }
+        if (audioTracks.length > 0) break;
+      }
+    }
+  }
+
+  const isAudioFound = audioTracks.length > 0;
+  const diagnostic = (!isAudioFound && postId) ? {
+    rjCode: cleanUpper,
+    postId,
+    slug: post.slug,
+    postLink: post.link || `https://hentaiasmr.moe/${cleanLower}.html`,
+    title: rawTitle,
+    triedUrls
+  } : null;
+
+  return {
+    postId,
+    title: rawTitle,
+    circle: 'ASMR Circle',
+    cv: cvJa ? (cvRomaji ? `${cvJa} (${cvRomaji})` : cvJa) : (cv || 'N/A'),
+    cvJa,
+    cvRomaji,
+    releaseDate: '',
+    series: '',
+    duration: 0,
+    totalBytes: audioTracks.reduce((sum, t) => sum + (t._size || 0), 0),
+    tags,
+    tagTranslations,
+    rawCoverUrl: coverUrl,
+    audioTracks,
+    foundPattern,
+    diagnostic,
+    isAudioFound,
+    isNsfw: true
+  };
 }
 
 // Resolver: Unified Multi-Source (ASMR.one + DLsite API + Product Page HTML + CDN Probe)
@@ -1067,135 +1163,33 @@ async function resolveRjWork(rjCode) {
     } catch (e) {}
   }
 
-  // Source 3: DLsite Product Page HTML
-  if (!title || !cv || cv === 'N/A' || tags.length < 3 || !coverUrl) {
-    for (const div of divisions) {
-      try {
-        const pageRes = await fetch(`https://www.dlsite.com/${div}/work/=/product_id/${cleanRj}.html/?locale=ja_JP`, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept-Language': 'ja-JP,ja;q=0.9',
-            'Cookie': 'adultchecked=1; age_checked=1; locale=ja_JP;'
-          }
-        });
-
-        if (pageRes.ok) {
-          const html = await pageRes.text();
-          const cleanHtml = html.replace(/<!--[\s\S]*?-->/g, '');
-
-          // Title
-          if (!title) {
-            const titleTagMatch = html.match(/<title>([\s\S]*?)<\/title>/i);
-            if (titleTagMatch) {
-              let full = titleTagMatch[1].trim().replace(/\s*\|\s*DLsite.*$/i, '').trim();
-              const circleBracketMatch = full.match(/\[(.*?)\]\s*$/);
-              if (circleBracketMatch && !circle) {
-                circle = circleBracketMatch[1].trim();
-                full = full.replace(/\[(.*?)\]\s*$/, '').trim();
-              }
-              title = full.replace(/【[^】]*%OFF[^】]*】/gi, '').replace(/【[^】]*特典[^】]*】/gi, '').trim();
-            }
-          }
-
-          // Circle
-          if (!circle) {
-            const makerLinkMatch = html.match(/href=["'][^"']*\/maker_id\/[^"']*["'][^>]*>([^<]+)<\/a>/i);
-            if (makerLinkMatch) circle = makerLinkMatch[1].trim();
-          }
-
-          // Outline Table (声優 & ジャンル)
-          const outlineRows = cleanHtml.matchAll(/<th[^>]*>([\s\S]*?)<\/th>\s*<td[^>]*>([\s\S]*?)<\/td>/gi);
-          for (const row of outlineRows) {
-            const th = row[1].replace(/<[^>]+>/g, '').trim();
-            const tdHtml = row[2];
-            const tdText = tdHtml.replace(/<[^>]+>/g, '').trim();
-
-            if ((!cv || cv === 'N/A') && (th.includes('声優') || th.includes('CV') || th.includes('キャスト') || th.includes('ボイス'))) {
-              const cvList = [];
-              const linkMatches = tdHtml.matchAll(/>([^<]+)<\/a>/g);
-              for (const m of linkMatches) {
-                const name = m[1].replace(/様|さん|氏|他/g, '').trim();
-                if (name && name.length >= 2 && !cvList.includes(name)) cvList.push(name);
-              }
-              if (cvList.length === 0) {
-                tdText.split(/[/,、・\n\r\t]+/).forEach(n => {
-                  const clean = n.replace(/様|さん|氏|他/g, '').trim();
-                  if (clean && clean.length >= 2 && !['DLsite', '声優', '同人'].includes(clean) && !cvList.includes(clean)) {
-                    cvList.push(clean);
-                  }
-                });
-              }
-              if (cvList.length > 0) cv = cvList.join(', ');
-            }
-
-            if (th.includes('ジャンル') || th.includes('シリーズ名')) {
-              tdText.split(/[/,、・\n\r\t]+/).forEach(g => {
-                const clean = g.trim();
-                if (clean && clean.length >= 2 && !['DLsite', '同人', 'R18'].includes(clean) && !tags.includes(clean)) {
-                  tags.push(clean);
-                  if (BASE_TAG_DICT[clean]) tagTranslations[clean] = BASE_TAG_DICT[clean];
-                }
-              });
-            }
-          }
-
-          // Bracketed CV
-          if (!cv || cv === 'N/A') {
-            const bracketMatches = cleanHtml.matchAll(/(?:【|\(|（|\[)\s*(?:CV|声優|ボイス)[.:：\s]*([^】)）\]\r\n<]+)(?:】|\)|）|\])/gi);
-            for (const bm of bracketMatches) {
-              const cvList = [];
-              bm[1].split(/[/,、・\s+＆&]+/).forEach(c => {
-                const clean = c.replace(/様|さん|氏|他|／/g, '').trim();
-                if (clean && clean.length >= 2 && !['DLsite', '同人', 'ASMR', 'R18'].includes(clean) && !cvList.includes(clean)) {
-                  cvList.push(clean);
-                }
-              });
-              if (cvList.length > 0) {
-                cv = cvList.join(', ');
-                break;
-              }
-            }
-          }
-
-          // Cover Image
-          if (!coverUrl) {
-            const ogImgMatch = html.match(/<meta\s+property=["']og:image["']\s+content=["']([^"']+)["']/i);
-            if (ogImgMatch) coverUrl = ogImgMatch[1];
-            if (coverUrl.startsWith('//')) coverUrl = 'https:' + coverUrl;
-          }
-
-          break;
-        }
-      } catch (e) {}
-    }
-  }
-
   let series = '';
   let releaseDate = '';
 
-  // Source 4: HentaiASMR Multi-Source Fallback (Rich Japanese/Romaji CVs, Series, Releases, Tags)
+  // Source 3: HentaiASMR REST API Fallback (Rich Japanese/Romaji CVs, Series, Releases, Tags)
+  let moeMetaForResolve = null;
   if (!title || !cv || cv === 'N/A' || !circle || tags.length < 3) {
     try {
-      const moeMeta = await fetchHentaiAsmrMetadata(cleanRj);
-      if (moeMeta) {
-        if (!title && moeMeta.title) title = moeMeta.title;
-        if ((!circle || circle === 'ASMR Circle') && moeMeta.circle) circle = moeMeta.circle;
-        if ((!cv || cv === 'N/A') && moeMeta.cv) cv = moeMeta.cv;
-        if (moeMeta.series) {
-          series = moeMeta.series;
-          if (!tags.includes(moeMeta.series)) tags.push(moeMeta.series);
+      moeMetaForResolve = await fetchHentaiAsmrMetadata(cleanRj, { skipAudioProbe: true });
+      if (moeMetaForResolve) {
+        if (!title && moeMetaForResolve.title) title = moeMetaForResolve.title;
+        if ((!circle || circle === 'ASMR Circle') && moeMetaForResolve.circle) circle = moeMetaForResolve.circle;
+        if ((!cv || cv === 'N/A') && moeMetaForResolve.cv) cv = moeMetaForResolve.cv;
+        if (moeMetaForResolve.series) {
+          series = moeMetaForResolve.series;
+          if (!tags.includes(moeMetaForResolve.series)) tags.push(moeMetaForResolve.series);
         }
-        if (moeMeta.releaseDate) releaseDate = moeMeta.releaseDate;
-        if (Array.isArray(moeMeta.tags)) {
-          moeMeta.tags.forEach(t => {
+        if (moeMetaForResolve.releaseDate) releaseDate = moeMetaForResolve.releaseDate;
+        if (Array.isArray(moeMetaForResolve.tags)) {
+          moeMetaForResolve.tags.forEach(t => {
             if (t && !tags.includes(t)) tags.push(t);
           });
         }
-        if (!coverUrl && moeMeta.rawCoverUrl) coverUrl = moeMeta.rawCoverUrl;
-        if (moeMeta.cvJa && moeMeta.cvRomaji) {
-          tagTranslations[moeMeta.cvJa] = { romaji: moeMeta.cvRomaji, isCV: true };
+        if (!coverUrl && moeMetaForResolve.rawCoverUrl) coverUrl = moeMetaForResolve.rawCoverUrl;
+        if (moeMetaForResolve.cvJa && moeMetaForResolve.cvRomaji) {
+          tagTranslations[moeMetaForResolve.cvJa] = { romaji: moeMetaForResolve.cvRomaji, isCV: true };
           if (typeof BASE_TAG_DICT !== 'undefined') {
-            BASE_TAG_DICT[moeMeta.cvJa] = { romaji: moeMeta.cvRomaji, isCV: true };
+            BASE_TAG_DICT[moeMetaForResolve.cvJa] = { romaji: moeMetaForResolve.cvRomaji, isCV: true };
           }
         }
       }
@@ -1226,124 +1220,370 @@ async function resolveRjWork(rjCode) {
     coverUrl = `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${cleanRj}_img_main.jpg`;
   }
 
+  // 1. Probe JapaneseASMR (weeab0o.xyz): First check primary MP3 & M3U8 in parallel
+  const mainMp3Url = `https://v.weeab0o.xyz/${cleanRj}.mp3`;
   const m3u8Url = `https://v.weeab0o.xyz/${cleanRj}.m3u8`;
   let hasHls = false;
-  let tracks = [];
+  const japTracks = [];
 
-  try {
-    const headRes = await fetch(m3u8Url, {
-      method: 'GET',
-      headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://japaneseasmr.com/' }
+  const [mainMp3Res, m3u8Res] = await Promise.all([
+    fetch(mainMp3Url, { method: 'HEAD', headers: { 'Referer': 'https://japaneseasmr.com/', 'User-Agent': 'Mozilla/5.0' } }).catch(() => null),
+    fetch(m3u8Url, { method: 'GET', headers: { 'Referer': 'https://japaneseasmr.com/', 'User-Agent': 'Mozilla/5.0' } }).catch(() => null)
+  ]);
+
+  if (mainMp3Res && mainMp3Res.ok) {
+    const sz = parseInt(mainMp3Res.headers.get('content-length') || '0', 10);
+    japTracks.push({
+      id: 1,
+      title: 'Track 1 (トラック1)',
+      size: sz,
+      formattedTime: '00:00:00',
+      startTime: 0,
+      isHls: false,
+      category: 'main',
+      rawUrl: mainMp3Url,
+      referer: 'https://japaneseasmr.com/',
+      streamUrl: `/stream?url=${encodeURIComponent(mainMp3Url)}&referer=${encodeURIComponent('https://japaneseasmr.com/')}`,
+      poster: `/image-proxy?url=${encodeURIComponent(coverUrl)}`
     });
-    if (headRes.ok) {
-      const manifest = await headRes.text();
+
+    // Only probe bonus & extra tracks if the primary MP3 actually exists
+    const bonusCandidates = [
+      { type: 'freetalk', title: 'Free Talk (フリートーク)', url: `https://v.weeab0o.xyz/${cleanRj} freetalk.mp3` },
+      { type: 'freetalk', title: 'Free Talk (フリートーク)', url: `https://v.weeab0o.xyz/${cleanRj}_freetalk.mp3` },
+      { type: 'freetalk', title: 'Free Talk (フリートーク)', url: `https://v.weeab0o.xyz/${cleanRj}-freetalk.mp3` },
+      { type: 'freetalk', title: 'Free Talk (フリートーク)', url: `https://v.weeab0o.xyz/${cleanRj}freetalk.mp3` },
+      { type: 'bonus', title: 'Omake (おまけ)', url: `https://v.weeab0o.xyz/${cleanRj}omake.mp3` },
+      { type: 'bonus', title: 'Omake (おまけ)', url: `https://v.weeab0o.xyz/${cleanRj} omake.mp3` },
+      { type: 'bonus', title: 'Omake (おまけ)', url: `https://v.weeab0o.xyz/${cleanRj}_omake.mp3` },
+      { type: 'bonus', title: 'Omake (おまけ)', url: `https://v.weeab0o.xyz/${cleanRj}-omake.mp3` },
+      { type: 'bonus', title: 'Bonus (特典)', url: `https://v.weeab0o.xyz/${cleanRj} bonus.mp3` },
+      { type: 'bonus', title: 'Bonus (特典)', url: `https://v.weeab0o.xyz/${cleanRj}bonus.mp3` },
+      { type: 'bonus', title: 'Bonus (特典)', url: `https://v.weeab0o.xyz/${cleanRj}_bonus.mp3` },
+      { type: 'main', title: 'Track 2 (トラック2)', url: `https://v.weeab0o.xyz/${cleanRj} 2.mp3` },
+      { type: 'main', title: 'Track 3 (トラック3)', url: `https://v.weeab0o.xyz/${cleanRj} 3.mp3` },
+      { type: 'main', title: 'Track 4 (トラック4)', url: `https://v.weeab0o.xyz/${cleanRj} 4.mp3` },
+      { type: 'main', title: 'Track 5 (トラック5)', url: `https://v.weeab0o.xyz/${cleanRj} 5.mp3` },
+      { type: 'main', title: 'Track 6 (トラック6)', url: `https://v.weeab0o.xyz/${cleanRj} 6.mp3` },
+      { type: 'main', title: 'Track 7 (トラック7)', url: `https://v.weeab0o.xyz/${cleanRj} 7.mp3` },
+      { type: 'main', title: 'Track 8 (トラック8)', url: `https://v.weeab0o.xyz/${cleanRj} 8.mp3` },
+      { type: 'main', title: 'Track 2 (トラック2)', url: `https://v.weeab0o.xyz/${cleanRj}_2.mp3` },
+      { type: 'main', title: 'Track 3 (トラック3)', url: `https://v.weeab0o.xyz/${cleanRj}_3.mp3` },
+      { type: 'main', title: 'Track 2 (トラック2)', url: `https://v.weeab0o.xyz/${cleanRj}-2.mp3` },
+      { type: 'main', title: 'Track 3 (トラック3)', url: `https://v.weeab0o.xyz/${cleanRj}-3.mp3` }
+    ];
+
+    const bonusChecks = await Promise.all(
+      bonusCandidates.map(async (c) => {
+        try {
+          const res = await fetch(encodeURI(c.url), {
+            method: 'HEAD',
+            headers: { 'Referer': 'https://japaneseasmr.com/', 'User-Agent': 'Mozilla/5.0' }
+          });
+          if (res.ok) {
+            const sz = parseInt(res.headers.get('content-length') || '0', 10);
+            return { ...c, size: sz };
+          }
+        } catch (e) {}
+        return null;
+      })
+    );
+
+    let trkIndex = 2;
+    for (const b of bonusChecks) {
+      if (b) {
+        japTracks.push({
+          id: trkIndex++,
+          title: b.title,
+          size: b.size,
+          formattedTime: '00:00:00',
+          startTime: 0,
+          isHls: false,
+          category: b.type,
+          rawUrl: b.url,
+          referer: 'https://japaneseasmr.com/',
+          streamUrl: `/stream?url=${encodeURIComponent(b.url)}&referer=${encodeURIComponent('https://japaneseasmr.com/')}`,
+          poster: `/image-proxy?url=${encodeURIComponent(coverUrl)}`
+        });
+      }
+    }
+  } else if (m3u8Res && m3u8Res.ok) {
+    try {
+      const manifest = await m3u8Res.text();
       if (manifest.includes('#EXTM3U')) {
         hasHls = true;
+        let m3u8Secs = 0;
+        const extinfMatches = manifest.match(/#EXTINF:([0-9.]+)/g) || [];
+        extinfMatches.forEach(m => {
+          const s = parseFloat(m.replace('#EXTINF:', ''));
+          if (!isNaN(s)) m3u8Secs += s;
+        });
+        const estBytes = Math.round(m3u8Secs * 16000); // ~128kbps audio estimation
+        japTracks.push({
+          id: 1,
+          title: title ? `01. ${title}` : '01. Audio Track',
+          duration: Math.round(m3u8Secs),
+          size: estBytes,
+          formattedTime: m3u8Secs > 0 ? formatServerTime(Math.round(m3u8Secs)) : '00:00:00',
+          startTime: 0,
+          isHls: true,
+          category: 'main',
+          rawUrl: m3u8Url,
+          referer: 'https://japaneseasmr.com/',
+          streamUrl: `/stream?url=${encodeURIComponent(m3u8Url)}&referer=${encodeURIComponent('https://japaneseasmr.com/')}`,
+          poster: `/image-proxy?url=${encodeURIComponent(coverUrl)}`
+        });
       }
+    } catch (e) {}
+  }
+
+  // 2. Fetch Ground-Truth Reference Tracks from ASMR.one or DLsite
+  let gtTracks = [];
+  try {
+    const cleanNum = cleanRj.replace(/^(?:RJ|VJ|BJ)/i, '');
+    const trackIdsToTry = [cleanNum, cleanNum.replace(/^0+/, '')];
+    const apiHosts = ['https://api.asmr.one', 'https://api.asmr-200.com', 'https://api.asmr-300.com', 'https://api.asmr-100.com'];
+    
+    for (const tid of trackIdsToTry) {
+      if (!tid) continue;
+      for (const host of apiHosts) {
+        try {
+          const asmrRes = await fetch(`${host}/api/tracks/${tid}`, {
+            headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
+          });
+          if (asmrRes.ok) {
+            const treeData = await asmrRes.json();
+            if (Array.isArray(treeData) && treeData.length > 0) {
+              const audioList = [];
+              const isBonus = (t) => /(特典|おまけ|bonus|extra|ex_|sp_|後日談|アフター|ショートストーリー|ss)/i.test(t || '');
+              const isTalk = (t) => /(フリートーク|free[\s_-]?talk|talk|座談会|キャストコメント)/i.test(t || '');
+              const isSamp = (t) => /(サンプル|sample|体験版|予告|試聴|pv|ダイジェスト|digest|\.mp4|\.mkv)/i.test(t || '');
+
+              const trav = (items, folder = '') => {
+                if (!Array.isArray(items)) return;
+                for (const item of items) {
+                  if (!item) continue;
+                  const title = (item.title || '').trim();
+                  const type = (item.type || '').toLowerCase();
+                  const dur = Math.max(0, Math.round(Number(item.duration) || 0));
+                  if ((type === 'audio' || /\.(mp3|wav|flac|m4a|aac|ogg|opus)$/i.test(title)) && dur > 0 && !isSamp(title)) {
+                    let cat = 'main';
+                    if (isTalk(title) || isTalk(folder)) cat = 'freetalk';
+                    else if (isBonus(title) || isBonus(folder)) cat = 'bonus';
+                    audioList.push({
+                      title: title.replace(/\.[a-zA-Z0-9]+$/, '').trim(),
+                      duration: dur,
+                      formattedTime: formatServerTime(dur),
+                      category: cat,
+                      folder: folder
+                    });
+                  }
+                  if (Array.isArray(item.children) && item.children.length > 0) {
+                    trav(item.children, folder ? `${folder}/${title}` : title);
+                  }
+                }
+              };
+              trav(treeData);
+              if (audioList.length > 0) {
+                gtTracks = audioList;
+                break;
+              }
+            }
+          }
+        } catch (e) {}
+      }
+      if (gtTracks.length > 0) break;
     }
   } catch (e) {}
 
-  if (hasHls) {
-    tracks.push({
-      id: 1,
-      title: title ? `01. ${title}` : '01. Audio Track',
-      formattedTime: '00:00:00',
-      startTime: 0,
-      isHls: true,
-      rawUrl: m3u8Url,
-      streamUrl: `/stream?url=${encodeURIComponent(m3u8Url)}`,
-      poster: `/image-proxy?url=${encodeURIComponent(coverUrl)}`
-    });
-  } else {
-    const candidates = [
-      { id: 1, title: 'Track 1 (トラック1)', url: `https://v.weeab0o.xyz/${cleanRj}.mp3` },
-      { id: 2, title: 'Track 2 (トラック2)', url: `https://v.weeab0o.xyz/${cleanRj} 2.mp3` },
-      { id: 3, title: 'Track 3 (トラック3)', url: `https://v.weeab0o.xyz/${cleanRj} 3.mp3` },
-      { id: 4, title: 'Track 4 (トラック4)', url: `https://v.weeab0o.xyz/${cleanRj} 4.mp3` },
-      { id: 5, title: 'Track 5 (トラック5)', url: `https://v.weeab0o.xyz/${cleanRj} 5.mp3` }
-    ];
-    for (const c of candidates) {
-      try {
-        const headRes = await fetch(c.url, {
-          method: 'HEAD',
-          headers: { 'Referer': 'https://japaneseasmr.com/', 'User-Agent': 'Mozilla/5.0' }
-        });
-        if (headRes.ok) {
-          tracks.push({
-            id: c.id,
-            title: c.title,
-            formattedTime: '00:00:00',
-            startTime: 0,
-            isHls: false,
-            rawUrl: c.url,
-            streamUrl: `/stream?url=${encodeURIComponent(c.url)}`,
-            poster: `/image-proxy?url=${encodeURIComponent(coverUrl)}`
+  // 3. Concurrently Probe HentaiASMR Moe Audio Tracks (Pure API + Direct Media CDN)
+  // Optimization: If JapaneseASMR audio is already available, skip Moe CDN audio probing during initial import
+  const moeTracks = [];
+  let moeMeta = null;
+  try {
+    const skipMoeAudio = (japTracks.length > 0);
+    moeMeta = await fetchHentaiAsmrMetadata(cleanRj, { skipAudioProbe: skipMoeAudio });
+    if (moeMeta && Array.isArray(moeMeta.audioTracks) && moeMeta.audioTracks.length > 0) {
+      await Promise.all(moeMeta.audioTracks.map(async (t) => {
+        try {
+          const probeRef = moeMeta.postLink || 'https://hentaiasmr.moe/';
+          let mHead = await fetch(encodeURI(t.streamUrl), {
+            method: 'GET',
+            headers: {
+              'Range': 'bytes=0-0',
+              'Referer': probeRef,
+              'Origin': 'https://hentaiasmr.moe',
+              'Accept': '*/*',
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+            }
           });
+          if (!mHead.ok && mHead.status !== 206 && mHead.status !== 301 && mHead.status !== 302 && mHead.status !== 307) {
+            try {
+              const hRes = await fetch(encodeURI(t.streamUrl), {
+                method: 'HEAD',
+                headers: {
+                  'Referer': probeRef,
+                  'Origin': 'https://hentaiasmr.moe',
+                  'Accept': '*/*',
+                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+                }
+              });
+              if (hRes.ok || (hRes.status >= 200 && hRes.status < 400)) mHead = hRes;
+            } catch (he) {}
+          }
+          if (mHead.ok || mHead.status === 206 || (mHead.status >= 200 && mHead.status < 400)) {
+            const cr = mHead.headers.get('content-range');
+            if (cr) {
+              const m = cr.match(/\/(\d+)/);
+              if (m) t._size = parseInt(m[1], 10);
+            }
+            if (!t._size) {
+              t._size = parseInt(mHead.headers.get('content-length') || '0', 10);
+            }
+          }
+        } catch (e) {}
+      }));
+
+      // Detect duplicate combined/all-in-one track in Moe playlist
+      let maxTrackSize = 0;
+      let maxTrackIdx = -1;
+      let sumOtherSizes = 0;
+      moeMeta.audioTracks.forEach((t, i) => {
+        const sz = t._size || 0;
+        if (sz > maxTrackSize) {
+          maxTrackSize = sz;
+          maxTrackIdx = i;
         }
-      } catch (e) { if (c.id === 1) break; }
+      });
+      moeMeta.audioTracks.forEach((t, i) => {
+        if (i !== maxTrackIdx) sumOtherSizes += (t._size || 0);
+      });
+      const hasCombinedTrack = moeMeta.audioTracks.length >= 3 && maxTrackSize > 50 * 1024 * 1024 && Math.abs(maxTrackSize - sumOtherSizes) < (sumOtherSizes * 0.3);
+
+      const freeTalkGt = gtTracks.find(t => t.category === 'freetalk' || /(?:フリートーク|free[\s_-]?talk|talk)/i.test(t.title));
+      const combinedGt = gtTracks.find(t => /(?:つなぎ合わせた|つなげた|繋ぎ合わせた|all|full|総再生)/i.test(t.title));
+      const bonusGt = gtTracks.filter(t => t.category === 'bonus' || /(?:おまけ|bonus|特典|抜粋)/i.test(t.title));
+      const individualMainGt = gtTracks.filter(t => t.category === 'main' && !/(?:つなぎ合わせた|つなげた|繋ぎ合わせた|all|full|総再生|おまけ|特典|フリートーク)/i.test(t.title));
+
+      let mainCursor = 0;
+      let bonusCursor = 0;
+
+      moeMeta.audioTracks.forEach((t, idx) => {
+        let cat = 'main';
+        let trackTitle = t.title || `Track ${idx + 1}`;
+        let trackDur = 0;
+        let isCombined = false;
+
+        if (hasCombinedTrack && idx === maxTrackIdx) {
+          isCombined = true;
+          cat = 'main';
+          trackTitle = combinedGt ? combinedGt.title : `Full Combined Track (全編一括再生)`;
+          if (combinedGt && combinedGt.duration) trackDur = combinedGt.duration;
+        } else if ((idx === moeMeta.audioTracks.length - 2 && freeTalkGt && moeMeta.audioTracks.length > 2) || (idx === moeMeta.audioTracks.length - 1 && freeTalkGt && !hasCombinedTrack)) {
+          cat = 'freetalk';
+          trackTitle = freeTalkGt.title;
+          if (freeTalkGt.duration) trackDur = freeTalkGt.duration;
+        } else if (mainCursor < individualMainGt.length) {
+          const gt = individualMainGt[mainCursor++];
+          cat = 'main';
+          trackTitle = gt.title;
+          if (gt.duration) trackDur = gt.duration;
+        } else if (bonusCursor < bonusGt.length) {
+          const gt = bonusGt[bonusCursor++];
+          cat = 'bonus';
+          trackTitle = gt.title;
+          if (gt.duration) trackDur = gt.duration;
+        } else if (gtTracks[idx]) {
+          cat = gtTracks[idx].category;
+          trackTitle = gtTracks[idx].title;
+          if (gtTracks[idx].duration) trackDur = gtTracks[idx].duration;
+        } else {
+          if (/(?:フリートーク|free[\s_-]?talk|talk)/i.test(t.title)) cat = 'freetalk';
+          else if (/(?:おまけ|bonus|特典|omake)/i.test(t.title)) cat = 'bonus';
+        }
+
+        if (!trackDur && t._size) {
+          trackDur = Math.round(t._size / 16000); // ~128kbps MP3
+        }
+
+        moeTracks.push({
+          id: idx + 1,
+          title: trackTitle,
+          size: t._size || 0,
+          duration: trackDur,
+          formattedTime: trackDur > 0 ? formatServerTime(trackDur) : '00:00:00',
+          startTime: 0,
+          isHls: false,
+          isCombinedAllInOne: isCombined,
+          category: cat,
+          rawUrl: t.streamUrl,
+          referer: 'https://hentaiasmr.moe/',
+          streamUrl: `/stream?url=${encodeURIComponent(t.streamUrl)}&referer=${encodeURIComponent('https://hentaiasmr.moe/')}`,
+          poster: `/image-proxy?url=${encodeURIComponent(coverUrl)}`
+        });
+      });
     }
-  }
+  } catch (e) {}
 
-  // Secondary Audio CDN Fallback (HentaiASMR JWPlayer MP3 streams)
-  if (tracks.length === 0) {
-    try {
-      const moeMeta = await fetchHentaiAsmrMetadata(cleanRj);
-      if (moeMeta && Array.isArray(moeMeta.audioTracks) && moeMeta.audioTracks.length > 0) {
-        moeMeta.audioTracks.forEach(t => {
-          tracks.push({
-            id: t.index,
-            title: t.title || `Track ${t.index}`,
-            formattedTime: '00:00:00',
-            startTime: 0,
-            isHls: false,
-            rawUrl: t.streamUrl,
-            referer: 'https://hentaiasmr.moe/',
-            streamUrl: `/stream?url=${encodeURIComponent(t.streamUrl)}&referer=${encodeURIComponent('https://hentaiasmr.moe/')}`,
-            poster: `/image-proxy?url=${encodeURIComponent(coverUrl)}`
-          });
-        });
-      }
-    } catch (e) {}
-  }
+  // 4. Source Selection: JapaneseASMR vs HentaiASMR Moe Lazy On-Demand Stream
+  let tracks = [];
+  let selectedSource = '';
+  let hasLazyAudio = false;
 
-  // Tertiary Audio Fallback: ASMR Track Tree API (Discrete MP3/WAV/M4A tracks from ASMR.one / Kikoeru API)
-  if (tracks.length === 0) {
-    try {
-      const treeRes = await fetchChaptersAndGallery(cleanRj, false, 0);
-      if (treeRes && Array.isArray(treeRes.audioTracks) && treeRes.audioTracks.length > 0) {
-        treeRes.audioTracks.forEach((t, idx) => {
-          tracks.push({
-            id: idx + 1,
-            title: t.title || `Track ${idx + 1}`,
-            duration: t.duration || 0,
-            formattedTime: formatServerTime(t.duration || 0),
-            startTime: 0,
-            isHls: false,
-            rawUrl: t.url,
-            referer: 'https://www.asmr.one/',
-            streamUrl: `/stream?url=${encodeURIComponent(t.url)}&referer=${encodeURIComponent('https://www.asmr.one/')}`,
-            poster: `/image-proxy?url=${encodeURIComponent(coverUrl)}`
-          });
-        });
-        hasHls = false;
-      }
-    } catch (e) {}
-  }
-
-  // Quaternary fallback: if CDN probes were inconclusive, synthesize standard m3u8 stream track
-  if (tracks.length === 0) {
+  if (japTracks.length > 0) {
+    tracks = japTracks;
+    selectedSource = (tracks[0] && tracks[0].isHls) ? 'JapaneseASMR (HLS Stream)' : 'JapaneseASMR (Discrete MP3 tracks)';
+    hasLazyAudio = false;
+  } else if (moeMeta || moeMetaForResolve) {
+    hasLazyAudio = true;
     tracks.push({
       id: 1,
-      title: title ? `01. ${title}` : '01. Audio Track',
+      title: title ? ('01. ' + title) : '01. Audio Track',
+      isLazy: true,
+      rawUrl: '',
+      streamUrl: '',
+      category: 'main',
       formattedTime: '00:00:00',
-      startTime: 0,
-      isHls: true,
-      rawUrl: m3u8Url,
-      referer: 'https://japaneseasmr.com/',
-      streamUrl: `/stream?url=${encodeURIComponent(m3u8Url)}&referer=${encodeURIComponent('https://japaneseasmr.com/')}`,
-      poster: `/image-proxy?url=${encodeURIComponent(coverUrl)}`
+      duration: 0,
+      size: 0,
+      poster: coverUrl ? `/image-proxy?url=${encodeURIComponent(coverUrl)}` : ''
     });
-    hasHls = true;
+    selectedSource = 'HentaiASMR Moe (On-Demand Lazy Stream)';
+  } else {
+    throw new Error(`Work ${cleanRj} not found on JapaneseASMR or HentaiASMR Moe`);
+  }
+
+  const postLink = moeMeta?.postLink || moeMetaForResolve?.postLink || `https://hentaiasmr.moe/${cleanRj.toLowerCase()}.html`;
+  const sourcesBreakdown = {
+    japaneseAsmr: {
+      found: japTracks.length > 0,
+      isHls: japTracks.length > 0 && japTracks[0].isHls === true,
+      trackCount: japTracks.length,
+      sampleUrl: japTracks.length > 0 ? (japTracks[0].rawUrl || japTracks[0].streamUrl) : null
+    },
+    hentaiAsmrMoe: {
+      found: Boolean(moeMeta?.postId || moeMetaForResolve?.postId),
+      pattern: hasLazyAudio ? 'lazy_on_demand' : null,
+      trackCount: hasLazyAudio ? 1 : 0,
+      sampleUrl: null,
+      postId: moeMeta?.postId || moeMetaForResolve?.postId || null
+    }
+  };
+
+  tracks.forEach((t, i) => { t.id = i + 1; });
+
+  const diag = moeMeta?.diagnostic || moeMetaForResolve?.diagnostic || null;
+  if (diag) {
+    diag.selectedSource = selectedSource;
+    diag.sourcesBreakdown = sourcesBreakdown;
+    diag.isWorkingAudioFound = true;
+    diag.chosenTracks = tracks.map(t => ({
+      title: t.title || '',
+      rawUrl: t.rawUrl || t.streamUrl || '',
+      streamUrl: t.streamUrl || '',
+      isHls: !!t.isHls,
+      category: t.category || 'main'
+    }));
   }
 
   return {
@@ -1357,13 +1597,129 @@ async function resolveRjWork(rjCode) {
     tagTranslations,
     coverUrl: `/image-proxy?url=${encodeURIComponent(coverUrl)}`,
     rawCoverUrl: coverUrl,
-    hasHls: hasHls,
+    hasHls: tracks.length > 0 && tracks[0].isHls === true,
+    hasLazyAudio: Boolean(hasLazyAudio),
+    postLink: postLink,
     isNsfw: isAdult,
     totalTracks: tracks.length,
     tracks,
+    sources: sourcesBreakdown,
     addedAt: new Date().toISOString(),
-    favorite: false
+    favorite: false,
+    moeDiagnostic: diag
   };
+}
+
+// Extract exact JWPlayer audio playlist from Moe post HTML
+function extractMoeHtmlTracks(html, postLink, coverUrl, title) {
+  const tracks = [];
+  if (!html) return tracks;
+
+  // Pattern 1: JWPlayer playlist.push({ file: '...', title: '...' })
+  const itemRegex = /playlist\.push\(\s*\{([\s\S]*?)\}\s*\);/gi;
+  let match;
+  while ((match = itemRegex.exec(html)) !== null) {
+    const block = match[1];
+    const fileM = block.match(/file\s*:\s*["']([^"']+)["']/i);
+    const titleM = block.match(/title\s*:\s*["']([^"']+)["']/i);
+    if (fileM) {
+      let fUrl = fileM[1].replace(/\\\//g, '/').replace(/&amp;/g, '&').trim();
+      if (fUrl.startsWith('//')) fUrl = 'https:' + fUrl;
+      const tTitle = titleM ? titleM[1].trim() : `Track ${tracks.length + 1}`;
+      tracks.push({
+        id: tracks.length + 1,
+        title: tTitle,
+        rawUrl: fUrl,
+        streamUrl: `/stream?url=${encodeURIComponent(fUrl)}&referer=${encodeURIComponent('https://hentaiasmr.moe/')}`,
+        category: /(?:フリートーク|free[\s_-]?talk|talk)/i.test(tTitle) ? 'freetalk' : (/(?:おまけ|bonus|特典|omake)/i.test(tTitle) ? 'bonus' : 'main'),
+        formattedTime: '00:00:00',
+        duration: 0,
+        size: 0,
+        isHls: fUrl.toLowerCase().includes('.m3u8'),
+        poster: coverUrl ? `/image-proxy?url=${encodeURIComponent(coverUrl)}` : ''
+      });
+    }
+  }
+
+  // Pattern 2: sources: [ { file: "..." } ]
+  if (tracks.length === 0) {
+    const srcRegex = /sources\s*:\s*\[\s*\{([\s\S]*?)\}\s*\]/gi;
+    while ((match = srcRegex.exec(html)) !== null) {
+      const block = match[1];
+      const fileM = block.match(/file\s*:\s*["']([^"']+)["']/i);
+      if (fileM) {
+        let fUrl = fileM[1].replace(/\\\//g, '/').replace(/&amp;/g, '&').trim();
+        if (fUrl.startsWith('//')) fUrl = 'https:' + fUrl;
+        tracks.push({
+          id: tracks.length + 1,
+          title: title ? `01. ${title}` : '01. Audio Track',
+          rawUrl: fUrl,
+          streamUrl: `/stream?url=${encodeURIComponent(fUrl)}&referer=${encodeURIComponent('https://hentaiasmr.moe/')}`,
+          category: 'main',
+          formattedTime: '00:00:00',
+          duration: 0,
+          size: 0,
+          isHls: fUrl.toLowerCase().includes('.m3u8'),
+          poster: coverUrl ? `/image-proxy?url=${encodeURIComponent(coverUrl)}` : ''
+        });
+      }
+    }
+  }
+
+  // Pattern 3: <audio> / <source> / schema contentURL
+  if (tracks.length === 0) {
+    const audioRegex = /(?:<source[^>]+src=["']|<audio[^>]+src=["']|"contentURL"\s*:\s*["'])(https?:\/\/[^\s"'<>]+\.(?:mp3|m4a|wav|ogg|flac|m3u8))/gi;
+    while ((match = audioRegex.exec(html)) !== null) {
+      let fUrl = match[1].replace(/\\\//g, '/').replace(/&amp;/g, '&').trim();
+      if (!tracks.some(t => t.rawUrl === fUrl)) {
+        tracks.push({
+          id: tracks.length + 1,
+          title: title ? `01. ${title}` : `Track ${tracks.length + 1}`,
+          rawUrl: fUrl,
+          streamUrl: `/stream?url=${encodeURIComponent(fUrl)}&referer=${encodeURIComponent('https://hentaiasmr.moe/')}`,
+          category: 'main',
+          formattedTime: '00:00:00',
+          duration: 0,
+          size: 0,
+          isHls: fUrl.toLowerCase().includes('.m3u8'),
+          poster: coverUrl ? `/image-proxy?url=${encodeURIComponent(coverUrl)}` : ''
+        });
+      }
+    }
+  }
+
+  return tracks;
+}
+
+// On-demand lazy resolution: Fetches Moe post HTML and extracts exact tracks
+async function resolveLazyWorkAudio(work) {
+  if (!work) return null;
+  const cleanLower = (work.rjCode || '').toLowerCase();
+  const pageUrl = work.postLink || `https://hentaiasmr.moe/${cleanLower}.html`;
+
+  try {
+    const res = await fetch(pageUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Referer': 'https://hentaiasmr.moe/',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9,ja;q=0.8'
+      }
+    });
+    if (res.ok) {
+      const html = await res.text();
+      const extractedTracks = extractMoeHtmlTracks(html, pageUrl, work.rawCoverUrl || work.coverUrl, work.title);
+      if (extractedTracks && extractedTracks.length > 0) {
+        work.tracks = extractedTracks;
+        work.hasLazyAudio = false;
+        work.totalTracks = extractedTracks.length;
+        work.hasHls = extractedTracks.some(t => t.isHls);
+        return work;
+      }
+    }
+  } catch (e) {}
+
+  return work;
 }
 
 async function resolveWorkMetadataOnly(cleanRj, oldWork) {
@@ -1509,7 +1865,7 @@ function isWorkMetadataChanged(oldWork, freshWork) {
   const newTracks = freshWork.tracks || [];
   if (oldTracks.length !== newTracks.length) return true;
   for (let i = 0; i < oldTracks.length; i++) {
-    if (oldTracks[i].streamUrl !== newTracks[i].streamUrl || oldTracks[i].title !== newTracks[i].title) {
+    if (oldTracks[i].streamUrl !== newTracks[i].streamUrl || oldTracks[i].title !== newTracks[i].title || oldTracks[i].category !== newTracks[i].category) {
       return true;
     }
   }
@@ -1661,7 +2017,26 @@ function parseAsmrTreeData(treeData, hasHls = true, targetDuration = 0) {
       mainTracks = rootAudio;
     }
 
-    // 2. Evaluate bonus tracks with cumulative duration validation
+    const isFreeTalkPattern = (str) => /(?:フリートーク|free[\s_-]?talk|talk|座談会|キャストコメント|あとがき|お便り)/i.test(str || '');
+
+    // 2. Extract standalone Free-Talk tracks across all folders
+    const freeTalkTracks = [];
+    const seenFreeTalkTitles = new Set();
+    for (const fKey of allFolderKeys) {
+      for (const t of folderAudioMap[fKey]) {
+        if (isFreeTalkPattern(t.title) && !isSamplePromo(t.title) && !isConcatPattern(t.title)) {
+          if (/\.wav$/i.test(t.rawTitle) && folderAudioMap[fKey].some(o => /\.mp3$/i.test(o.rawTitle) && isFreeTalkPattern(o.title))) continue;
+          const norm = t.title.toLowerCase().replace(/\s+/g, '');
+          if (!seenFreeTalkTitles.has(norm)) {
+            seenFreeTalkTitles.add(norm);
+            t.category = 'freetalk';
+            freeTalkTracks.push(t);
+          }
+        }
+      }
+    }
+
+    // 3. Evaluate bonus tracks
     const mainTotalDur = mainTracks.reduce((sum, t) => sum + t.duration, 0);
 
     for (const bf of bonusFolders) {
@@ -1673,6 +2048,7 @@ function parseAsmrTreeData(treeData, hasHls = true, targetDuration = 0) {
       for (const bt of bTracks) {
         if (isSamplePromo(bt.title)) continue;
         if (isConcatPattern(bt.title) || isConcatPattern(bt.rawTitle) || isConcatPattern(bt.folder)) continue;
+        if (isFreeTalkPattern(bt.title)) continue; // Handled in freeTalkTracks!
         if (mainTracks.length > 1 && bt.duration >= mainTotalDur * 0.75) continue; // Duplicate full track!
         if (isNoSePattern(bt.title) && bTracks.some(o => !isNoSePattern(o.title) && o.duration > 0)) continue;
         if (/\.wav$/i.test(bt.rawTitle) && bTracks.some(o => /\.mp3$/i.test(o.rawTitle))) continue;
@@ -1680,6 +2056,7 @@ function parseAsmrTreeData(treeData, hasHls = true, targetDuration = 0) {
         const norm = bt.title.toLowerCase().replace(/\s+/g, '');
         if (!seenBonusTitles.has(norm)) {
           seenBonusTitles.add(norm);
+          bt.category = 'bonus';
           validCandidateBonus.push(bt);
         }
       }
@@ -1687,16 +2064,10 @@ function parseAsmrTreeData(treeData, hasHls = true, targetDuration = 0) {
       if (validCandidateBonus.length > 0) {
         const bonusDur = validCandidateBonus.reduce((sum, t) => sum + t.duration, 0);
         if (targetDuration > 0) {
-          if (mainTotalDur >= targetDuration - 5) {
-            // Main tracks already account for the full stream duration
-            continue;
+          if (mainTotalDur < targetDuration - 5 && mainTotalDur + bonusDur <= targetDuration + 10) {
+            bonusTracks.push(...validCandidateBonus);
           }
-          if (mainTotalDur + bonusDur > targetDuration + 10) {
-            // Combined duration would exceed the stream duration
-            continue;
-          }
-          bonusTracks.push(...validCandidateBonus);
-        } else if (mainTracks.length === 0) {
+        } else {
           bonusTracks.push(...validCandidateBonus);
         }
       }
@@ -1705,7 +2076,9 @@ function parseAsmrTreeData(treeData, hasHls = true, targetDuration = 0) {
     mainTracks = rootAudio;
   }
 
-  const combinedList = [...mainTracks, ...bonusTracks];
+  mainTracks.forEach(t => { if (!t.category) t.category = 'main'; });
+
+  const combinedList = [...mainTracks, ...freeTalkTracks, ...bonusTracks];
   const hasDiscreteTracks = combinedList.some(c => !isConcatPattern(c.title) && !isConcatPattern(c.folder));
   let finalAudioList = [];
   const seenNormTitles = new Set();
@@ -1717,6 +2090,9 @@ function parseAsmrTreeData(treeData, hasHls = true, targetDuration = 0) {
     const normKey = cand.title.toLowerCase().replace(/\s+/g, '');
     if (!seenNormTitles.has(normKey)) {
       seenNormTitles.add(normKey);
+      if (!cand.category) {
+        cand.category = /(?:フリートーク|free[\s_-]?talk|talk)/i.test(cand.title) ? 'freetalk' : (/(?:おまけ|bonus|特典)/i.test(cand.title) ? 'bonus' : 'main');
+      }
       finalAudioList.push(cand);
     }
   }
@@ -1782,7 +2158,8 @@ function parseAsmrTreeData(treeData, hasHls = true, targetDuration = 0) {
       startTime: startSecs,
       duration: t.duration,
       formattedTime: formatTime(startSecs),
-      trackIndex: trackIdx
+      trackIndex: trackIdx,
+      category: t.category || 'main'
     });
   }
 
@@ -2129,38 +2506,69 @@ export default {
       if (!match) return json({ error: 'Invalid RJ/VJ/BJ Code' }, 400);
 
       const rjCode = match[0].toUpperCase();
-      const db = await getDb(env);
 
-      if (db.works[rjCode]) {
-        if ((db.wishlist || []).some(w => w.rjCode === rjCode)) {
-          db.wishlist = (db.wishlist || []).filter(w => w.rjCode !== rjCode);
-          await saveDb(env, db);
+      // Quick check if already in DB
+      const dbCheck = await getDb(env);
+      if (dbCheck.works && dbCheck.works[rjCode]) {
+        if ((dbCheck.wishlist || []).some(w => w.rjCode === rjCode)) {
+          const freshDb = await getDb(env);
+          freshDb.wishlist = (freshDb.wishlist || []).filter(w => w.rjCode !== rjCode);
+          await saveDb(env, freshDb);
         }
-        return json({ success: true, work: db.works[rjCode] });
+        return json({ success: true, work: dbCheck.works[rjCode] });
       }
 
+      let work = null;
+      let resolveErr = null;
       try {
-        const work = await resolveRjWork(rjCode);
-        db.works[rjCode] = work;
-        // If it was in wishlist, remove it
-        db.wishlist = (db.wishlist || []).filter(w => w.rjCode !== rjCode);
-        await saveDb(env, db);
-        return json({ success: true, work });
+        work = await resolveRjWork(rjCode);
       } catch (err) {
-        // Auto-save to wishlist for future reimport
-        db.wishlist = db.wishlist || [];
+        resolveErr = err;
+      }
+
+      // Fresh DB fetch right before saving to eliminate stale KV overwrite race condition
+      const db = await getDb(env);
+      db.works = db.works || {};
+      db.wishlist = db.wishlist || [];
+
+      if (work) {
+        db.works[rjCode] = work;
+        db.wishlist = db.wishlist.filter(w => w.rjCode !== rjCode);
+        await saveDb(env, db);
+        return json({ success: true, work, moeDiagnostic: work.moeDiagnostic || null });
+      } else {
         const existingIdx = db.wishlist.findIndex(w => w.rjCode === rjCode);
         const wishItem = {
           rjCode,
           title: `Work ${rjCode}`,
-          reason: err.message || 'Audio stream not yet available on CDN',
+          reason: resolveErr ? (resolveErr.message || 'Audio stream not yet available on CDN') : 'Audio stream not yet available on CDN',
           addedAt: new Date().toISOString()
         };
-        if (existingIdx >= 0) db.wishlist[existingIdx] = wishItem;
+        if (existingIdx >= 0) db.wishlist[existingIdx] = { ...db.wishlist[existingIdx], ...wishItem };
         else db.wishlist.unshift(wishItem);
         await saveDb(env, db);
-        return json({ error: err.message, wishlisted: true }, 500);
+        return json({ error: resolveErr ? resolveErr.message : 'Audio stream not yet available on CDN', wishlisted: true, moeDiagnostic: resolveErr?.moeDiagnostic || null }, 500);
       }
+    }
+
+    // Resolve Lazy Stream On-Demand for a work
+    if ((pathname.match(/^\/api\/work\/[^\/]+\/resolve-stream$/) || pathname.match(/^\/api\/work\/[^\/]+\/resolve$/)) && request.method === 'POST') {
+      if (!isAuth()) return json({ error: 'Unauthorized' }, 401);
+      const rjMatch = pathname.match(/(?:RJ|VJ|BJ)\d+/i);
+      if (!rjMatch) return json({ error: 'Invalid RJ Code' }, 400);
+      const rjCode = rjMatch[0].toUpperCase();
+
+      const db = await getDb(env);
+      let work = db.works && db.works[rjCode];
+      if (!work) return json({ error: 'Work not found in library' }, 404);
+
+      if (work.hasLazyAudio || (work.tracks && work.tracks.some(t => t.isLazy || (!t.streamUrl && !t.rawUrl)))) {
+        work = await resolveLazyWorkAudio(work);
+        db.works[rjCode] = work;
+        await saveDb(env, db);
+      }
+
+      return json({ success: true, work, tracks: work.tracks });
     }
 
     // Batch Import
@@ -2246,7 +2654,10 @@ export default {
       results.updatedWorks = updatedWorksMap;
 
       if (hasAnyChanges && saveImmediately) {
-        await saveDb(env, db);
+        const freshDb = await getDb(env);
+        freshDb.works = freshDb.works || {};
+        Object.assign(freshDb.works, updatedWorksMap);
+        await saveDb(env, freshDb);
         results.savedToKv = true;
       }
       return json(results);
@@ -2272,8 +2683,8 @@ export default {
     if (pathname.startsWith('/api/library/refresh/') && request.method === 'POST') {
       if (!isAuth()) return json({ error: 'Unauthorized' }, 401);
       const rjCode = pathname.replace('/api/library/refresh/', '').toUpperCase();
-      const db = await getDb(env);
-      const old = db.works ? db.works[rjCode] : null;
+      const dbCheck = await getDb(env);
+      const old = dbCheck.works ? dbCheck.works[rjCode] : null;
       if (!old) return json({ error: 'Work not found in library' }, 404);
       try {
         const fresh = await resolveRjWork(rjCode, false);
@@ -2285,8 +2696,11 @@ export default {
           addedAt: old.addedAt || fresh.addedAt
         };
         if (changed) {
-          db.works[rjCode] = updatedWork;
-          await saveDb(env, db);
+          const freshDb = await getDb(env);
+          if (freshDb.works) {
+            freshDb.works[rjCode] = updatedWork;
+            await saveDb(env, freshDb);
+          }
         }
         return json({ success: true, work: updatedWork, changed, savedToKv: changed });
       } catch (e) {
@@ -3058,9 +3472,10 @@ const INDEX_HTML = `<!DOCTYPE html>
       --bg-card: #12131a;
       --bg-card-hover: #181a24;
       --border: rgba(255, 255, 255, 0.08);
-      --accent: #ff3366;
-      --accent-hover: #e02456;
-      --accent-glow: rgba(255, 51, 102, 0.35);
+      --accent: #ff7a00;
+      --accent-hover: #ea6c00;
+      --accent-glow: rgba(255, 122, 0, 0.35);
+      --accent-gradient: linear-gradient(135deg, #ff7a00, #ff9500);
       --text-main: #f3f4f6;
       --text-muted: #9ca3af;
       --sidebar-w: 240px;
@@ -3088,7 +3503,7 @@ const INDEX_HTML = `<!DOCTYPE html>
       z-index: 50;
     }
     .logo-area { display: flex; align-items: center; gap: 10px; padding: 0 10px; margin-bottom: 32px; cursor: pointer; }
-    .logo-icon { width: 38px; height: 38px; background: linear-gradient(135deg, #0284c7, #06b6d4); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 1.35rem; box-shadow: 0 0 16px rgba(56, 189, 248, 0.35); flex-shrink: 0; }
+    .logo-icon { width: 38px; height: 38px; background: var(--accent-gradient, linear-gradient(135deg, #ff7a00, #ff9500)); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 1.35rem; box-shadow: 0 0 16px var(--accent-glow); flex-shrink: 0; }
     .logo-title { font-weight: 800; font-size: 1.25rem; letter-spacing: -0.02em; background: linear-gradient(90deg, #fff, #94a3b8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
     .nav-section { display: flex; flex-direction: column; gap: 4px; }
     .nav-title { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); padding: 12px 10px 6px; font-weight: 700; }
@@ -3429,6 +3844,8 @@ const INDEX_HTML = `<!DOCTYPE html>
     .btn-outline:hover { background: var(--bg-card-hover); border-color: rgba(255,255,255,0.2); }
     .btn-icon { background: var(--bg-card); border: 1px solid var(--border); color: #fff; width: 38px; height: 38px; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; font-size: 1.05rem; cursor: pointer; transition: 0.15s; }
     .btn-icon:hover { background: var(--bg-card-hover); border-color: rgba(255,255,255,0.2); }
+    @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    .spin { display: inline-block; animation: spin 1s linear infinite; }
 
     /* View Modes & Explorer Toolbar */
     .view-modes-bar {
@@ -4479,39 +4896,39 @@ const INDEX_HTML = `<!DOCTYPE html>
     <div class="modal-content" style="max-width: 640px; max-height: 84vh; overflow-y: auto;">
       <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
         <div style="display: flex; align-items: center; gap: 10px;">
-          <div style="width: 36px; height: 36px; border-radius: 10px; background: linear-gradient(135deg, #0284c7, #06b6d4); display: flex; align-items: center; justify-content: center; font-size: 1.3rem;">🐧</div>
+          <div style="width: 36px; height: 36px; border-radius: 10px; background: var(--accent-gradient, linear-gradient(135deg, #ff7a00, #ff9500)); display: flex; align-items: center; justify-content: center; font-size: 1.3rem; box-shadow: 0 0 14px var(--accent-glow);">🚀</div>
           <div>
             <h3 style="font-size: 1.3rem; font-weight: 800;">aStreamer Release Notes</h3>
-            <span style="font-size: 0.8rem; color: #38bdf8; font-weight: 700;">Version 1.5 Official Release</span>
+            <span style="font-size: 0.8rem; color: var(--accent); font-weight: 700;">Version 2.0 Official Milestone Release</span>
           </div>
         </div>
         <button class="btn-outline" style="padding: 4px 10px;" onclick="closeChangelogModal()">✖</button>
       </div>
       
       <div style="color: #d1d5db; font-size: 0.9rem; line-height: 1.6; display: flex; flex-direction: column; gap: 14px;">
-        <div style="background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.2); padding: 14px; border-radius: 10px;">
-          <h4 style="color: #38bdf8; font-weight: 700; margin-bottom: 4px;">🏷️ Zen Tag & CV Command Search</h4>
-          <p style="color: var(--text-muted); font-size: 0.85rem;">Floating tag & Voice Actor autocompleter with live Japanese/Romaji/English translations, multi-tag filter combination (<code>+</code>), keyboard navigation (<code>↑</code>/<code>↓</code>/<code>↵</code>), and clean <code>Esc</code> key dismiss.</p>
+        <div style="background: rgba(255, 122, 0, 0.08); border: 1px solid rgba(255, 122, 0, 0.25); padding: 14px; border-radius: 10px;">
+          <h4 style="color: #ff7a00; font-weight: 700; margin-bottom: 4px;">⚡ Instant Batch Ingestion &amp; Parallel Fast-Probing</h4>
+          <p style="color: var(--text-muted); font-size: 0.85rem;">Eliminated Cloudflare 503 Worker timeouts. Batch imports now probe JapaneseASMR with lightweight 2-URL parallel checks in ~150ms. Works not on JapaneseASMR are instantly ingested via REST API without expensive sequential CDN path guessing.</p>
         </div>
 
-        <div style="background: rgba(168, 85, 247, 0.08); border: 1px solid rgba(168, 85, 247, 0.2); padding: 14px; border-radius: 10px;">
-          <h4 style="color: #c084fc; font-weight: 700; margin-bottom: 4px;">🎧 Intelligent Multi-Track & Chapter Tree Engine</h4>
-          <p style="color: var(--text-muted); font-size: 0.85rem;">Advanced hierarchy parser automatically separates master session audio tracks from bonus files/alt versions, guaranteeing accurate track counts and chapter markers without timestamps exceeding track durations.</p>
+        <div style="background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); padding: 14px; border-radius: 10px;">
+          <h4 style="color: #38bdf8; font-weight: 700; margin-bottom: 4px;">🎧 On-Demand Lazy Audio Stream Resolution</h4>
+          <p style="color: var(--text-muted); font-size: 0.85rem;">Works from HentaiASMR Moe are gentle-scraped only when a user opens or plays the work, extracting the exact JWPlayer playlist and permanently caching it in KV for seamless instant replays.</p>
         </div>
 
-        <div style="background: rgba(255, 51, 102, 0.08); border: 1px solid rgba(255, 51, 102, 0.2); padding: 14px; border-radius: 10px;">
-          <h4 style="color: var(--accent); font-weight: 700; margin-bottom: 4px;">🖼️ Adaptive Artwork Gallery & Touch Carousel</h4>
-          <p style="color: var(--text-muted); font-size: 0.85rem;">Fluid touch-friendly horizontal swipe reader mode with snap-to-card and full uncropped display for 100+ manga/doujin scans. Includes one-tap <code>⊞ Grid / ↔ Carousel</code> mode switcher and Lightbox viewer.</p>
+        <div style="background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.25); padding: 14px; border-radius: 10px;">
+          <h4 style="color: #f59e0b; font-weight: 700; margin-bottom: 4px;">🎨 Theme Accent Color Switcher (Orange Default)</h4>
+          <p style="color: var(--text-muted); font-size: 0.85rem;">Customize your app aesthetic in Settings. Choose from 🍊 Hyper Orange (v2.0 signature), 🌊 Cyber Sky Blue, 🔮 Electric Purple, 🍃 Emerald Green, 🌸 Sakura Rose, and ⚡ Golden Amber.</p>
         </div>
 
-        <div style="background: rgba(34, 197, 94, 0.08); border: 1px solid rgba(34, 197, 94, 0.2); padding: 14px; border-radius: 10px;">
-          <h4 style="color: #22c55e; font-weight: 700; margin-bottom: 4px;">📱 Mobile UI Overhaul (Compact 2-Row Cards & Player Bar)</h4>
-          <p style="color: var(--text-muted); font-size: 0.85rem;">Re-architected Chapter Lists, Audio Tracks, Playlists, and History into consistent ~58px responsive mobile cards, paired with a dedicated 3-row thumb-friendly docked bottom player.</p>
+        <div style="background: rgba(34, 197, 94, 0.08); border: 1px solid rgba(34, 197, 94, 0.25); padding: 14px; border-radius: 10px;">
+          <h4 style="color: #22c55e; font-weight: 700; margin-bottom: 4px;">🔊 Streamlined Player Controls</h4>
+          <p style="color: var(--text-muted); font-size: 0.85rem;">Volume is defaulted to 100% max output across all audio tracks with redundant sliders removed, giving a clean and unobstructed floating &amp; bottom player bar with quick one-click Mute / Unmute.</p>
         </div>
 
-        <div style="background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border); padding: 14px; border-radius: 10px;">
-          <h4 style="color: #fff; font-weight: 700; margin-bottom: 4px;">🛡️ Privacy SFW Mode & Playlist Management</h4>
-          <p style="color: var(--text-muted); font-size: 0.85rem;">One-tap track additions with floating toast feedback, non-interrupting playback navigation, and 3 privacy levels including <code>🎭 PSFW</code> disguise covers.</p>
+        <div style="background: rgba(168, 85, 247, 0.08); border: 1px solid rgba(168, 85, 247, 0.25); padding: 14px; border-radius: 10px;">
+          <h4 style="color: #c084fc; font-weight: 700; margin-bottom: 4px;">🏷️ Self-Learning AI Tag &amp; CV Dictionary</h4>
+          <p style="color: var(--text-muted); font-size: 0.85rem;">Bilingual Japanese / Rōmaji / English tag autocompletion, DeepSeek AI SFW/NSFW classification, and high-resolution artwork gallery reader with touch-carousel.</p>
         </div>
       </div>
 
@@ -4839,8 +5256,7 @@ const INDEX_HTML = `<!DOCTYPE html>
 
       <div class="popup-secondary-row">
         <div style="display: flex; align-items: center; gap: 8px;">
-          <button class="ctrl-btn" onclick="toggleMute()" style="font-size: 1rem;">🔊</button>
-          <input type="range" id="popupVolumeSlider" class="volume-slider" min="0" max="1" step="0.05" value="1" oninput="setVolume(this.value)">
+          <button id="popupMuteBtn" class="ctrl-btn" onclick="toggleMute()" style="font-size: 1rem;" title="Mute / Unmute">🔊</button>
         </div>
         <div style="display: flex; align-items: center; gap: 8px;">
           <span id="popupFavBtn" style="font-size: 1.15rem; cursor: pointer;" title="Toggle Favorite" onclick="toggleCurrentWorkFav()">🤍</span>
@@ -4908,7 +5324,7 @@ const INDEX_HTML = `<!DOCTYPE html>
       <div class="logo-icon">🐧</div>
       <div>
         <div class="logo-title">aStreamer</div>
-        <span style="font-size: 0.65rem; color: #38bdf8; font-weight: 700; background: rgba(56,189,248,0.15); padding: 1px 6px; border-radius: 4px; border: 1px solid rgba(56,189,248,0.3);">v1.5 Official</span>
+        <span id="appVersionTag" style="font-size: 0.65rem; color: var(--accent); font-weight: 700; background: var(--accent-glow); padding: 1px 6px; border-radius: 4px; border: 1px solid var(--accent);">v2.0 Official</span>
       </div>
     </a>
 
@@ -5017,8 +5433,7 @@ const INDEX_HTML = `<!DOCTYPE html>
       <button class="ctrl-btn" title="Add Playing Track to Playlist" onclick="addCurrentPlayingTrackToPlaylist()" style="font-size: 1.05rem; margin-right: 2px;">➕</button>
       <button class="ctrl-btn" title="View Playing Work Details" onclick="jumpToCurrentWorkDetail()" style="font-size: 1.05rem; margin-right: 2px;">👁️</button>
       <button id="playerBarChapterBtn" class="ctrl-btn" onclick="openPopupPlayerWithChapters()" title="View Chapters & Cue Points" style="font-size: 1.1rem; margin-right: 4px;">📑</button>
-      <button class="ctrl-btn" onclick="toggleMute()" title="Mute/Unmute">🔊</button>
-      <input type="range" id="volumeSlider" class="volume-slider" min="0" max="1" step="0.05" value="1" oninput="setVolume(this.value)">
+      <button id="muteBtn" class="ctrl-btn" onclick="toggleMute()" title="Mute / Unmute">🔊</button>
       <button class="player-expand-btn" style="margin-left: 6px;" title="Expand/Collapse Floating Player" onclick="togglePopupPlayer()">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="15 3 21 3 21 9"></polyline>
@@ -5422,6 +5837,78 @@ const INDEX_HTML = `<!DOCTYPE html>
     let historySortMode = 'date-desc'; // date-desc, date-asc, title-asc, rj-asc
     let isShuffle = false;
     let playbackHistoryStack = [];
+
+    const ACCENT_THEMES = {
+      orange: {
+        name: '🍊 Hyper Orange (v2.0)',
+        hex: '#ff7a00',
+        hover: '#ea6c00',
+        glow: 'rgba(255, 122, 0, 0.35)',
+        gradient: 'linear-gradient(135deg, #ff7a00, #ff9500)'
+      },
+      blue: {
+        name: '🌊 Cyber Sky Blue',
+        hex: '#38bdf8',
+        hover: '#0284c7',
+        glow: 'rgba(56, 189, 248, 0.35)',
+        gradient: 'linear-gradient(135deg, #0284c7, #38bdf8)'
+      },
+      purple: {
+        name: '🔮 Electric Purple',
+        hex: '#a855f7',
+        hover: '#9333ea',
+        glow: 'rgba(168, 85, 247, 0.35)',
+        gradient: 'linear-gradient(135deg, #7c3aed, #a855f7)'
+      },
+      emerald: {
+        name: '🍃 Emerald Green',
+        hex: '#10b981',
+        hover: '#059669',
+        glow: 'rgba(16, 185, 129, 0.35)',
+        gradient: 'linear-gradient(135deg, #059669, #10b981)'
+      },
+      rose: {
+        name: '🌸 Sakura Rose',
+        hex: '#ff3366',
+        hover: '#e02456',
+        glow: 'rgba(255, 51, 102, 0.35)',
+        gradient: 'linear-gradient(135deg, #e11d48, #ff3366)'
+      },
+      amber: {
+        name: '⚡ Golden Amber',
+        hex: '#f59e0b',
+        hover: '#d97706',
+        glow: 'rgba(245, 158, 11, 0.35)',
+        gradient: 'linear-gradient(135deg, #d97706, #f59e0b)'
+      }
+    };
+
+    let currentAccent = 'orange';
+    try { currentAccent = localStorage.getItem('astreamer_accent_color') || 'orange'; } catch(e) {}
+
+    function setAccentTheme(themeKey, persist = true) {
+      currentAccent = themeKey;
+      const theme = ACCENT_THEMES[themeKey] || ACCENT_THEMES.orange;
+      document.documentElement.style.setProperty('--accent', theme.hex);
+      document.documentElement.style.setProperty('--accent-hover', theme.hover);
+      document.documentElement.style.setProperty('--accent-glow', theme.glow);
+      document.documentElement.style.setProperty('--accent-gradient', theme.gradient);
+      
+      const vTag = document.getElementById('appVersionTag');
+      if (vTag) {
+        vTag.style.color = theme.hex;
+        vTag.style.borderColor = theme.hex;
+        vTag.style.background = theme.glow;
+      }
+      
+      if (persist) {
+        try { localStorage.setItem('astreamer_accent_color', themeKey); } catch(e) {}
+        if (currentView === 'settings') {
+          loadSettings();
+        }
+      }
+    }
+    setAccentTheme(currentAccent, false);
 
     try { contentMode = localStorage.getItem('astreamer_content_mode') || 'NSFW'; } catch(e) {}
     try { libraryViewMode = localStorage.getItem('astreamer_view_mode') || 'medium'; } catch(e) {}
@@ -6433,20 +6920,29 @@ const INDEX_HTML = `<!DOCTYPE html>
       currentWorkChapters = chaptersList;
 
       const galleryCount = (Array.isArray(work.gallery) ? work.gallery.length : 0);
-      let html = '<div class="work-detail-banner"><img class="detail-cover" src="' + display.coverUrl + '" onerror="handleImgError(this)"><div class="detail-info"><div style="display:flex; gap:8px; margin-bottom:8px;"><span class="card-rj">' + work.rjCode + '</span><span style="background:#0e7490; color:#fff; font-size:0.75rem; font-weight:700; padding:2px 8px; border-radius:4px;">' + (work.hasHls ? 'HLS Chapters' : 'Multi-Track') + '</span></div><h1 class="detail-title">' + work.title + '</h1><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Voice Actor (CV):</strong> ' + cvPills + '</div><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Circle:</strong> ' + circlePill + '</div><div class="tags-row">' + tagPills + '</div><div style="margin-top:auto; padding-top:16px; display:flex; flex-wrap:wrap; gap:10px;"><button class="btn-primary" onclick="playTrack(0, true)">▶ Play All</button><button class="btn-outline" id="btnWorkGallery" data-rj="' + work.rjCode + '" onclick="openWorkGalleryModal()" style="display:' + (galleryCount > 0 ? 'inline-flex' : 'none') + ';">🖼️ Gallery (<span id="btnWorkGalleryCount">' + galleryCount + '</span>)</button><button class="btn-outline" data-rj="' + work.rjCode + '" onclick="addWorkToPlaylistAction(this.dataset.rj)">➕ Add Work to Playlist</button><button class="btn-outline" data-rj="' + work.rjCode + '" onclick="refreshSingleWork(this.dataset.rj)">🔄 Refresh</button><button class="btn-outline" data-rj="' + work.rjCode + '" onclick="deleteWorkItem(this.dataset.rj)">🗑️ Remove</button><button class="btn-outline" onclick="navBack()">← Back</button></div></div></div>';
+      let html = '<div class="work-detail-banner"><img class="detail-cover" src="' + display.coverUrl + '" onerror="handleImgError(this)"><div class="detail-info"><div style="display:flex; gap:8px; margin-bottom:8px;"><span class="card-rj">' + work.rjCode + '</span><span style="background:#0e7490; color:#fff; font-size:0.75rem; font-weight:700; padding:2px 8px; border-radius:4px;">' + (work.hasHls ? 'HLS Chapters' : 'Multi-Track') + '</span></div><h1 class="detail-title">' + work.title + '</h1><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Voice Actor (CV):</strong> ' + cvPills + '</div><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Circle:</strong> ' + circlePill + '</div><div class="tags-row">' + tagPills + '</div><div style="margin-top:auto; padding-top:16px; display:flex; flex-wrap:wrap; gap:10px;"><button class="btn-primary" onclick="playTrack(0, true)">▶ Play All</button><button class="btn-outline" id="btnWorkGallery" data-rj="' + work.rjCode + '" onclick="openWorkGalleryModal()" style="display:' + (galleryCount > 0 ? 'inline-flex' : 'none') + ';">🖼️ Gallery (<span id="btnWorkGalleryCount">' + galleryCount + '</span>)</button><button class="btn-outline" data-rj="' + work.rjCode + '" onclick="addWorkToPlaylistAction(this.dataset.rj)">➕ Add Work to Playlist</button><button class="btn-outline" id="btnWorkRefresh" data-rj="' + work.rjCode + '" onclick="refreshSingleWork(this.dataset.rj, this)">🔄 Refresh</button><button class="btn-outline" data-rj="' + work.rjCode + '" onclick="deleteWorkItem(this.dataset.rj)">🗑️ Remove</button><button class="btn-outline" onclick="navBack()">← Back</button></div></div></div>';
 
       // 1. Physical Audio Tracklist Section
       html += '<h3 style="font-size:1.2rem; font-weight:700; margin-top:24px; margin-bottom:12px; display:flex; align-items:center; gap:8px;"><span>🎵 Audio Tracks (' + tracksList.length + ')</span></h3>';
       html += '<table class="tracks-table audio-tracks-table"><thead><tr><th style="width: 40px;">#</th><th>Track Title</th><th style="width: 120px;">Stream Format</th><th style="width: 160px; text-align:right;">Action</th></tr></thead><tbody>';
 
       tracksList.forEach(function(t, i) {
+        let catBadge = '';
+        if (t.category === 'freetalk' || /(?:フリートーク|free[\s_-]?talk|talk)/i.test(t.title)) {
+          catBadge = '<span style="font-size:0.75rem; background:rgba(236,72,153,0.18); color:#f472b6; border:1px solid rgba(244,114,182,0.35); padding:2px 8px; border-radius:4px; font-weight:700; margin-right:6px;">🎙️ Free Talk</span>';
+        } else if (t.category === 'bonus' || /(?:おまけ|bonus|特典)/i.test(t.title)) {
+          catBadge = '<span style="font-size:0.75rem; background:rgba(234,179,8,0.18); color:#facc15; border:1px solid rgba(250,204,21,0.35); padding:2px 8px; border-radius:4px; font-weight:700; margin-right:6px;">🎁 Bonus</span>';
+        } else if (tracksList.length > 1) {
+          catBadge = '<span style="font-size:0.75rem; background:rgba(59,130,246,0.15); color:#60a5fa; border:1px solid rgba(96,165,250,0.3); padding:2px 8px; border-radius:4px; font-weight:700; margin-right:6px;">🎵 Main</span>';
+        }
         const formatBadge = t.isHls ? '<span style="font-size:0.75rem; background:rgba(14,116,144,0.2); color:#38bdf8; border:1px solid rgba(56,189,248,0.3); padding:2px 8px; border-radius:4px; font-weight:700;">HLS Master</span>' : '<span style="font-size:0.75rem; background:rgba(255,255,255,0.06); color:#d1d5db; border:1px solid var(--border); padding:2px 8px; border-radius:4px; font-weight:700;">Direct MP3</span>';
-        html += '<tr class="track-row" id="track-row-' + i + '" data-idx="' + i + '" onclick="playTrack(parseInt(this.dataset.idx), true)"><td>' + t.id + '</td><td><strong>' + t.title + '</strong></td><td>' + formatBadge + '</td><td style="text-align:right;"><div style="display:inline-flex; gap:6px;"><button class="btn-primary" style="padding: 4px 10px; font-size: 0.75rem;" data-idx="' + i + '" onclick="event.stopPropagation(); playTrack(parseInt(this.dataset.idx), true)">▶ Play</button><button class="btn-outline" style="padding: 4px 10px; font-size: 0.75rem;" data-idx="' + i + '" onclick="event.stopPropagation(); addTrackToPlaylistAction(parseInt(this.dataset.idx))">➕ Playlist</button></div></td></tr>';
+        const durStr = t.duration ? (' <span style="color:var(--text-muted); font-size:0.8rem; font-weight:normal; margin-left:6px;">(' + formatTime(t.duration) + ')</span>') : '';
+        html += '<tr class="track-row" id="track-row-' + i + '" data-idx="' + i + '" onclick="playTrack(parseInt(this.dataset.idx), true)"><td>' + t.id + '</td><td><div style="display:flex; align-items:center; flex-wrap:wrap; gap:4px;">' + catBadge + '<strong>' + t.title + '</strong>' + durStr + '</div></td><td>' + formatBadge + '</td><td style="text-align:right;"><div style="display:inline-flex; gap:6px;"><button class="btn-primary" style="padding: 4px 10px; font-size: 0.75rem;" data-idx="' + i + '" onclick="event.stopPropagation(); playTrack(parseInt(this.dataset.idx), true)">▶ Play</button><button class="btn-outline" style="padding: 4px 10px; font-size: 0.75rem;" data-idx="' + i + '" onclick="event.stopPropagation(); addTrackToPlaylistAction(parseInt(this.dataset.idx))">➕ Playlist</button></div></td></tr>';
       });
       html += '</tbody></table>';
 
-      // 2. Chapters & Cue Points Section (if present)
-      if (chaptersList.length > 0) {
+      // 2. Chapters & Cue Points Section (temporarily hidden pending chapter alignment overhaul)
+      if (false && chaptersList.length > 0) {
         const isMultiTrack = tracksList.length > 1;
         const trackColorThemes = [
           { border: '#38bdf8', bg: 'rgba(56, 189, 248, 0.12)', text: '#38bdf8' },
@@ -6471,10 +6967,17 @@ const INDEX_HTML = `<!DOCTYPE html>
             ? '<td><span class="tag-pill" style="font-size:0.75rem; padding: 2px 8px; border-radius: 4px; font-weight:700; background:' + trkTheme.bg + '; color:' + trkTheme.text + '; border: 1px solid ' + trkTheme.border + '; display:inline-flex; align-items:center; gap:4px;">🎵 Track ' + (trackIdx + 1) + '</span></td>'
             : '';
 
+          let cCatBadge = '';
+          if (c.category === 'freetalk' || /(?:フリートーク|free[\s_-]?talk|talk)/i.test(c.title)) {
+            cCatBadge = '<span style="font-size:0.7rem; background:rgba(236,72,153,0.18); color:#f472b6; border:1px solid rgba(244,114,182,0.35); padding:1px 6px; border-radius:4px; font-weight:700; margin-right:4px;">🎙️ Talk</span>';
+          } else if (c.category === 'bonus' || /(?:おまけ|bonus|特典)/i.test(c.title)) {
+            cCatBadge = '<span style="font-size:0.7rem; background:rgba(234,179,8,0.18); color:#facc15; border:1px solid rgba(250,204,21,0.35); padding:1px 6px; border-radius:4px; font-weight:700; margin-right:4px;">🎁 Bonus</span>';
+          }
+
           html += '<tr class="chapter-row" id="chapter-row-' + i + '" data-idx="' + i + '" data-start="' + startTime + '" data-track="' + trackIdx + '"' + rowStyle + ' onclick="jumpToChapter(' + startTime + ', ' + trackIdx + ')">';
           html += '<td>' + (c.id || (i + 1)) + '</td>';
           if (isMultiTrack) html += trkBadge;
-          html += '<td><strong>' + c.title + '</strong></td>';
+          html += '<td><div style="display:flex; align-items:center; flex-wrap:wrap; gap:4px;">' + cCatBadge + '<strong>' + c.title + '</strong>' + (c.duration ? (' <span style="color:var(--text-muted); font-size:0.75rem; font-weight:normal; margin-left:4px;">(' + formatTime(c.duration) + ')</span>') : '') + '</div></td>';
           html += '<td><button class="timestamp-btn" onclick="event.stopPropagation(); jumpToChapter(' + startTime + ', ' + trackIdx + ')" title="Jump to ' + timeStr + '">⏱️ ' + timeStr + '</button></td>';
           html += '<td style="text-align:right;"><div style="display:inline-flex; gap:6px;"><button class="btn-primary" style="padding: 4px 10px; font-size: 0.75rem;" onclick="event.stopPropagation(); jumpToChapter(' + startTime + ', ' + trackIdx + ')">▶ Jump</button><button class="btn-outline" style="padding: 4px 10px; font-size: 0.75rem;" data-idx="' + i + '" onclick="event.stopPropagation(); addChapterToPlaylistAction(parseInt(this.dataset.idx))">➕ Playlist</button></div></td>';
           html += '</tr>';
@@ -6483,6 +6986,16 @@ const INDEX_HTML = `<!DOCTYPE html>
       }
 
       container.innerHTML = html;
+    }
+
+    const workAutoRefreshedInSession = new Set();
+
+    async function autoRefreshWorkDetail(rjCode) {
+      const cleanKey = normRj(rjCode);
+      if (workAutoRefreshedInSession.has(cleanKey)) return; // Only auto-refresh once per browser session
+      workAutoRefreshedInSession.add(cleanKey);
+
+      await refreshSingleWork(rjCode, null, true);
     }
 
     async function loadWorkDetail(rjCode) {
@@ -6517,8 +7030,14 @@ const INDEX_HTML = `<!DOCTYPE html>
 
       renderWorkDetailUI(work);
 
-      // Instantly check and fetch rich chapters/gallery in background
-      fetchChaptersLazy(work.rjCode);
+      const cleanKey = normRj(work.rjCode);
+      if (!workAutoRefreshedInSession.has(cleanKey)) {
+        // Auto-refresh tracks & metadata on first visit in session, triggering the refresh button's visual progress
+        autoRefreshWorkDetail(work.rjCode);
+      } else {
+        // Instantly check and fetch rich chapters/gallery in background if already refreshed in session
+        fetchChaptersLazy(work.rjCode);
+      }
     }
 
     let currentLightboxGallery = [];
@@ -7279,6 +7798,21 @@ const INDEX_HTML = `<!DOCTYPE html>
       const container = document.getElementById('viewContainer');
       let html = '<div class="section-header"><h1 class="section-title">⚙️ App Settings</h1></div>';
       
+      // 🎨 Theme Accent Color Card (v2.0)
+      html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🎨 Theme Accent Color (v2.0)</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Customize your personal theme aesthetic across all playback controls, action buttons, and active tabs.</p>';
+      html += '<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px;">';
+      for (const [key, t] of Object.entries(ACCENT_THEMES)) {
+        const isSelected = (currentAccent === key);
+        html += '<div class="accent-option-item" data-accent-key="' + key + '" onclick="setAccentTheme(this.dataset.accentKey)" style="display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: ' + (isSelected ? 'rgba(255,255,255,0.08)' : 'var(--bg-card)') + '; border: 1.5px solid ' + (isSelected ? t.hex : 'var(--border)') + '; border-radius: 10px; cursor: pointer; transition: all 0.15s;' + (isSelected ? 'box-shadow: 0 0 14px ' + t.glow + ';' : '') + '">';
+        html += '<div style="width: 22px; height: 22px; border-radius: 50%; background: ' + t.hex + '; box-shadow: 0 0 8px ' + t.glow + '; flex-shrink: 0;"></div>';
+        html += '<div style="font-size: 0.86rem; font-weight: ' + (isSelected ? '700' : '600') + '; color: ' + (isSelected ? '#fff' : 'var(--text-muted)') + ';">' + t.name + '</div>';
+        if (isSelected) {
+          html += '<span style="margin-left: auto; font-size: 0.85rem; color: ' + t.hex + '; font-weight: 800;">✓</span>';
+        }
+        html += '</div>';
+      }
+      html += '</div></div>';
+
       html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🛡️ Content Privacy & Disguise Mode</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 18px;">Control how adult (NSFW) cover art and tags are presented on your screen.</p>';
       html += '<div class="settings-option ' + (contentMode === 'NSFW' ? 'selected' : '') + '" data-mode="NSFW" onclick="setContentMode(this.dataset.mode)"><input type="radio" name="contentMode" value="NSFW" class="settings-radio" ' + (contentMode === 'NSFW' ? 'checked' : '') + '><div><div class="settings-label">🌶️ NSFW (Full Adult - Default)</div><div class="settings-desc">Show all original high-resolution cover arts, adult tags, and uncensored catalog.</div></div></div>';
       html += '<div class="settings-option ' + (contentMode === 'PSFW' ? 'selected' : '') + '" data-mode="PSFW" onclick="setContentMode(this.dataset.mode)"><input type="radio" name="contentMode" value="PSFW" class="settings-radio" ' + (contentMode === 'PSFW' ? 'checked' : '') + '><div><div class="settings-label">🎭 PSFW (Pseudo-SFW / Disguise Covers)</div><div class="settings-desc">Full audio remains playable, but adult cover arts are disguised with glowing stylized SFW artwork. (Press Esc to quickly toggle).</div></div></div>';
@@ -7298,8 +7832,8 @@ const INDEX_HTML = `<!DOCTYPE html>
       html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🔑 Admin Authentication Session</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Lock your session or switch admin credentials.</p>';
       html += '<button class="btn-outline" style="border-color: rgba(255,51,102,0.4); color: #ff3366;" onclick="toggleAdminModal()">🚪 Lock / Log Out Admin</button></div>';
 
-      html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🐧 aStreamer v1.5 Milestone Release</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Featuring Self-Learning Bilingual Tag Dictionary, Adaptive Artwork Carousel Gallery, and Mobile 2-Row Card Layouts.</p>';
-      html += '<button class="btn-outline" onclick="openChangelogModal()">📜 View Version 1.5 Release Notes & Architecture</button></div>';
+      html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🚀 aStreamer v2.0 Milestone Release</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Instant Batch Ingestion with Parallel Fast-Probing, On-Demand Lazy Audio Stream Extraction, Custom Accent Color Themes (Orange Default), and Streamlined Audio Controls.</p>';
+      html += '<button class="btn-outline" onclick="openChangelogModal()">📜 View Version 2.0 Release Notes & Architecture</button></div>';
 
       container.innerHTML = html;
     }
@@ -7826,7 +8360,15 @@ const INDEX_HTML = `<!DOCTYPE html>
       }
     }
 
-    async function refreshSingleWork(rjCode) {
+    async function refreshSingleWork(rjCode, btnEl, isAuto = false) {
+      workAutoRefreshedInSession.add(normRj(rjCode));
+      const btn = btnEl || document.getElementById('btnWorkRefresh') || document.querySelector('button[onclick*="refreshSingleWork"]');
+      const origHtml = btn ? btn.innerHTML : '🔄 Refresh';
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spin">🔄</span> Refreshing...';
+      }
+
       try {
         chapterFetchCache.delete(rjCode);
         chapterFetchCache.delete(normRj(rjCode));
@@ -7859,18 +8401,53 @@ const INDEX_HTML = `<!DOCTYPE html>
           asmrMsg = ' (' + chapsCount + ' chapters, ' + galleryCount + ' art)';
         }
 
+        const updatedBtn = document.getElementById('btnWorkRefresh') || document.querySelector('button[onclick*="refreshSingleWork"]');
+
         if (data.success) {
           if (data.changed) {
             showToast('✅ Work refreshed! Metadata updated' + asmrMsg, 3200);
+            if (updatedBtn) {
+              updatedBtn.disabled = true;
+              updatedBtn.innerHTML = '✅ Updated!';
+              setTimeout(() => {
+                const b = document.getElementById('btnWorkRefresh');
+                if (b) { b.disabled = false; b.innerHTML = '🔄 Refresh'; }
+              }, 1800);
+            }
           } else {
-            showToast('✅ Work refreshed! Up-to-date' + asmrMsg, 3200);
+            if (!isAuto) {
+              showToast('✅ Work refreshed! Up-to-date' + asmrMsg, 3200);
+            }
+            if (updatedBtn) {
+              updatedBtn.disabled = true;
+              updatedBtn.innerHTML = '✅ Up-to-date!';
+              setTimeout(() => {
+                const b = document.getElementById('btnWorkRefresh');
+                if (b) { b.disabled = false; b.innerHTML = '🔄 Refresh'; }
+              }, 1800);
+            }
           }
         } else {
-          showToast('❌ Refresh failed: ' + (data.error || 'Unknown error'), 4000);
+          if (!isAuto) {
+            showToast('❌ Refresh failed: ' + (data.error || 'Unknown error'), 4000);
+          }
+          if (updatedBtn) {
+            updatedBtn.disabled = true;
+            updatedBtn.innerHTML = '❌ Failed';
+            setTimeout(() => {
+              const b = document.getElementById('btnWorkRefresh');
+              if (b) { b.disabled = false; b.innerHTML = '🔄 Refresh'; }
+            }, 2500);
+          }
         }
       } catch (e) {
-        if (e.message !== 'Unauthorized') {
+        if (!isAuto && e.message !== 'Unauthorized') {
           showToast('❌ Error: ' + e.message, 4000);
+        }
+        const b = document.getElementById('btnWorkRefresh') || btn;
+        if (b) {
+          b.disabled = false;
+          b.innerHTML = origHtml;
         }
       }
     }
@@ -8558,7 +9135,21 @@ const INDEX_HTML = `<!DOCTYPE html>
       return u;
     }
 
-    let playbackRecoveryAttempt = 0;
+    async function resolveWorkLazyStream(rjCode) {
+      if (!rjCode) return null;
+      try {
+        const res = await apiFetch('/api/work/' + encodeURIComponent(rjCode) + '/resolve-stream', {
+          method: 'POST'
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.work) return data.work;
+        }
+      } catch (e) {
+        console.error('Failed to resolve lazy stream:', e);
+      }
+      return null;
+    }
 
     window.playTrack = function(index, userTriggered = true, targetWork = null, startTime = 0) {
       index = Math.max(0, parseInt(index, 10) || 0);
@@ -8573,6 +9164,31 @@ const INDEX_HTML = `<!DOCTYPE html>
         currentPlayingWork = currentWork;
       }
       if (!currentPlayingWork) return;
+
+      // On-demand lazy stream resolution
+      if (currentPlayingWork.hasLazyAudio || (currentPlayingWork.tracks && currentPlayingWork.tracks[0]?.isLazy) || (!currentPlayingWork.tracks?.[0]?.streamUrl && !currentPlayingWork.tracks?.[0]?.rawUrl)) {
+        document.getElementById('playerTitle').innerText = 'Resolving Audio Stream...';
+        document.getElementById('playerSub').innerText = (currentPlayingWork.rjCode || '') + ' • Fetching tracks from source...';
+        resolveWorkLazyStream(currentPlayingWork.rjCode).then((freshWork) => {
+          if (freshWork && freshWork.tracks && freshWork.tracks.length > 0) {
+            currentPlayingWork.tracks = freshWork.tracks;
+            currentPlayingWork.hasLazyAudio = false;
+            currentPlayingWork.totalTracks = freshWork.tracks.length;
+            if (currentWork && normRj(currentWork.rjCode) === normRj(currentPlayingWork.rjCode)) {
+              currentWork.tracks = freshWork.tracks;
+              currentWork.hasLazyAudio = false;
+              currentWork.totalTracks = freshWork.tracks.length;
+              if (currentView === 'work-detail') renderWorkDetailUI(currentWork);
+            }
+            playTrack(index, userTriggered, currentPlayingWork, startTime);
+          } else {
+            alert('Failed to resolve audio streams for ' + (currentPlayingWork.rjCode || 'work'));
+          }
+        }).catch(err => {
+          console.error('Lazy resolve error:', err);
+        });
+        return;
+      }
 
       if (!currentPlayingWork.tracks || currentPlayingWork.tracks.length === 0) {
         const cleanRj = currentPlayingWork.rjCode || '';
@@ -8995,12 +9611,26 @@ const INDEX_HTML = `<!DOCTYPE html>
         }
       }
     }
-    function setVolume(val) {
-      audio.volume = parseFloat(val);
-      document.getElementById('volumeSlider').value = val;
-      document.getElementById('popupVolumeSlider').value = val;
+    function toggleMute() {
+      audio.muted = !audio.muted;
+      updateMuteUI();
     }
-    function toggleMute() { audio.muted = !audio.muted; }
+
+    function updateMuteUI() {
+      const isMuted = audio.muted || audio.volume === 0;
+      const icon = isMuted ? '🔇' : '🔊';
+      const mBtn = document.getElementById('muteBtn');
+      const pmBtn = document.getElementById('popupMuteBtn');
+      if (mBtn) {
+        mBtn.innerText = icon;
+        mBtn.title = isMuted ? 'Unmute' : 'Mute';
+      }
+      if (pmBtn) {
+        pmBtn.innerText = icon;
+        pmBtn.title = isMuted ? 'Unmute' : 'Mute';
+      }
+    }
+    audio.addEventListener('volumechange', updateMuteUI);
 
     let currentTitleQuery = '';
     let currentTagQuery = '';
@@ -9608,6 +10238,8 @@ const INDEX_HTML = `<!DOCTYPE html>
 
         const pctColor = job.status === 'completed' ? '#34d399' : (job.status === 'stopped' ? '#ef4444' : '#38bdf8');
         const stopBtnHtml = canStop ? ('<button type="button" onclick="stopBatchJob(' + job.id + ')" class="btn-outline" style="padding: 1px 6px; font-size: 0.72rem; color: #f87171; border-color: rgba(248,113,113,0.4);" title="Stop this batch">⏹️</button>') : '';
+        const downloadBtnHtml = ((job.status === 'completed' || job.status === 'stopped') && job.failedItems && job.failedItems.length > 0) ? ('<button type="button" onclick="downloadJobFailureListById(' + job.id + ')" class="btn-outline" style="padding: 1px 7px; font-size: 0.72rem; color: #f59e0b; border-color: rgba(245,158,11,0.4);" title="Download ' + job.failedItems.length + ' failed items (.txt)">📥 ' + job.failedItems.length + ' Failed .txt</button>') : '';
+        const moeDiagBtnHtml = ((job.status === 'completed' || job.status === 'stopped') && job.moeDiagnostics && job.moeDiagnostics.length > 0) ? ('<button type="button" onclick="downloadMoeDiagnosticListById(' + job.id + ')" class="btn-outline" style="padding: 1px 7px; font-size: 0.72rem; color: #a855f7; border-color: rgba(168,85,247,0.4);" title="Download ' + job.moeDiagnostics.length + ' Moe diagnostic pattern logs (.txt)">⚠️ ' + job.moeDiagnostics.length + ' Moe Pattern Log</button>') : '';
 
         html += '<div class="batch-job-card" style="background: #111420; border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 10px 12px;">' +
           '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: 0.82rem;">' +
@@ -9619,6 +10251,8 @@ const INDEX_HTML = `<!DOCTYPE html>
               '<span style="font-weight: 700; color: ' + pctColor + '; font-size: 0.8rem;">' +
                 progressPct + '% (' + job.current + '/' + job.total + ')' +
               '</span>' +
+              downloadBtnHtml +
+              moeDiagBtnHtml +
               stopBtnHtml +
             '</div>' +
           '</div>' +
@@ -9713,6 +10347,98 @@ const INDEX_HTML = `<!DOCTYPE html>
         job.currentStatusText = 'Stopping...';
       }
       renderBatchQueueUI();
+    }
+
+    function downloadJobFailureList(job) {
+      if (!job || !job.failedItems || job.failedItems.length === 0) return;
+      const rjList = [...new Set(job.failedItems.map(f => f.rjCode).filter(Boolean))];
+      if (rjList.length === 0) return;
+      const content = rjList.join(String.fromCharCode(10));
+      const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const safeName = (job.name || 'batch_import').replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
+      a.download = safeName + '_failed_wishlist_' + new Date().toISOString().slice(0, 10) + '.txt';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        if (a.parentNode) a.parentNode.removeChild(a);
+        URL.revokeObjectURL(url);
+      }, 1000);
+    }
+
+    function downloadJobFailureListById(jobId) {
+      const job = importBatchQueue.find(j => j.id === jobId);
+      if (job) downloadJobFailureList(job);
+    }
+
+    function downloadMoeDiagnosticList(job) {
+      if (!job || !job.moeDiagnostics || job.moeDiagnostics.length === 0) return;
+      const lines = [
+        '# HentaiASMR Moe Audio Pattern Diagnostic Log',
+        '# Generated: ' + new Date().toISOString(),
+        '# Batch: ' + (job.name || 'batch_import'),
+        '# Note: The following works had missing CDN audio under standard Moe patterns (/merge/{RJ}.mp3 or /{track}.mp3).',
+        '============================================================'
+      ];
+      for (const diag of job.moeDiagnostics) {
+        lines.push('');
+        lines.push('[Work: ' + diag.rjCode + ']');
+        lines.push('Title: ' + (diag.title || 'N/A'));
+        lines.push('Post ID: ' + (diag.postId || 'N/A'));
+        lines.push('Post Slug: ' + (diag.slug || 'N/A'));
+        if (diag.postLink) lines.push('Post Link: ' + diag.postLink);
+        lines.push('');
+        lines.push('Sources Availability Breakdown:');
+        if (diag.sourcesBreakdown) {
+          const sb = diag.sourcesBreakdown;
+          lines.push('  • JapaneseASMR (weeab0o.xyz CDN): ' + (sb.japaneseAsmr && sb.japaneseAsmr.found ? ('✅ AVAILABLE (' + (sb.japaneseAsmr.isHls ? 'HLS .m3u8 stream' : sb.japaneseAsmr.trackCount + ' discrete MP3s') + ' -> ' + sb.japaneseAsmr.sampleUrl + ')') : '❌ NOT FOUND (404)'));
+          lines.push('  • HentaiASMR Moe CDN (cdn.hentaiasmr.moe): ' + (sb.hentaiAsmrMoe && sb.hentaiAsmrMoe.found ? ('✅ AVAILABLE (' + (sb.hentaiAsmrMoe.pattern === 'merge' ? 'Single Merged Track' : sb.hentaiAsmrMoe.trackCount + ' Multi-tracks') + ' -> ' + sb.hentaiAsmrMoe.sampleUrl + ')') : '❌ NOT FOUND (404 on known CDN paths)'));
+        } else {
+          lines.push('  • HentaiASMR Moe CDN (cdn.hentaiasmr.moe): ❌ NOT FOUND (404 on known CDN paths)');
+        }
+        lines.push('');
+        lines.push('Moe CDN Probed URLs (Failed / 404):');
+        if (diag.triedUrls && diag.triedUrls.length > 0) {
+          diag.triedUrls.forEach(u => lines.push('  - ' + u));
+        } else {
+          lines.push('  - (No probe URLs recorded)');
+        }
+        lines.push('');
+        if (diag.isWorkingAudioFound && diag.chosenTracks && diag.chosenTracks.length > 0) {
+          lines.push('Final Chosen Working Audio Source: ' + (diag.selectedSource || 'Alternative Source'));
+          lines.push('Final Working Audio Tracks (' + diag.chosenTracks.length + ' tracks):');
+          diag.chosenTracks.forEach((t, i) => {
+            lines.push('  [' + (i + 1) + '] ' + (t.title || 'Track') + (t.isHls ? ' [HLS]' : ''));
+            lines.push('      Direct Audio Link: ' + (t.rawUrl || t.streamUrl));
+          });
+        } else {
+          lines.push('Final Chosen Working Audio Source: NONE (All tried sources failed - Work Wishlisted)');
+          if (diag.failureReason) {
+            lines.push('Failure Reason: ' + diag.failureReason);
+          }
+        }
+        lines.push('------------------------------------------------------------');
+      }
+      const content = lines.join(String.fromCharCode(10));
+      const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const safeName = (job.name || 'batch_import').replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
+      a.download = safeName + '_moe_unresolved_patterns_' + new Date().toISOString().slice(0, 10) + '.txt';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        if (a.parentNode) a.parentNode.removeChild(a);
+        URL.revokeObjectURL(url);
+      }, 1000);
+    }
+
+    function downloadMoeDiagnosticListById(jobId) {
+      const job = importBatchQueue.find(j => j.id === jobId);
+      if (job) downloadMoeDiagnosticList(job);
     }
 
     function stopImportFromDock() {
@@ -10197,24 +10923,30 @@ const INDEX_HTML = `<!DOCTYPE html>
         return;
       }
 
-      // Pre-stash fail-safe to DB Wishlist in 1 single call
-      try {
-        const preStashPayload = (options.rawItems && Array.isArray(options.rawItems)) ? options.rawItems : cleanList;
-        const preRes = await apiFetch('/api/wishlist/pre-stash', {
-          method: 'POST',
-          body: JSON.stringify({ items: preStashPayload })
-        });
-        const preData = await preRes.json().catch(() => ({}));
-        if (preData && Array.isArray(preData.wishlist)) {
-          updateWishlistBadge(preData.wishlist.length);
-        } else {
-          await updateWishlistBadge();
+      // Pre-stash fail-safe to DB Wishlist with automatic retry
+      const preStashPayload = (options.rawItems && Array.isArray(options.rawItems)) ? options.rawItems : cleanList;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          const preRes = await apiFetch('/api/wishlist/pre-stash', {
+            method: 'POST',
+            body: JSON.stringify({ items: preStashPayload })
+          });
+          if (preRes.ok) {
+            const preData = await preRes.json().catch(() => ({}));
+            if (preData && Array.isArray(preData.wishlist)) {
+              updateWishlistBadge(preData.wishlist.length);
+            } else {
+              await updateWishlistBadge();
+            }
+            if (window.location.hash === '#/wishlist') {
+              loadWishlist();
+            }
+            break;
+          }
+        } catch (e) {
+          console.warn('[PreStash Attempt ' + attempt + ' Failed]', e);
+          if (attempt < 3) await new Promise(r => setTimeout(r, 350 * attempt));
         }
-        if (window.location.hash === '#/wishlist') {
-          loadWishlist();
-        }
-      } catch (e) {
-        console.warn('[PreStash Error]', e);
       }
 
       const job = {
@@ -10225,6 +10957,7 @@ const INDEX_HTML = `<!DOCTYPE html>
         current: 0,
         succeeded: 0,
         failed: 0,
+        failedItems: [],
         status: 'queued',
         currentStatusText: 'Waiting in queue...',
         stopRequested: false
@@ -10336,6 +11069,25 @@ const INDEX_HTML = `<!DOCTYPE html>
               break;
             }
 
+            if (data && data.moeDiagnostic) {
+              const diag = data.moeDiagnostic;
+              if (data.work && Array.isArray(data.work.tracks) && data.work.tracks.length > 0) {
+                if (!diag.chosenTracks || diag.chosenTracks.length === 0) {
+                  diag.isWorkingAudioFound = true;
+                  diag.selectedSource = data.work.tracks[0]?.isHls ? 'JapaneseASMR (HLS Stream)' : (data.work.hasHls ? 'HLS Stream' : 'Alternative Source');
+                  diag.chosenTracks = data.work.tracks.map(t => ({
+                    title: t.title || '',
+                    rawUrl: t.rawUrl || t.streamUrl || '',
+                    streamUrl: t.streamUrl || '',
+                    isHls: !!t.isHls,
+                    category: t.category || 'main'
+                  }));
+                }
+              }
+              activeJob.moeDiagnostics = activeJob.moeDiagnostics || [];
+              activeJob.moeDiagnostics.push(diag);
+            }
+
             if (data && data.work) {
               activeJob.succeeded++;
               if (logs) {
@@ -10346,21 +11098,85 @@ const INDEX_HTML = `<!DOCTYPE html>
               }
             } else {
               activeJob.failed++;
+              const failReason = (data && data.error) || ('HTTP ' + res.status + ' ' + (res.statusText || 'Error'));
+              activeJob.failedItems = activeJob.failedItems || [];
+              activeJob.failedItems.push({ rjCode: rj, reason: failReason });
+
+              // Ensure failed works are always recorded in the diagnostic report!
+              activeJob.moeDiagnostics = activeJob.moeDiagnostics || [];
+              const existingDiag = activeJob.moeDiagnostics.find(d => d.rjCode === rj);
+              if (existingDiag) {
+                existingDiag.isWorkingAudioFound = false;
+                existingDiag.failureReason = failReason;
+              } else {
+                activeJob.moeDiagnostics.push({
+                  rjCode: rj,
+                  postId: 'N/A',
+                  slug: rj.toLowerCase(),
+                  title: 'Work ' + rj,
+                  sourcesBreakdown: {
+                    japaneseAsmr: { found: false },
+                    hentaiAsmrMoe: { found: false }
+                  },
+                  triedUrls: [],
+                  isWorkingAudioFound: false,
+                  selectedSource: 'NONE (Failed / Saved to Wishlist)',
+                  failureReason: failReason
+                });
+              }
+
               if (logs) {
                 const logEntry = document.createElement('div');
                 logEntry.style.color = '#f59e0b';
-                logEntry.innerText = '⚠️ ' + rj + ': ' + ((data && data.error) || 'Audio pending') + ' -> Saved to Wishlist 📋';
+                logEntry.innerText = '⚠️ ' + rj + ': ' + failReason + ' -> Saved to Wishlist 📋';
                 logs.appendChild(logEntry);
+              }
+              // Explicit client-side backup save to wishlist if resolve failed with 503/error
+              if (!data || !data.wishlisted) {
+                apiFetch('/api/wishlist', {
+                  method: 'POST',
+                  body: JSON.stringify({ rjCode: rj, reason: failReason })
+                }).catch(() => {});
               }
             }
           } catch (e) {
             activeJob.failed++;
+            activeJob.failedItems = activeJob.failedItems || [];
+            activeJob.failedItems.push({ rjCode: rj, reason: e.message || 'Network/503 error' });
+
+            // Ensure network error failures are also in diagnostic log
+            activeJob.moeDiagnostics = activeJob.moeDiagnostics || [];
+            const existingDiag = activeJob.moeDiagnostics.find(d => d.rjCode === rj);
+            if (existingDiag) {
+              existingDiag.isWorkingAudioFound = false;
+              existingDiag.failureReason = e.message || 'Network/503 error';
+            } else {
+              activeJob.moeDiagnostics.push({
+                rjCode: rj,
+                postId: 'N/A',
+                slug: rj.toLowerCase(),
+                title: 'Work ' + rj,
+                sourcesBreakdown: {
+                  japaneseAsmr: { found: false },
+                  hentaiAsmrMoe: { found: false }
+                },
+                triedUrls: [],
+                isWorkingAudioFound: false,
+                selectedSource: 'NONE (Failed / Saved to Wishlist)',
+                failureReason: e.message || 'Network/503 error'
+              });
+            }
+
             if (logs) {
               const logEntry = document.createElement('div');
               logEntry.style.color = '#f59e0b';
               logEntry.innerText = '⚠️ ' + rj + ': ' + e.message + ' -> Saved to Wishlist 📋';
               logs.appendChild(logEntry);
             }
+            apiFetch('/api/wishlist', {
+              method: 'POST',
+              body: JSON.stringify({ rjCode: rj, reason: e.message || 'Network/503 error' })
+            }).catch(() => {});
           }
           if (logs) logs.scrollTop = logs.scrollHeight;
           renderBatchQueueUI();
@@ -10374,6 +11190,30 @@ const INDEX_HTML = `<!DOCTYPE html>
         if (activeJob.status !== 'stopped') {
           activeJob.status = 'completed';
           activeJob.currentStatusText = '🎉 Completed: ' + activeJob.succeeded + ' added, ' + activeJob.failed + ' wishlist';
+        }
+
+        // Auto-download failsafe if there are any failed/503 works in this job
+        if (activeJob.failedItems && activeJob.failedItems.length > 0) {
+          downloadJobFailureList(activeJob);
+          if (logs) {
+            const logEntry = document.createElement('div');
+            logEntry.style.color = '#38bdf8';
+            logEntry.innerText = '📥 Auto-downloaded ' + activeJob.failedItems.length + ' failed work codes to your browser as .txt';
+            logs.appendChild(logEntry);
+            logs.scrollTop = logs.scrollHeight;
+          }
+        }
+
+        // Auto-download Moe diagnostic pattern logs if any works had missing CDN audio
+        if (activeJob.moeDiagnostics && activeJob.moeDiagnostics.length > 0) {
+          downloadMoeDiagnosticList(activeJob);
+          if (logs) {
+            const logEntry = document.createElement('div');
+            logEntry.style.color = '#a855f7';
+            logEntry.innerText = '⚠️ Auto-downloaded ' + activeJob.moeDiagnostics.length + ' Moe audio pattern diagnostic log(s) to your browser as .txt';
+            logs.appendChild(logEntry);
+            logs.scrollTop = logs.scrollHeight;
+          }
         }
 
         renderBatchQueueUI();
