@@ -469,7 +469,13 @@ app.post('/api/library/refresh/:rjCode', checkAuth, async (req, res) => {
     const cleanRj = (rjCode || '').toUpperCase();
     const existing = db.getWorkByRj(cleanRj);
     if (!existing) return res.status(404).json({ error: 'Work not found' });
-    const fresh = await resolveAndSaveWork(cleanRj, false);
+    const fresh = await resolveAndSaveWork(cleanRj, false, true);
+    
+    // Preserve existing authentic cover if fresh didn't find one or returned fallback
+    if (existing && existing.coverUrl && (!fresh.coverUrl || !fresh.coverUrl.includes('img.dlsite.jp') || fresh.coverUrl.includes('placeholder') || fresh.coverUrl.includes('no-image'))) {
+      fresh.coverUrl = existing.coverUrl;
+    }
+    
     const changed = isWorkMetadataChanged(existing, fresh);
     let work = existing;
     if (changed) {
@@ -497,6 +503,7 @@ app.get('/api/library/chapters/:rjCode', async (req, res) => {
 
   try {
     const result = await fetchChaptersAndGallery(cleanRj, isSingleStream, targetDur);
+    let workChanged = false;
     if (work && (!work.tracks || work.tracks.length <= 1) && Array.isArray(result.audioTracks) && result.audioTracks.length > 1) {
       work.tracks = result.audioTracks.map((t, idx) => ({
         id: idx + 1,
@@ -512,9 +519,23 @@ app.get('/api/library/chapters/:rjCode', async (req, res) => {
       }));
       work.hasHls = false;
       work.totalTracks = work.tracks.length;
+      workChanged = true;
+    }
+
+    // Auto-promote discovered gallery artwork to work.coverUrl
+    if (work && Array.isArray(result.gallery) && result.gallery.length > 0) {
+      const bestArt = result.gallery.find(g => (g.title && g.title.toLowerCase().includes('package')) || (g.role === 'main_cover') || (g.source && g.source.includes('DLsite'))) || result.gallery[0];
+      const newCover = (bestArt && (bestArt.url || bestArt.proxyUrl)) ? (bestArt.url || bestArt.proxyUrl) : '';
+      if (newCover && (work.coverUrl !== newCover || !work.coverUrl || work.coverUrl.includes('placeholder') || work.coverUrl.includes('no-image') || work.coverUrl.includes('data:image'))) {
+        work.coverUrl = newCover;
+        workChanged = true;
+      }
+    }
+
+    if (work && workChanged) {
       db.saveWork(work);
     }
-    return res.json({ success: true, chapters: result.chapters, gallery: result.gallery, audioTracks: result.audioTracks || [] });
+    return res.json({ success: true, chapters: result.chapters, gallery: result.gallery, audioTracks: result.audioTracks || [], coverUrl: (work && work.coverUrl) || '' });
   } catch (e) {
     return res.json({ success: true, chapters: [], gallery: [], audioTracks: [], error: e.message });
   }
@@ -1748,8 +1769,7 @@ const INDEX_HTML = `<!DOCTYPE html>
     .settings-radio { margin-top: 4px; accent-color: var(--accent); cursor: pointer; }
     .settings-label { font-size: 1rem; font-weight: 700; margin-bottom: 4px; }
     .settings-desc { font-size: 0.85rem; color: var(--text-muted); }
-    .mobile-search-bar { display: none; margin-bottom: 16px; }
-    #playerBarChapterBtnMobile { display: none; }
+    #playerBarChapterBtnMobile, #playerBarWorkBtnMobile { display: none; }
 
     /* Responsive Mobile Media Queries */
     @media (max-width: 768px) {
@@ -1798,7 +1818,7 @@ const INDEX_HTML = `<!DOCTYPE html>
         font-size: 0.58rem !important;
       }
 
-      #playerBarChapterBtnMobile { display: inline-flex; }
+      #playerBarChapterBtnMobile, #playerBarWorkBtnMobile { display: inline-flex; }
       #playerBarChapterBtn { display: none; }
       .app-sidebar { display: none; }
       .mobile-topbar { display: flex; }
@@ -2948,17 +2968,18 @@ const INDEX_HTML = `<!DOCTYPE html>
       </button>
     </div>
     <div class="player-center">
+      <div class="scrubber-row">
+        <span id="currTime" class="time-text">00:00</span>
+        <input type="range" id="scrubber" class="scrubber" min="0" max="100" value="0" oninput="onScrub(this.value)">
+        <span id="totalTime" class="time-text">00:00</span>
+      </div>
       <div class="player-controls">
         <button id="shuffleBtn" class="ctrl-btn" title="Toggle Shuffle / Random" onclick="toggleShuffle()">🔀</button>
         <button class="ctrl-btn" title="Previous Track" onclick="playPrevTrack()">⏮</button>
         <button id="playPauseBtn" class="play-btn-circle" onclick="togglePlayPause()">▶</button>
         <button class="ctrl-btn" title="Next Track" onclick="playNextTrack()">⏭</button>
+        <button id="playerBarWorkBtnMobile" class="ctrl-btn" title="View Playing Work Details" onclick="jumpToCurrentWorkDetail()">👁️</button>
         <button id="playerBarChapterBtnMobile" class="ctrl-btn" title="View Chapters & Cue Points" onclick="openPopupPlayerWithChapters()">📑</button>
-      </div>
-      <div class="scrubber-row">
-        <span id="currTime" class="time-text">00:00</span>
-        <input type="range" id="scrubber" class="scrubber" min="0" max="100" value="0" oninput="onScrub(this.value)">
-        <span id="totalTime" class="time-text">00:00</span>
       </div>
     </div>
     <div class="player-right">
@@ -3356,6 +3377,7 @@ const INDEX_HTML = `<!DOCTYPE html>
     let libraryViewMode = 'medium'; // large, medium, small, list
     let libraryPerPage = 20; // 10, 20, 50, 100, 0 (all)
     let libraryCurrentPage = 1;
+    let librarySortOption = 'release-desc'; // release-desc, release-asc, added-desc, added-asc, rj-desc, rj-asc, cv-asc, fav-first
     let currentFilterParams = {};
 
     let playlistViewMode = 'list'; // list, grid
@@ -3445,6 +3467,7 @@ const INDEX_HTML = `<!DOCTYPE html>
     try { contentMode = localStorage.getItem('astreamer_content_mode') || 'NSFW'; } catch(e) {}
     try { libraryViewMode = localStorage.getItem('astreamer_view_mode') || 'medium'; } catch(e) {}
     try { libraryPerPage = parseInt(localStorage.getItem('astreamer_per_page')) || 20; } catch(e) {}
+    try { librarySortOption = localStorage.getItem('astreamer_library_sort') || 'release-desc'; } catch(e) {}
     try { playlistViewMode = localStorage.getItem('astreamer_pl_view_mode') || 'list'; } catch(e) {}
     try { historySortMode = localStorage.getItem('astreamer_history_sort') || 'date-desc'; } catch(e) {}
     try { isShuffle = localStorage.getItem('astreamer_shuffle') === 'true'; } catch(e) {}
@@ -3476,12 +3499,15 @@ const INDEX_HTML = `<!DOCTYPE html>
     function handleImgError(el) {
       if (!el) return;
       el.onerror = null;
-      const rj = el.getAttribute('data-rj');
+      let rj = el.getAttribute('data-rj') || (el.dataset ? el.dataset.rj : '');
+      if (!rj && currentWork && currentWork.rjCode) {
+        rj = currentWork.rjCode;
+      }
       if (contentMode === 'PSFW' || contentMode === 'SFW') {
         const display = getDisplayCover({ rjCode: rj || 'RJ000000', coverUrl: '' });
         el.src = display.coverUrl;
       } else if (rj) {
-        el.src = '/image-proxy?rj=' + rj;
+        el.src = '/image-proxy?rj=' + encodeURIComponent(rj);
       } else {
         el.src = "data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2248%22 height=%2248%22%3E%3Crect width=%2248%22 height=%2248%22 fill=%22%23222%22/%3E%3C/svg%3E";
       }
@@ -3512,7 +3538,7 @@ const INDEX_HTML = `<!DOCTYPE html>
       try {
         let history = JSON.parse(localStorage.getItem('astreamer_play_history') || '[]');
         if (!Array.isArray(history)) history = [];
-        history = history.filter(item => item.rjCode !== work.rjCode);
+        history = history.filter(item => normRj(item.rjCode) !== normRj(work.rjCode));
         history.unshift(entry);
         if (history.length > 20) history = history.slice(0, 20);
         localStorage.setItem('astreamer_play_history', JSON.stringify(history));
@@ -3523,6 +3549,92 @@ const INDEX_HTML = `<!DOCTYPE html>
         method: 'POST',
         body: JSON.stringify(entry)
       }).catch(() => {});
+    }
+
+    function isAutoRefreshOnVisitEnabled() {
+      return localStorage.getItem('astreamer_auto_refresh_on_visit') === 'true'; // Default: false (off)
+    }
+
+    function setAutoRefreshOnVisit(enabled) {
+      localStorage.setItem('astreamer_auto_refresh_on_visit', enabled ? 'true' : 'false');
+    }
+
+    let lastSavedSessionTime = 0;
+
+    function isResumePlaybackEnabled() {
+      return localStorage.getItem('astreamer_resume_playback') !== 'false';
+    }
+
+    function setResumePlayback(enabled) {
+      localStorage.setItem('astreamer_resume_playback', enabled ? 'true' : 'false');
+      if (!enabled) {
+        localStorage.removeItem('astreamer_last_playback_session');
+      } else {
+        saveCurrentPlaybackSession();
+      }
+    }
+
+    function saveCurrentPlaybackSession() {
+      if (!isResumePlaybackEnabled()) return;
+      if (!currentPlayingWork || !currentPlayingWork.rjCode) return;
+      const ct = audio ? (audio.currentTime || 0) : 0;
+      const dur = audio ? (audio.duration || 0) : 0;
+      const state = {
+        rjCode: currentPlayingWork.rjCode,
+        title: currentPlayingWork.title || '',
+        coverUrl: currentPlayingWork.coverUrl || '',
+        cv: currentPlayingWork.cv || '',
+        circle: currentPlayingWork.circle || '',
+        tracks: currentPlayingWork.tracks || [],
+        hasHls: Boolean(currentPlayingWork.hasHls),
+        chapters: currentPlayingWork.chapters || [],
+        trackIndex: currentTrackIndex >= 0 ? currentTrackIndex : 0,
+        currentTime: Math.round(ct * 10) / 10,
+        duration: Math.round(dur),
+        timestamp: Date.now()
+      };
+      try {
+        localStorage.setItem('astreamer_last_playback_session', JSON.stringify(state));
+      } catch(e) {}
+    }
+
+    function restoreLastPlaybackSession() {
+      if (!isResumePlaybackEnabled()) return;
+      if (currentPlayingWork && (audio && audio.src && (audio.currentTime > 0 || !audio.paused))) return;
+      try {
+        const raw = localStorage.getItem('astreamer_last_playback_session');
+        if (!raw) return;
+        const state = JSON.parse(raw);
+        if (!state || !state.rjCode) return;
+
+        let work = allWorks.find(w => normRj(w.rjCode) === normRj(state.rjCode));
+        if (!work) {
+          work = {
+            rjCode: state.rjCode,
+            title: state.title || state.rjCode,
+            coverUrl: state.coverUrl || '',
+            cv: state.cv || '',
+            circle: state.circle || '',
+            tracks: state.tracks || [],
+            hasHls: state.hasHls || false,
+            chapters: state.chapters || []
+          };
+        }
+        if (!work.tracks || work.tracks.length === 0) return;
+
+        const trackIdx = Math.max(0, parseInt(state.trackIndex, 10) || 0);
+        const resumeTime = Math.max(0, parseFloat(state.currentTime) || 0);
+
+        playTrack(trackIdx, false, work, resumeTime);
+
+        // Ensure paused state UI is shown
+        document.getElementById('playPauseBtn').innerText = '▶';
+        document.getElementById('popupPlayPauseBtn').innerText = '▶';
+        const playerBar = document.querySelector('.player-bar');
+        if (playerBar) playerBar.style.display = 'flex';
+      } catch(e) {
+        console.warn('Could not restore last playback session:', e);
+      }
     }
 
     let currentView = 'library';
@@ -3543,7 +3655,7 @@ const INDEX_HTML = `<!DOCTYPE html>
       'nsfw', '18禁', 'r18', 'r-18', 'adult', 'erotic', 'erotica', 'futanari', 'hentai',
       '手コキ', '足コキ', '中出し', 'オナサポ', '乳首責め', '乳首', 'オナホ', 'セックス',
       '騎乗位', '交尾', '精飲', 'フェラ', 'パイズリ', 'アナル', '潮吹き', '痴女',
-      'バイブ', '拘束', '催眠', '洗脳', '絶頂', '連続絶頂', '常識改変', 'インモラル',
+      'バイブ', '拘束', '催眠', '洗脳', '絶頂', '連続絶頂', '常シック改変', 'インモラル',
       '乱交', '射精', '射精管理', '快楽堕ち', 'おまんこ', 'ちんぽ', 'ちんこ', '性力',
       'オホ声', 'オホ', '奉仕', '寸止め', 'ザーメン', '搾精', '淫乱', '発情',
       'メス堕ち', 'アヘ顔', '肉便器', 'マゾ', 'サド', '調教', '言葉責め', '愛撫',
@@ -3604,13 +3716,19 @@ const INDEX_HTML = `<!DOCTYPE html>
 
     function getDisplayCover(work) {
       if (!work) return { coverUrl: '', isDisguised: false };
-      const rawCover = work.coverUrl || work.poster || '';
+      let rawCover = work.coverUrl || work.poster || '';
       if ((contentMode === 'PSFW' || contentMode === 'SFW') && isWorkNsfw(work)) {
         const rj = (work.rjCode || work.id || 'RJ000000').toUpperCase();
         let hash = 0;
         for (let i = 0; i < rj.length; i++) hash = (hash * 31 + rj.charCodeAt(i)) >>> 0;
         const sfwRj = SFW_DISGUISE_LIST[hash % SFW_DISGUISE_LIST.length];
         return { coverUrl: '/image-proxy?url=' + encodeURIComponent('https://pic.weeabo0.xyz/' + sfwRj + '_img_main.jpg'), isDisguised: true };
+      }
+      if (!rawCover && work.rjCode) {
+        return { coverUrl: '/image-proxy?rj=' + encodeURIComponent(work.rjCode), isDisguised: false };
+      }
+      if (rawCover && rawCover.startsWith('http') && !rawCover.includes('/image-proxy')) {
+        return { coverUrl: '/image-proxy?url=' + encodeURIComponent(rawCover) + (work.rjCode ? '&rj=' + encodeURIComponent(work.rjCode) : ''), isDisguised: false };
       }
       return { coverUrl: rawCover, isDisguised: false };
     }
@@ -3627,6 +3745,7 @@ const INDEX_HTML = `<!DOCTYPE html>
       try { setupMediaSessionHandlers(); } catch(e) { console.error('Error setting up media session:', e); }
       try { syncTagDictionary(); } catch(e) { console.error('Error syncing tag dictionary:', e); }
       try { await checkAuthStatus(); } catch(e) { console.error('Error checking auth status:', e); }
+      try { restoreLastPlaybackSession(); } catch(e) { console.error('Error restoring session:', e); }
       try { handleHashRoute(); } catch(e) { console.error('Error handling route:', e); }
       window.addEventListener('hashchange', () => {
         try { handleHashRoute(); } catch(e) {}
@@ -4018,6 +4137,7 @@ const INDEX_HTML = `<!DOCTYPE html>
         if (!Array.isArray(works)) works = [];
         if (contentMode === 'SFW') works = works.filter(w => !isWorkNsfw(w));
         allWorks = works;
+        try { restoreLastPlaybackSession(); } catch(e) {}
         if (shuffledLibraryWorks && (!filterParams || Object.keys(filterParams).length === 0)) {
           const workMap = new Map(works.map(w => [w.rjCode, w]));
           shuffledLibraryWorks = shuffledLibraryWorks
@@ -4092,6 +4212,91 @@ const INDEX_HTML = `<!DOCTYPE html>
       }
     };
 
+    function sortWorksList(list, sortOpt) {
+      if (!Array.isArray(list) || list.length <= 1) return list;
+      const opt = sortOpt || librarySortOption || 'release-desc';
+      const copy = [...list];
+
+      const getRjNum = (w) => {
+        if (!w) return 0;
+        const code = typeof w === 'string' ? w : (w.rjCode || w.id || w.code || '');
+        const m = String(code).match(/\d+/);
+        return m ? parseInt(m[0], 10) : 0;
+      };
+
+      const getAddedTs = (w) => {
+        if (!w || !w.addedAt) return 0;
+        const t = new Date(w.addedAt).getTime();
+        return isNaN(t) ? 0 : t;
+      };
+
+      const getReleaseTs = (w) => {
+        if (!w || !w.releaseDate) return 0;
+        const t = new Date(w.releaseDate).getTime();
+        return isNaN(t) ? 0 : t;
+      };
+
+      copy.sort((a, b) => {
+        const rjA = getRjNum(a);
+        const rjB = getRjNum(b);
+        switch (opt) {
+          case 'release-desc': {
+            const diff = getReleaseTs(b) - getReleaseTs(a);
+            return diff !== 0 ? diff : (rjB - rjA);
+          }
+          case 'release-asc': {
+            const aRel = getReleaseTs(a) || Infinity;
+            const bRel = getReleaseTs(b) || Infinity;
+            const diff = aRel - bRel;
+            return diff !== 0 ? diff : (rjA - rjB);
+          }
+          case 'added-desc': {
+            const diff = getAddedTs(b) - getAddedTs(a);
+            return diff !== 0 ? diff : (rjB - rjA);
+          }
+          case 'added-asc': {
+            const aTs = getAddedTs(a) || Infinity;
+            const bTs = getAddedTs(b) || Infinity;
+            const diff = aTs - bTs;
+            return diff !== 0 ? diff : (rjA - rjB);
+          }
+          case 'rj-asc': {
+            return rjA - rjB;
+          }
+          case 'rj-desc': {
+            return rjB - rjA;
+          }
+          case 'cv-asc': {
+            const cvA = a.cv || '';
+            const cvB = b.cv || '';
+            if (!cvA && cvB) return 1;
+            if (cvA && !cvB) return -1;
+            return cvA.localeCompare(cvB, undefined, { numeric: true, sensitivity: 'base' });
+          }
+          case 'fav-first': {
+            const favDiff = (b.favorite ? 1 : 0) - (a.favorite ? 1 : 0);
+            if (favDiff !== 0) return favDiff;
+            const relDiff = getReleaseTs(b) - getReleaseTs(a);
+            return relDiff !== 0 ? relDiff : (rjB - rjA);
+          }
+          default:
+            return 0;
+        }
+      });
+
+      return copy;
+    }
+
+    function setLibrarySort(opt) {
+      if (!opt || opt === 'shuffle') return;
+      savedScrollPositions['library'] = 0;
+      librarySortOption = opt;
+      shuffledLibraryWorks = null;
+      try { localStorage.setItem('astreamer_library_sort', opt); } catch(e) {}
+      libraryCurrentPage = 1;
+      renderLibraryGrid(allWorks, currentFilterParams);
+    }
+
     function shuffleLibraryView() {
       savedScrollPositions['library'] = 0;
       const source = (currentFilterParams && Object.keys(currentFilterParams).length > 0) ? (shuffledLibraryWorks || allWorks) : allWorks;
@@ -4149,15 +4354,17 @@ const INDEX_HTML = `<!DOCTYPE html>
       else if (filterParams.favorite) filterHeader = '<div style="background: rgba(255,51,102,0.12); border: 1px solid var(--accent); padding: 10px 18px; border-radius: 10px; margin-bottom: 1.2rem; display: flex; align-items: center; justify-content: space-between;"><span>❤️ Showing <strong>Favorites</strong> (' + works.length + ' works)</span><button class="btn-outline" style="padding: 4px 12px; font-size: 0.8rem;" onclick="navAll()">✖ Show All</button></div>';
       else if (filterParams.q) filterHeader = '<div style="background: rgba(56,189,248,0.12); border: 1px solid #38bdf8; padding: 10px 18px; border-radius: 10px; margin-bottom: 1.2rem; display: flex; align-items: center; justify-content: space-between;"><span>🔍 Search Query: <strong>&quot;' + filterParams.q + '&quot;</strong> (' + works.length + ' works)</span><button class="btn-outline" style="padding: 4px 12px; font-size: 0.8rem;" onclick="navAll()">✖ Clear Search</button></div>';
 
+      const orderedWorks = shuffledLibraryWorks ? works : sortWorksList(works, librarySortOption);
+
       // Pagination Slicing
-      const totalCount = works.length;
+      const totalCount = orderedWorks.length;
       const perPage = libraryPerPage > 0 ? libraryPerPage : totalCount || 1;
       const totalPages = Math.ceil(totalCount / perPage) || 1;
       if (libraryCurrentPage > totalPages) libraryCurrentPage = totalPages;
       if (libraryCurrentPage < 1) libraryCurrentPage = 1;
 
       const startIndex = (libraryCurrentPage - 1) * perPage;
-      const paginatedWorks = libraryPerPage > 0 ? works.slice(startIndex, startIndex + perPage) : works;
+      const paginatedWorks = libraryPerPage > 0 ? orderedWorks.slice(startIndex, startIndex + perPage) : orderedWorks;
 
       // Explorer Toolbar & View Modes
       let toolbarHtml = '<div class="view-modes-bar">';
@@ -4172,6 +4379,26 @@ const INDEX_HTML = `<!DOCTYPE html>
       toolbarHtml += '</div></div>';
 
       toolbarHtml += '<div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">';
+      toolbarHtml += '<div style="display:flex; align-items:center; gap:6px;"><span style="font-size:0.82rem; color:var(--text-muted); font-weight:700;">SORT:</span>';
+      toolbarHtml += '<select class="per-page-select" onchange="setLibrarySort(this.value)" title="Sort library works">';
+      const sortOptions = [
+        { id: 'release-desc', label: '🚀 Release Date (Latest)' },
+        { id: 'release-asc', label: '🕰️ Release Date (Oldest)' },
+        { id: 'added-desc', label: '📅 Date Added (Latest)' },
+        { id: 'added-asc', label: '📅 Date Added (Oldest)' },
+        { id: 'rj-asc', label: '🔢 RJ Code (Ascending)' },
+        { id: 'cv-asc', label: '🎙️ Voice Actor (A → Z)' },
+        { id: 'fav-first', label: '❤️ Favorites First' }
+      ];
+      if (shuffledLibraryWorks) {
+        toolbarHtml += '<option value="shuffle" selected disabled>🎲 Shuffled Order</option>';
+      }
+      sortOptions.forEach(opt => {
+        const isSel = !shuffledLibraryWorks && (librarySortOption === opt.id);
+        toolbarHtml += '<option value="' + opt.id + '" ' + (isSel ? 'selected' : '') + '>' + opt.label + '</option>';
+      });
+      toolbarHtml += '</select></div>';
+
       toolbarHtml += '<div style="display:flex; align-items:center; gap:6px;"><span style="font-size:0.82rem; color:var(--text-muted); font-weight:700;">SHOW:</span>';
       toolbarHtml += '<select class="per-page-select" onchange="setLibraryPerPage(this.value)">';
       [10, 20, 50, 100].forEach(n => {
@@ -4266,7 +4493,7 @@ const INDEX_HTML = `<!DOCTYPE html>
     }
 
     async function playWorkDirectly(rjCode) {
-      let work = allWorks.find(w => w.rjCode === rjCode);
+      let work = allWorks.find(w => normRj(w.rjCode) === normRj(rjCode));
       if (!work) {
         try {
           const res = await apiFetch('/api/library?q=' + encodeURIComponent(rjCode));
@@ -4276,7 +4503,7 @@ const INDEX_HTML = `<!DOCTYPE html>
       }
       if (work) {
         currentWork = work;
-        playTrack(0, true);
+        playTrack(0, true, work);
       }
     }
 
@@ -4461,7 +4688,7 @@ const INDEX_HTML = `<!DOCTYPE html>
       const refreshBtnContent = currentSingleWorkRefreshStage ? ('<span class="spin">🔄</span> <span id="refreshStageText">' + currentSingleWorkRefreshStage + '</span>') : '🔄 Refresh';
       const refreshBtnDisabled = currentSingleWorkRefreshStage ? ' disabled' : '';
 
-      let html = '<div class="work-detail-banner"><img class="detail-cover" src="' + display.coverUrl + '" onerror="handleImgError(this)"><div class="detail-info"><div style="display:flex; gap:8px; margin-bottom:8px;"><span class="card-rj">' + work.rjCode + '</span><span style="background:#0e7490; color:#fff; font-size:0.75rem; font-weight:700; padding:2px 8px; border-radius:4px;">' + (work.hasHls ? 'HLS Chapters' : 'Multi-Track') + '</span></div><h1 class="detail-title">' + work.title + '</h1><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Voice Actor (CV):</strong> ' + cvPills + '</div><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Circle:</strong> ' + circlePill + '</div><div class="tags-row">' + tagPills + '</div><div style="margin-top:auto; padding-top:16px; display:flex; flex-wrap:wrap; gap:10px;"><button class="btn-primary" onclick="playTrack(0, true)">▶ Play All</button><button class="btn-outline btn-gallery" id="btnWorkGallery" data-rj="' + work.rjCode + '" onclick="openWorkGalleryModal()" style="display:' + (galleryCount > 0 ? 'inline-flex' : 'none') + ';">🖼️ Gallery (<span id="btnWorkGalleryCount">' + galleryCount + '</span>)</button><button class="btn-outline" data-rj="' + work.rjCode + '" onclick="addWorkToPlaylistAction(this.dataset.rj)">➕ Add Work to Playlist</button><button class="btn-outline" id="btnWorkRefresh"' + refreshBtnDisabled + ' data-rj="' + work.rjCode + '" onclick="refreshSingleWork(this.dataset.rj, this)">' + refreshBtnContent + '</button><button class="btn-outline btn-remove" data-rj="' + work.rjCode + '" onclick="deleteWorkItem(this.dataset.rj)">🗑️ Remove</button><button class="btn-outline" onclick="navBack()">← Back</button></div></div></div>';
+      let html = '<div class="work-detail-banner"><img class="detail-cover" src="' + display.coverUrl + '" data-rj="' + work.rjCode + '" onerror="handleImgError(this)"><div class="detail-info"><div style="display:flex; gap:8px; margin-bottom:8px;"><span class="card-rj">' + work.rjCode + '</span><span style="background:#0e7490; color:#fff; font-size:0.75rem; font-weight:700; padding:2px 8px; border-radius:4px;">' + (work.hasHls ? 'HLS Chapters' : 'Multi-Track') + '</span></div><h1 class="detail-title">' + work.title + '</h1><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Voice Actor (CV):</strong> ' + cvPills + '</div><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Circle:</strong> ' + circlePill + '</div><div class="tags-row">' + tagPills + '</div><div style="margin-top:auto; padding-top:16px; display:flex; flex-wrap:wrap; gap:10px;"><button class="btn-primary" onclick="playTrack(0, true)">▶ Play All</button><button class="btn-outline btn-gallery" id="btnWorkGallery" data-rj="' + work.rjCode + '" onclick="openWorkGalleryModal()" style="display:' + (galleryCount > 0 ? 'inline-flex' : 'none') + ';">🖼️ Gallery (<span id="btnWorkGalleryCount">' + galleryCount + '</span>)</button><button class="btn-outline" data-rj="' + work.rjCode + '" onclick="addWorkToPlaylistAction(this.dataset.rj)">➕ Add Work to Playlist</button><button class="btn-outline" id="btnWorkRefresh"' + refreshBtnDisabled + ' data-rj="' + work.rjCode + '" onclick="refreshSingleWork(this.dataset.rj, this)">' + refreshBtnContent + '</button><button class="btn-outline btn-remove" data-rj="' + work.rjCode + '" onclick="deleteWorkItem(this.dataset.rj)">🗑️ Remove</button><button class="btn-outline" onclick="navBack()">← Back</button></div></div></div>';
 
       // 1. Physical Audio Tracklist Section
       html += '<h3 style="font-size:1.2rem; font-weight:700; margin-top:24px; margin-bottom:12px; display:flex; align-items:center; gap:8px;"><span>🎵 Audio Tracks (' + tracksList.length + ')</span></h3>';
@@ -4571,13 +4798,21 @@ const INDEX_HTML = `<!DOCTYPE html>
 
       renderWorkDetailUI(work);
 
-      const cleanKey = normRj(work.rjCode);
-      if (!workAutoRefreshedInSession.has(cleanKey)) {
-        // Auto-refresh tracks & metadata on first visit in session, triggering the refresh button's visual progress
-        autoRefreshWorkDetail(work.rjCode);
+      const autoRefreshEnabled = isAutoRefreshOnVisitEnabled();
+      if (autoRefreshEnabled) {
+        const cleanKey = normRj(work.rjCode);
+        if (!workAutoRefreshedInSession.has(cleanKey)) {
+          // Auto-refresh tracks & metadata on first visit in session, triggering the refresh button's visual progress
+          autoRefreshWorkDetail(work.rjCode);
+        } else {
+          // Instantly check and fetch rich chapters/gallery in background if already refreshed in session
+          fetchChaptersLazy(work.rjCode);
+        }
       } else {
-        // Instantly check and fetch rich chapters/gallery in background if already refreshed in session
-        fetchChaptersLazy(work.rjCode);
+        // When auto-refresh is off, only fetch rich chapters/gallery if work has none
+        if (!work.chapters || work.chapters.length <= 1 || !work.gallery || work.gallery.length === 0) {
+          fetchChaptersLazy(work.rjCode);
+        }
       }
     }
 
@@ -5291,6 +5526,33 @@ const INDEX_HTML = `<!DOCTYPE html>
       } catch(e) { return ''; }
     }
 
+    function mergeHistoryLists(remoteList, localList) {
+      const map = new Map();
+      const all = [
+        ...(Array.isArray(localList) ? localList : []),
+        ...(Array.isArray(remoteList) ? remoteList : [])
+      ];
+      all.forEach(item => {
+        if (!item || !item.rjCode) return;
+        const key = normRj(item.rjCode);
+        const existing = map.get(key);
+        if (!existing) {
+          map.set(key, item);
+        } else {
+          const t1 = new Date(existing.playedAt || 0).getTime();
+          const t2 = new Date(item.playedAt || 0).getTime();
+          if (t2 > t1) {
+            map.set(key, { ...existing, ...item });
+          } else {
+            map.set(key, { ...item, ...existing });
+          }
+        }
+      });
+      const merged = Array.from(map.values());
+      merged.sort((a, b) => new Date(b.playedAt || 0) - new Date(a.playedAt || 0));
+      return merged.slice(0, 20);
+    }
+
     async function loadHistory() {
       updatePageTitle('History');
       const container = document.getElementById('viewContainer');
@@ -5299,21 +5561,30 @@ const INDEX_HTML = `<!DOCTYPE html>
         return;
       }
 
-      let history = [];
+      let localHistory = [];
+      try {
+        localHistory = JSON.parse(localStorage.getItem('astreamer_play_history') || '[]');
+      } catch(e) { localHistory = []; }
+
+      let remoteHistory = [];
       try {
         const res = await apiFetch('/api/history');
         if (res.ok) {
-          history = await res.json();
-          if (Array.isArray(history)) {
-            try { localStorage.setItem('astreamer_play_history', JSON.stringify(history)); } catch(e) {}
-          }
+          remoteHistory = await res.json();
         }
       } catch(e) {}
 
-      if (!Array.isArray(history) || history.length === 0) {
-        try {
-          history = JSON.parse(localStorage.getItem('astreamer_play_history') || '[]');
-        } catch(e) { history = []; }
+      const history = mergeHistoryLists(remoteHistory, localHistory);
+      try {
+        localStorage.setItem('astreamer_play_history', JSON.stringify(history));
+      } catch(e) {}
+
+      // If local had newer items not in remote, sync top item to remote KV
+      if (history.length > 0 && remoteHistory.length > 0 && normRj(history[0].rjCode) !== normRj(remoteHistory[0].rjCode)) {
+        apiFetch('/api/history', {
+          method: 'POST',
+          body: JSON.stringify(history[0])
+        }).catch(() => {});
       }
 
       // Sorting
@@ -5399,6 +5670,16 @@ const INDEX_HTML = `<!DOCTYPE html>
       html += '<div class="settings-option ' + (contentMode === 'PSFW' ? 'selected' : '') + '" data-mode="PSFW" onclick="setContentMode(this.dataset.mode)"><input type="radio" name="contentMode" value="PSFW" class="settings-radio" ' + (contentMode === 'PSFW' ? 'checked' : '') + '><div><div class="settings-label">🎭 PSFW (Pseudo-SFW / Disguise Covers)</div><div class="settings-desc">Full audio remains playable, but adult cover arts are disguised with glowing stylized SFW artwork. (Press Esc to quickly toggle).</div></div></div>';
       html += '<div class="settings-option ' + (contentMode === 'SFW' ? 'selected' : '') + '" data-mode="SFW" onclick="setContentMode(this.dataset.mode)"><input type="radio" name="contentMode" value="SFW" class="settings-radio" ' + (contentMode === 'SFW' ? 'checked' : '') + '><div><div class="settings-label">🛡️ SFW (Strict Safe For Work)</div><div class="settings-desc">Hide adult works and NSFW tags from the library and tag cloud, while automatically disguising covers in playlists, history, and the music player.</div></div></div>';
       html += '</div>';
+
+      // ⏯️ Playback Continuity & Resume (Local Browser Cache)
+      const resumeEnabled = isResumePlaybackEnabled();
+      html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">⏯️ Playback Continuity & Resume</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Automatically save your active audio work, track, and timestamp locally in your browser so you can pick up where you left off on refresh (loads in paused state).</p>';
+      html += '<label style="display: flex; align-items: center; gap: 12px; cursor: pointer; user-select: none; background: rgba(255,255,255,0.04); padding: 12px 16px; border-radius: 10px; border: 1px solid var(--border);"><input type="checkbox" id="toggleResumePlayback" ' + (resumeEnabled ? 'checked' : '') + ' onchange="setResumePlayback(this.checked)" style="width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer;"><div><div style="font-weight: 700; font-size: 0.95rem; color: #fff;">Pick up where you left off (Default On)</div><div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 2px;">Restores the player with your active track and position in paused state upon reopening or refreshing.</div></div></label></div>';
+
+      // 🔄 Work Detail Auto-Refresh
+      const autoRefreshEnabled = isAutoRefreshOnVisitEnabled();
+      html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🔄 Work Detail Auto-Refresh</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Automatically re-scan metadata, chapters, and artwork when opening a work detail page.</p>';
+      html += '<label style="display: flex; align-items: center; gap: 12px; cursor: pointer; user-select: none; background: rgba(255,255,255,0.04); padding: 12px 16px; border-radius: 10px; border: 1px solid var(--border);"><input type="checkbox" id="toggleAutoRefreshOnVisit" ' + (autoRefreshEnabled ? 'checked' : '') + ' onchange="setAutoRefreshOnVisit(this.checked)" style="width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer;"><div><div style="font-weight: 700; font-size: 0.95rem; color: #fff;">Auto-refresh on visit (Default Off)</div><div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 2px;">When turned off, works only refresh when clicking the 🔄 Refresh button.</div></div></label></div>';
 
 
       html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🌐 AI Tag Translation & Dictionary Sync</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Scan your library for untranslated Japanese tags and voice actor names, then translate them with OpenRouter AI (DeepSeek) to build your tri-part (Japanese | Rōmaji | English) dictionary.</p>';
@@ -5689,6 +5970,21 @@ const INDEX_HTML = `<!DOCTYPE html>
             }
           }
 
+          if (data.coverUrl) {
+            if (target && target.coverUrl !== data.coverUrl) {
+              target.coverUrl = data.coverUrl;
+              updatedUI = true;
+            }
+            if (currentWork && normRj(currentWork.rjCode) === normRj(rjCode) && currentWork.coverUrl !== data.coverUrl) {
+              currentWork.coverUrl = data.coverUrl;
+              updatedUI = true;
+            }
+            if (currentPlayingWork && normRj(currentPlayingWork.rjCode) === normRj(rjCode) && currentPlayingWork.coverUrl !== data.coverUrl) {
+              currentPlayingWork.coverUrl = data.coverUrl;
+              updatedUI = true;
+            }
+          }
+
           if (Array.isArray(data.gallery)) {
             if (target) target.gallery = data.gallery;
             if (currentWork && normRj(currentWork.rjCode) === normRj(rjCode)) {
@@ -5701,11 +5997,29 @@ const INDEX_HTML = `<!DOCTYPE html>
               }
               updatedUI = true;
             }
+            if (data.gallery.length > 0) {
+              const bestArt = data.gallery.find(g => (g.title && g.title.toLowerCase().includes('package')) || (g.role === 'main_cover') || (g.source && g.source.includes('DLsite'))) || data.gallery[0];
+              const newCover = (bestArt && (bestArt.url || bestArt.proxyUrl)) ? (bestArt.url || bestArt.proxyUrl) : '';
+              if (newCover) {
+                if (target && target.coverUrl !== newCover) {
+                  target.coverUrl = newCover;
+                  updatedUI = true;
+                }
+                if (currentWork && normRj(currentWork.rjCode) === normRj(rjCode) && currentWork.coverUrl !== newCover) {
+                  currentWork.coverUrl = newCover;
+                  updatedUI = true;
+                }
+              }
+            }
           }
 
           if (updatedUI) {
             if (currentView === 'work-detail' && currentWork && normRj(currentWork.rjCode) === normRj(rjCode)) {
-              renderWorkDetailUI(currentWork);
+              const detailCoverEl = document.querySelector('.detail-cover');
+              if (detailCoverEl && currentWork.coverUrl) {
+                const disp = getDisplayCover(currentWork);
+                detailCoverEl.src = disp.coverUrl;
+              }
             }
             if (currentPlayingWork && normRj(currentPlayingWork.rjCode) === normRj(rjCode)) {
               updatePopupPlayerUI();
@@ -5979,17 +6293,25 @@ const INDEX_HTML = `<!DOCTYPE html>
 
         if (metaData && metaData.success && metaData.work) {
           const idx = allWorks.findIndex(w => normRj(w.rjCode) === normRj(rjCode));
+          const existingCover = (idx !== -1 && allWorks[idx].coverUrl) || (currentWork && currentWork.coverUrl) || '';
           if (idx !== -1) {
             allWorks[idx] = Object.assign({}, allWorks[idx], metaData.work);
+            if ((!allWorks[idx].coverUrl || allWorks[idx].coverUrl.includes('placeholder')) && existingCover && !existingCover.includes('placeholder')) {
+              allWorks[idx].coverUrl = existingCover;
+            }
           }
           if (currentWork && normRj(currentWork.rjCode) === normRj(rjCode)) {
             const curTracks = currentWork.tracks;
             const curGallery = currentWork.gallery;
             const curChapters = currentWork.chapters;
+            const curCover = currentWork.coverUrl || existingCover;
             currentWork = Object.assign({}, currentWork, metaData.work);
             if (curTracks && curTracks.length > 1) currentWork.tracks = curTracks;
             if (curGallery && curGallery.length > 0) currentWork.gallery = curGallery;
             if (curChapters && curChapters.length > 0) currentWork.chapters = curChapters;
+            if ((!currentWork.coverUrl || currentWork.coverUrl.includes('placeholder')) && curCover && !curCover.includes('placeholder')) {
+              currentWork.coverUrl = curCover;
+            }
           }
         }
         await new Promise(r => setTimeout(r, 220));
@@ -6826,11 +7148,23 @@ const INDEX_HTML = `<!DOCTYPE html>
       document.getElementById('totalTime').innerText = initialTotal;
       document.getElementById('popupCurrTime').innerText = formatTime(startTime || 0);
       document.getElementById('popupTotalTime').innerText = initialTotal;
-      document.getElementById('scrubber').value = 0;
-      document.getElementById('popupScrubber').value = 0;
+      if (knownDur > 0 && startTime > 0) {
+        const initialPct = (startTime / knownDur) * 100;
+        document.getElementById('scrubber').value = initialPct;
+        document.getElementById('popupScrubber').value = initialPct;
+      } else {
+        document.getElementById('scrubber').value = 0;
+        document.getElementById('popupScrubber').value = 0;
+      }
+
+      document.getElementById('playPauseBtn').innerText = userTriggered ? '⏸' : '▶';
+      document.getElementById('popupPlayPauseBtn').innerText = userTriggered ? '⏸' : '▶';
 
       updatePopupPlayerUI();
-      recordPlayHistory(currentPlayingWork, index);
+      if (userTriggered) {
+        recordPlayHistory(currentPlayingWork, index);
+      }
+      saveCurrentPlaybackSession();
 
       audio.muted = false;
       if (audio.volume === 0) audio.volume = 1.0;
@@ -7037,11 +7371,15 @@ const INDEX_HTML = `<!DOCTYPE html>
       document.getElementById('playPauseBtn').innerText = '⏸';
       document.getElementById('popupPlayPauseBtn').innerText = '⏸';
       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+      if (currentPlayingWork && currentPlayingWork.rjCode) {
+        recordPlayHistory(currentPlayingWork, currentTrackIndex >= 0 ? currentTrackIndex : 0);
+      }
     });
     audio.addEventListener('pause', () => {
       document.getElementById('playPauseBtn').innerText = '▶';
       document.getElementById('popupPlayPauseBtn').innerText = '▶';
       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
+      saveCurrentPlaybackSession();
     });
     audio.addEventListener('ended', () => {
       playNextTrack();
@@ -7063,6 +7401,12 @@ const INDEX_HTML = `<!DOCTYPE html>
         document.getElementById('popupScrubber').value = pct;
       }
 
+      // Throttled session save every 2 seconds
+      if (Math.abs(ct - lastSavedSessionTime) >= 2) {
+        lastSavedSessionTime = ct;
+        saveCurrentPlaybackSession();
+      }
+
       highlightActiveChapter(ct, currentTrackIndex);
 
       if ('mediaSession' in navigator && 'setPositionState' in navigator.mediaSession && dur > 0 && !isNaN(ct)) {
@@ -7074,6 +7418,10 @@ const INDEX_HTML = `<!DOCTYPE html>
           });
         } catch(e) {}
       }
+    });
+
+    window.addEventListener('beforeunload', () => {
+      saveCurrentPlaybackSession();
     });
 
     function formatTime(secs) {

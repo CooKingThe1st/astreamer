@@ -110,8 +110,9 @@ async function fetchHentaiAsmrMetadata(cleanRj, options = {}) {
         const match = posts.find(p => {
           const pSlug = (p.slug || '').toLowerCase();
           const pTitle = (p.title?.rendered || '').toUpperCase();
-          return pSlug === cleanLower || pTitle.includes(cleanUpper) || (p.content?.rendered || '').includes(cleanUpper);
-        }) || posts[0];
+          const pContent = (p.content?.rendered || '').toUpperCase();
+          return pSlug === cleanLower || pSlug.includes(cleanLower) || pTitle.includes(cleanUpper) || pContent.includes(cleanUpper);
+        });
         if (match) {
           post = match;
           break;
@@ -1360,7 +1361,7 @@ async function probeDlsiteAndWeeabGallery(cleanRj) {
   const bucket = getDlsiteCoverBucket(cleanUpper);
   const candidates = [];
 
-  // 1. DLsite Doujin: High-res main illustration, sample preview banner, and sample pages 1-10
+  // 1. DLsite Doujin: High-res main illustration and sample pages 1-10 (Skipped blurry low-res sample banner _img_sam.jpg)
   const dlsiteDoujin = { key: 'doujin', label: 'DLsite Doujin' };
   const dlsiteMainUrl = `https://img.dlsite.jp/modpub/images2/work/${dlsiteDoujin.key}/${bucket}/${cleanUpper}_img_main.jpg`;
   candidates.push({
@@ -1369,14 +1370,6 @@ async function probeDlsiteAndWeeabGallery(cleanRj) {
     source: dlsiteDoujin.label,
     url: dlsiteMainUrl,
     proxyUrl: `/image-proxy?url=${encodeURIComponent(dlsiteMainUrl)}`
-  });
-  const dlsiteSamUrl = `https://img.dlsite.jp/modpub/images2/work/${dlsiteDoujin.key}/${bucket}/${cleanUpper}_img_sam.jpg`;
-  candidates.push({
-    title: 'Sample Preview / Banner',
-    role: 'sam_cover',
-    source: dlsiteDoujin.label,
-    url: dlsiteSamUrl,
-    proxyUrl: `/image-proxy?url=${encodeURIComponent(dlsiteSamUrl)}`
   });
 
   for (let i = 1; i <= 10; i++) {
@@ -1398,7 +1391,7 @@ async function probeDlsiteAndWeeabGallery(cleanRj) {
     });
   }
 
-  // 2. Fallback ASMR.one Official Cover (used if DLsite main cover is not available)
+  // 2. Fallback ASMR.one Official Cover (used only if DLsite main cover is not available)
   if (strippedNum) {
     const asmrCoverUrl = `https://api.asmr-200.com/api/cover/${strippedNum}.jpg?type=main`;
     candidates.push({
@@ -1487,14 +1480,6 @@ async function probeDlsiteAndWeeabGallery(cleanRj) {
           url: `https://img.dlsite.jp/modpub/images2/work/${cat.key}/${bucket}/${cleanUpper}_img_main.jpg`,
           proxyUrl: `/image-proxy?url=${encodeURIComponent(`https://img.dlsite.jp/modpub/images2/work/${cat.key}/${bucket}/${cleanUpper}_img_main.jpg`)}`
         });
-        const altSamUrl = `https://img.dlsite.jp/modpub/images2/work/${cat.key}/${bucket}/${cleanUpper}_img_sam.jpg`;
-        altCandidates.push({
-          title: 'Sample Preview / Banner',
-          role: 'sam_cover',
-          source: cat.label,
-          url: altSamUrl,
-          proxyUrl: `/image-proxy?url=${encodeURIComponent(altSamUrl)}`
-        });
         for (let i = 1; i <= 4; i++) {
           altCandidates.push({
             title: `Sample Illustration #${i}`,
@@ -1532,23 +1517,7 @@ async function probeDlsiteAndWeeabGallery(cleanRj) {
       validList = validList.filter(v => v.role !== 'asmr_fallback_cover');
     }
 
-    // 2. If Sample Preview / Banner has the same Content-Length or ETag as Main Package Artwork, discard duplicate banner!
-    const mainItem = validList.find(v => v.role === 'main_cover');
-    if (mainItem && mainItem.contentLength) {
-      validList = validList.filter(v => {
-        if (v.role === 'sam_cover') {
-          if (v.contentLength && v.contentLength === mainItem.contentLength) {
-            return false; // Exact duplicate of main package cover!
-          }
-          if (v.etag && mainItem.etag && v.etag === mainItem.etag) {
-            return false; // Exact duplicate of main package cover!
-          }
-        }
-        return true;
-      });
-    }
-
-    // 3. Deduplicate by unique sample roles (e.g. keep one of img_smpX vs smpX)
+    // 2. Deduplicate by unique sample roles (e.g. keep one of img_smpX vs smpX)
     const seenRoles = new Set();
     const finalFiltered = [];
     for (const item of validList) {
@@ -1657,7 +1626,7 @@ async function fetchChaptersAndGallery(cleanRj, hasM3u8 = true, targetDuration =
     }
   }
 
-  // 2. Query ASMR.one /api/work/:id metadata for official covers
+  // 2. Query ASMR.one /api/work/:id metadata for fallback official cover if needed
   if (strippedNum) {
     for (const host of ['https://api.asmr-200.com', 'https://api.asmr-300.com', 'https://api.asmr.one']) {
       try {
@@ -1671,20 +1640,12 @@ async function fetchChaptersAndGallery(cleanRj, hasM3u8 = true, targetDuration =
         });
         if (workRes.data) {
           const wData = workRes.data;
-          if (wData.mainCoverUrl) {
+          if (wData && wData.mainCoverUrl) {
             extractedArtworks.push({
               title: 'Official Cover / CD Jacket',
               source: 'ASMR.one',
               url: wData.mainCoverUrl,
               proxyUrl: `/image-proxy?url=${encodeURIComponent(wData.mainCoverUrl)}`
-            });
-          }
-          if (wData.samCoverUrl) {
-            extractedArtworks.push({
-              title: 'Sample Preview / Banner',
-              source: 'ASMR.one',
-              url: wData.samCoverUrl,
-              proxyUrl: `/image-proxy?url=${encodeURIComponent(wData.samCoverUrl)}`
             });
           }
           break;
@@ -1700,10 +1661,18 @@ async function fetchChaptersAndGallery(cleanRj, hasM3u8 = true, targetDuration =
   // If DLsite primary cover is present, filter out ASMR.one mirror covers (only keep authentic track tree illustrations)
   let cleanExtractedArt = extractedArtworks;
   if (hasDlsiteCover) {
-    cleanExtractedArt = extractedArtworks.filter(a => a.title !== 'Official Cover / CD Jacket' && a.title !== 'Sample Preview / Banner');
+    cleanExtractedArt = extractedArtworks.filter(a => a.title !== 'Official Cover / CD Jacket');
   }
 
-  const combinedGallery = [...cleanExtractedArt, ...sampleImages];
+  // Filter out any stray blurry sample preview banners
+  const combinedGallery = [...cleanExtractedArt, ...sampleImages].filter(item => {
+    if (!item) return false;
+    const t = (item.title || '').toLowerCase();
+    const u = (item.url || '').toLowerCase();
+    if (t.includes('sample preview') || t.includes('banner') || u.includes('_img_sam') || u.includes('_sam.')) return false;
+    return true;
+  });
+
   const seenUrls = new Set();
   const dedupedGallery = [];
 
@@ -1724,20 +1693,22 @@ async function fetchChaptersForRj(cleanRj, hasM3u8 = true, targetDuration = 0) {
 }
 
 // 3. Resolve and Save Work by RJ Code
-async function resolveAndSaveWork(rjInput, saveImmediately = true) {
+async function resolveAndSaveWork(rjInput, saveImmediately = true, forceRefresh = false) {
   const match = rjInput.trim().match(/(?:RJ|VJ|BJ)\d+/i);
   if (!match) throw new Error(`Invalid work code format: "${rjInput}". Please provide a valid RJ/VJ/BJ code (e.g. RJ01473335, BJ01267551).`);
   
   const rjCode = match[0].toUpperCase();
 
-  // Check local database first
-  const existing = db.getWorkByRj(rjCode);
-  if (existing) {
-    console.log(`[DB Cache Hit] Loaded ${rjCode} from local database`);
-    if (saveImmediately) {
-      db.removeWishlistItem(rjCode);
+  // Check local database first (if not forcing fresh probe)
+  if (!forceRefresh) {
+    const existing = db.getWorkByRj(rjCode);
+    if (existing) {
+      console.log(`[DB Cache Hit] Loaded ${rjCode} from local database`);
+      if (saveImmediately) {
+        db.removeWishlistItem(rjCode);
+      }
+      return existing;
     }
-    return existing;
   }
 
   console.log(`[Resolving Work] Fetching metadata and probing audio for ${rjCode}...`);

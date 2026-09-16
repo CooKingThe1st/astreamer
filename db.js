@@ -984,7 +984,7 @@ function addHistoryEntry(entry) {
     circle: entry.circle || '',
     playedAt: entry.playedAt || new Date().toISOString()
   };
-  db.history = db.history.filter(h => h.rjCode !== entry.rjCode);
+  db.history = db.history.filter(h => (h.rjCode || '').replace(/^RJ0+/, 'RJ') !== (entry.rjCode || '').replace(/^RJ0+/, 'RJ'));
   db.history.unshift(item);
   if (db.history.length > 20) db.history = db.history.slice(0, 20);
   writeDb(db);
