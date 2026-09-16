@@ -102,6 +102,22 @@ function getCoverCandidates(targetUrl, rjCode) {
     let u = targetUrl.trim();
     if (u.startsWith('//')) u = 'https:' + u;
     candidates.push(u);
+
+    if (u.includes('api.asmr.one') || u.includes('api.asmr-200.com') || u.includes('api.asmr-300.com') || u.includes('api.asmr-100.com')) {
+      const asmrHosts = ['https://api.asmr-200.com', 'https://api.asmr-300.com', 'https://api.asmr.one', 'https://api.asmr-100.com'];
+      for (const h of asmrHosts) {
+        const alt = u.replace(/https?:\/\/[^\/]+/, h);
+        if (!candidates.includes(alt)) candidates.push(alt);
+      }
+    }
+
+    if (u.includes('/media/download/')) {
+      const alt = u.replace('/media/download/', '/media/stream/');
+      if (!candidates.includes(alt)) candidates.push(alt);
+    } else if (u.includes('/media/stream/')) {
+      const alt = u.replace('/media/stream/', '/media/download/');
+      if (!candidates.includes(alt)) candidates.push(alt);
+    }
   }
 
   let cleanRj = rjCode ? rjCode.toUpperCase().trim() : '';
@@ -120,15 +136,25 @@ function getCoverCandidates(targetUrl, rjCode) {
 
     const list = [
       `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${standardRj}_img_main.jpg`,
+      `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${standardRj}_img_main_240x240.jpg`,
       `https://img.dlsite.jp/modpub/images2/work/pro/${bucket}/${standardRj}_img_main.jpg`,
       `https://img.dlsite.jp/modpub/images2/work/books/${bucket}/${standardRj}_img_main.jpg`,
+      `https://img.dlsite.jp/modpub/images2/work/girls/${bucket}/${standardRj}_img_main.jpg`,
+      `https://img.dlsite.jp/modpub/images2/work/bl/${bucket}/${standardRj}_img_main.jpg`,
+      `https://img.dlsite.jp/modpub/images2/work/ai/${bucket}/${standardRj}_img_main.jpg`,
       `https://api.asmr-200.com/api/cover/${cleanNum}.jpg?type=main`,
       `https://api.asmr-200.com/api/cover/${cleanNum}.jpg`,
+      `https://api.asmr-300.com/api/cover/${cleanNum}.jpg?type=main`,
+      `https://api.asmr-300.com/api/cover/${cleanNum}.jpg`,
+      `https://api.asmr.one/api/cover/${cleanNum}.jpg?type=main`,
+      `https://api.asmr.one/api/cover/${cleanNum}.jpg`,
       `https://api.asmr-200.com/api/cover/${digits}.jpg?type=main`,
       `https://api.asmr-200.com/api/cover/${digits}.jpg`,
       `https://pic.weeabo0.xyz/${standardRj}_img_main.jpg`,
       `https://pic.weeabo0.xyz/${standardRj}_img_main.webp`,
-      `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${standardRj}_img_sam.jpg`
+      `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${standardRj}_img_sam.jpg`,
+      `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${standardRj}_img_smp1.jpg`,
+      `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${standardRj}_smp1.jpg`
     ];
 
     for (const item of list) {
@@ -270,16 +296,52 @@ app.get('/api/library', (req, res) => {
 
 // Single Work Resolve & Import
 app.post('/api/library/resolve', checkAuth, async (req, res) => {
-  const { rjCode } = req.body;
+  const { rjCode, saveImmediately } = req.body;
   if (!rjCode) return res.status(400).json({ error: 'Missing rjCode' });
 
+  const shouldSave = saveImmediately !== false;
   try {
-    const work = await resolveAndSaveWork(rjCode);
+    const work = await resolveAndSaveWork(rjCode, shouldSave);
     res.json({ success: true, work, moeDiagnostic: work?.moeDiagnostic || null });
   } catch (err) {
     console.error(`[Resolve Error] ${rjCode}:`, err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: err.message, moeDiagnostic: err?.moeDiagnostic || null });
   }
+});
+
+// Batch Commit a completed Ingestion Kernel (Atomic single write)
+app.post('/api/library/kernel-commit', checkAuth, async (req, res) => {
+  const { works, failed } = req.body || {};
+  const worksToCommit = Array.isArray(works) ? works : [];
+  const failedToCommit = Array.isArray(failed) ? failed : [];
+
+  if (worksToCommit.length === 0 && failedToCommit.length === 0) {
+    return res.json({ success: true, committedCount: 0 });
+  }
+
+  let committedCount = 0;
+  for (const w of worksToCommit) {
+    if (!w || !w.rjCode) continue;
+    db.saveWork(w);
+    db.removeWishlistItem(w.rjCode);
+    committedCount++;
+  }
+
+  for (const f of failedToCommit) {
+    if (!f || !f.rjCode) continue;
+    if (!db.getWorkByRj(f.rjCode)) {
+      db.saveWishlistItem({
+        rjCode: f.rjCode,
+        title: f.title || `Work ${f.rjCode}`,
+        coverUrl: f.coverUrl || '',
+        cv: f.cv || '',
+        circle: f.circle || '',
+        reason: f.reason || 'Audio stream not yet available on CDN'
+      });
+    }
+  }
+
+  return res.json({ success: true, committedCount });
 });
 
 // On-Demand Lazy Audio Stream Resolution
@@ -716,6 +778,11 @@ app.delete('/api/wishlist/:rjCode', checkAuth, (req, res) => {
     wishlist = db.removeWishlistItem(rjCode);
   }
   res.json({ success: true, wishlist });
+});
+
+app.post('/api/wishlist/clean', checkAuth, (req, res) => {
+  const result = db.cleanWishlistDuplicates();
+  res.json({ success: true, ...result });
 });
 
 app.delete('/api/wishlist', checkAuth, (req, res) => {
@@ -1303,6 +1370,10 @@ const INDEX_HTML = `<!DOCTYPE html>
     .btn-primary:hover { background: var(--accent-hover); box-shadow: 0 0 12px var(--accent-glow); }
     .btn-outline { background: transparent; color: #fff; border: 1px solid var(--border); padding: 9px 14px; border-radius: 10px; font-weight: 600; font-size: 0.88rem; cursor: pointer; transition: 0.15s; display: inline-flex; align-items: center; gap: 6px; }
     .btn-outline:hover { background: var(--bg-card-hover); border-color: rgba(255,255,255,0.2); }
+    .btn-gallery { background: rgba(16, 185, 129, 0.16) !important; color: #34d399 !important; border: 1px solid rgba(16, 185, 129, 0.4) !important; }
+    .btn-gallery:hover { background: #10b981 !important; color: #fff !important; border-color: #10b981 !important; box-shadow: 0 0 14px rgba(16, 185, 129, 0.45); }
+    .btn-remove { background: rgba(239, 68, 68, 0.16) !important; color: #f87171 !important; border: 1px solid rgba(239, 68, 68, 0.4) !important; }
+    .btn-remove:hover { background: #ef4444 !important; color: #fff !important; border-color: #ef4444 !important; box-shadow: 0 0 14px rgba(239, 68, 68, 0.45); }
     .btn-icon { background: var(--bg-card); border: 1px solid var(--border); color: #fff; width: 38px; height: 38px; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; font-size: 1.05rem; cursor: pointer; transition: 0.15s; }
     .btn-icon:hover { background: var(--bg-card-hover); border-color: rgba(255,255,255,0.2); }
     @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
@@ -3937,7 +4008,13 @@ const INDEX_HTML = `<!DOCTYPE html>
       try {
         const url = new URL('/api/library', window.location.origin);
         Object.keys(filterParams).forEach(k => { if (filterParams[k]) url.searchParams.set(k, filterParams[k]); });
-        let works = await apiFetchJson(url);
+        let works = null;
+        try {
+          works = await apiFetchJson(url);
+        } catch (firstErr) {
+          await new Promise(r => setTimeout(r, 1200));
+          works = await apiFetchJson(url);
+        }
         if (!Array.isArray(works)) works = [];
         if (contentMode === 'SFW') works = works.filter(w => !isWorkNsfw(w));
         allWorks = works;
@@ -4381,7 +4458,10 @@ const INDEX_HTML = `<!DOCTYPE html>
       currentWorkChapters = chaptersList;
 
       const galleryCount = (Array.isArray(work.gallery) ? work.gallery.length : 0);
-      let html = '<div class="work-detail-banner"><img class="detail-cover" src="' + display.coverUrl + '" onerror="handleImgError(this)"><div class="detail-info"><div style="display:flex; gap:8px; margin-bottom:8px;"><span class="card-rj">' + work.rjCode + '</span><span style="background:#0e7490; color:#fff; font-size:0.75rem; font-weight:700; padding:2px 8px; border-radius:4px;">' + (work.hasHls ? 'HLS Chapters' : 'Multi-Track') + '</span></div><h1 class="detail-title">' + work.title + '</h1><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Voice Actor (CV):</strong> ' + cvPills + '</div><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Circle:</strong> ' + circlePill + '</div><div class="tags-row">' + tagPills + '</div><div style="margin-top:auto; padding-top:16px; display:flex; flex-wrap:wrap; gap:10px;"><button class="btn-primary" onclick="playTrack(0, true)">▶ Play All</button><button class="btn-outline" id="btnWorkGallery" data-rj="' + work.rjCode + '" onclick="openWorkGalleryModal()" style="display:' + (galleryCount > 0 ? 'inline-flex' : 'none') + ';">🖼️ Gallery (<span id="btnWorkGalleryCount">' + galleryCount + '</span>)</button><button class="btn-outline" data-rj="' + work.rjCode + '" onclick="addWorkToPlaylistAction(this.dataset.rj)">➕ Add Work to Playlist</button><button class="btn-outline" id="btnWorkRefresh" data-rj="' + work.rjCode + '" onclick="refreshSingleWork(this.dataset.rj, this)">🔄 Refresh</button><button class="btn-outline" data-rj="' + work.rjCode + '" onclick="deleteWorkItem(this.dataset.rj)">🗑️ Remove</button><button class="btn-outline" onclick="navBack()">← Back</button></div></div></div>';
+      const refreshBtnContent = currentSingleWorkRefreshStage ? ('<span class="spin">🔄</span> <span id="refreshStageText">' + currentSingleWorkRefreshStage + '</span>') : '🔄 Refresh';
+      const refreshBtnDisabled = currentSingleWorkRefreshStage ? ' disabled' : '';
+
+      let html = '<div class="work-detail-banner"><img class="detail-cover" src="' + display.coverUrl + '" onerror="handleImgError(this)"><div class="detail-info"><div style="display:flex; gap:8px; margin-bottom:8px;"><span class="card-rj">' + work.rjCode + '</span><span style="background:#0e7490; color:#fff; font-size:0.75rem; font-weight:700; padding:2px 8px; border-radius:4px;">' + (work.hasHls ? 'HLS Chapters' : 'Multi-Track') + '</span></div><h1 class="detail-title">' + work.title + '</h1><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Voice Actor (CV):</strong> ' + cvPills + '</div><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Circle:</strong> ' + circlePill + '</div><div class="tags-row">' + tagPills + '</div><div style="margin-top:auto; padding-top:16px; display:flex; flex-wrap:wrap; gap:10px;"><button class="btn-primary" onclick="playTrack(0, true)">▶ Play All</button><button class="btn-outline btn-gallery" id="btnWorkGallery" data-rj="' + work.rjCode + '" onclick="openWorkGalleryModal()" style="display:' + (galleryCount > 0 ? 'inline-flex' : 'none') + ';">🖼️ Gallery (<span id="btnWorkGalleryCount">' + galleryCount + '</span>)</button><button class="btn-outline" data-rj="' + work.rjCode + '" onclick="addWorkToPlaylistAction(this.dataset.rj)">➕ Add Work to Playlist</button><button class="btn-outline" id="btnWorkRefresh"' + refreshBtnDisabled + ' data-rj="' + work.rjCode + '" onclick="refreshSingleWork(this.dataset.rj, this)">' + refreshBtnContent + '</button><button class="btn-outline btn-remove" data-rj="' + work.rjCode + '" onclick="deleteWorkItem(this.dataset.rj)">🗑️ Remove</button><button class="btn-outline" onclick="navBack()">← Back</button></div></div></div>';
 
       // 1. Physical Audio Tracklist Section
       html += '<h3 style="font-size:1.2rem; font-weight:700; margin-top:24px; margin-bottom:12px; display:flex; align-items:center; gap:8px;"><span>🎵 Audio Tracks (' + tracksList.length + ')</span></h3>';
@@ -4541,6 +4621,18 @@ const INDEX_HTML = `<!DOCTYPE html>
       }
       updateGalleryViewModeUI();
       
+      function getSourceBadgeStyle(source) {
+        const s = (source || '').toLowerCase();
+        if (s.includes('dlsite')) {
+          return 'color:#38bdf8; background:rgba(56,189,248,0.15); border:1px solid rgba(56,189,248,0.35);'; // Sapphire Blue / Cyan
+        } else if (s.includes('asmr.one') || s.includes('asmr')) {
+          return 'color:#34d399; background:rgba(16,185,129,0.15); border:1px solid rgba(16,185,129,0.35);'; // Emerald Mint
+        } else if (s.includes('weeab') || s.includes('japaneseasmr')) {
+          return 'color:#c084fc; background:rgba(192,132,252,0.15); border:1px solid rgba(192,132,252,0.35);'; // Violet / Purple
+        }
+        return 'color:#fb923c; background:rgba(251,146,60,0.15); border:1px solid rgba(251,146,60,0.35);'; // Amber Accent
+      }
+
       if (gallery.length === 0) {
         grid.innerHTML = '<div style="color:var(--text-muted); text-align:center; padding:30px; width:100%;">No illustrations or bonus artwork found for this work.</div>';
       } else {
@@ -4548,10 +4640,13 @@ const INDEX_HTML = `<!DOCTYPE html>
         gallery.forEach(function(g, gi) {
           const cap = (g.title || ('Artwork #' + (gi + 1))).replace(/'/g, "\\'");
           const pUrl = g.proxyUrl || g.url;
-          const label = (g.title ? g.title : ('Page #' + (gi + 1))) + ' (' + (gi + 1) + '/' + gallery.length + ')';
+          const src = g.source || (g.url && g.url.includes('dlsite') ? 'DLsite' : (g.url && g.url.includes('weeabo0') ? 'Weeab0o' : 'ASMR.one'));
+          const label = g.title ? g.title : ('Page #' + (gi + 1));
+          const srcStyle = getSourceBadgeStyle(src);
           html += '<div class="gallery-card" data-idx="' + gi + '" onclick="openLightboxModal(null, null, null, parseInt(this.dataset.idx))">';
           html += '<div class="gallery-thumb-wrap"><img class="gallery-thumb" src="' + pUrl + '" loading="lazy" onerror="handleImgError(this)"></div>';
           html += '<div class="gallery-card-title" title="' + (g.title || '') + '">' + label + '</div>';
+          html += '<div class="gallery-card-source" style="font-size:0.72rem; color:var(--text-muted); margin-top:3px; display:flex; justify-content:space-between; align-items:center; width:100%;"><span>#' + (gi + 1) + '</span><span style="font-weight:700; padding:1px 6px; border-radius:4px; font-size:0.68rem; ' + srcStyle + '">' + src + '</span></div>';
           html += '</div>';
         });
         grid.innerHTML = html;
@@ -4604,8 +4699,10 @@ const INDEX_HTML = `<!DOCTYPE html>
       img.src = item.proxyUrl || item.url || '';
       const total = currentLightboxGallery.length;
       const titleText = item.title || ('Artwork #' + (currentLightboxIndex + 1));
+      const src = item.source || (item.url && item.url.includes('dlsite') ? 'DLsite' : (item.url && item.url.includes('weeabo0') ? 'Weeab0o' : 'ASMR.one'));
+      const srcStyle = (typeof getSourceBadgeStyle === 'function') ? getSourceBadgeStyle(src) : 'color:var(--accent); background:rgba(255,255,255,0.15); border:1px solid rgba(255,255,255,0.25);';
       if (cap) {
-        cap.innerText = total > 1 ? '[' + (currentLightboxIndex + 1) + ' / ' + total + '] ' + titleText : titleText;
+        cap.innerHTML = (total > 1 ? '[' + (currentLightboxIndex + 1) + ' / ' + total + '] ' : '') + titleText + ' <span style="font-weight:700; margin-left:8px; font-size:0.78rem; padding:2px 8px; border-radius:4px; ' + srcStyle + '">' + src + '</span>';
       }
       if (prevBtn) prevBtn.style.display = total > 1 ? 'flex' : 'none';
       if (nextBtn) nextBtn.style.display = total > 1 ? 'flex' : 'none';
@@ -4744,6 +4841,7 @@ const INDEX_HTML = `<!DOCTYPE html>
         html += '<div style="display:flex; gap:10px; flex-wrap:wrap;">';
         if (list.length > 0) {
           html += '<button class="btn-primary" id="btnRetryAllWishlist" onclick="retryAllWishlist()">🔄 Re-try All Ingestion</button>';
+          html += '<button class="btn-outline" onclick="cleanWishlistDuplicates()">🧹 Clean Imported</button>';
           html += '<button class="btn-outline" onclick="clearAllWishlist()">🗑️ Clear Wishlist</button>';
         }
         html += '<button class="btn-outline" onclick="addManualWishlist()">➕ Add RJ to Wishlist</button>';
@@ -4856,6 +4954,27 @@ const INDEX_HTML = `<!DOCTYPE html>
         updateWishlistBadge();
         loadWishlist();
       } catch(e) { alert('Error: ' + e.message); }
+    }
+
+    async function cleanWishlistDuplicates() {
+      if (!isAdmin) {
+        openAdminModal('Please unlock Admin access first.');
+        return;
+      }
+      showToast('🧹 Cleaning Wishlist against Library...');
+      try {
+        const res = await apiFetch('/api/wishlist/clean', { method: 'POST' });
+        if (res.ok) {
+          const data = await res.json();
+          showToast('✨ Cleaned ' + (data.removedCount || 0) + ' already-imported works from Wishlist');
+          updateWishlistBadge(data.remaining);
+          loadWishlist();
+        } else {
+          loadWishlist();
+        }
+      } catch (e) {
+        loadWishlist();
+      }
     }
 
     async function clearAllWishlist() {
@@ -5822,89 +5941,105 @@ const INDEX_HTML = `<!DOCTYPE html>
       }
     }
 
+    let currentSingleWorkRefreshStage = '';
+
     async function refreshSingleWork(rjCode, btnEl, isAuto = false) {
       workAutoRefreshedInSession.add(normRj(rjCode));
       const btn = btnEl || document.getElementById('btnWorkRefresh') || document.querySelector('button[onclick*="refreshSingleWork"]');
-      const origHtml = btn ? btn.innerHTML : '🔄 Refresh';
-      if (btn) {
-        btn.disabled = true;
-        btn.innerHTML = '<span class="spin">🔄</span> Refreshing...';
-      }
+      const origHtml = '🔄 Refresh';
+
+      const updateStageText = (txt) => {
+        currentSingleWorkRefreshStage = txt;
+        const b = document.getElementById('btnWorkRefresh') || btn;
+        if (b) {
+          b.disabled = true;
+          b.innerHTML = '<span class="spin">🔄</span> <span id="refreshStageText">' + txt + '</span>';
+        }
+      };
 
       try {
         chapterFetchCache.delete(rjCode);
         chapterFetchCache.delete(normRj(rjCode));
 
-        const res = await apiFetch('/api/library/refresh/' + encodeURIComponent(rjCode), { method: 'POST' });
-        const data = await res.json();
+        // -------------------------------------------------------------
+        // PHASE 1: 🎵 Fast Tracks Stream Fetch
+        // -------------------------------------------------------------
+        updateStageText('[1/4] 🎵 Tracks...');
+        showToast('🎵 [1/4] Resolving tracks for ' + rjCode + '...', 3000);
+        const chapData = await fetchChaptersLazy(rjCode, true);
+        await new Promise(r => setTimeout(r, 220));
 
-        if (data.success) {
+        // -------------------------------------------------------------
+        // PHASE 2: 🏷️ Tags, CV, Circle & Metadata Refresh
+        // -------------------------------------------------------------
+        updateStageText('[2/4] 🏷️ CV & Tags...');
+        showToast('🏷️ [2/4] Updating CV, Circle & Tags for ' + rjCode + '...', 3000);
+        const metaRes = await apiFetch('/api/library/refresh/' + encodeURIComponent(rjCode), { method: 'POST' });
+        const metaData = await metaRes.json();
+
+        if (metaData && metaData.success && metaData.work) {
           const idx = allWorks.findIndex(w => normRj(w.rjCode) === normRj(rjCode));
-          if (idx !== -1 && data.work) {
-            allWorks[idx] = Object.assign({}, allWorks[idx], data.work);
+          if (idx !== -1) {
+            allWorks[idx] = Object.assign({}, allWorks[idx], metaData.work);
           }
           if (currentWork && normRj(currentWork.rjCode) === normRj(rjCode)) {
-            currentWork = Object.assign({}, currentWork, data.work);
+            const curTracks = currentWork.tracks;
+            const curGallery = currentWork.gallery;
+            const curChapters = currentWork.chapters;
+            currentWork = Object.assign({}, currentWork, metaData.work);
+            if (curTracks && curTracks.length > 1) currentWork.tracks = curTracks;
+            if (curGallery && curGallery.length > 0) currentWork.gallery = curGallery;
+            if (curChapters && curChapters.length > 0) currentWork.chapters = curChapters;
           }
         }
+        await new Promise(r => setTimeout(r, 220));
 
-        // Fetch fresh chapters directly from on-demand API
-        const chapData = await fetchChaptersLazy(rjCode, true);
+        // -------------------------------------------------------------
+        // PHASE 3: 📑 Chapters & Cue Alignment
+        // -------------------------------------------------------------
+        updateStageText('[3/4] 📑 Chapters...');
+        showToast('📑 [3/4] Aligning chapters & timestamps...', 3000);
+        const chapsCount = (chapData && Array.isArray(chapData.chapters)) ? chapData.chapters.length : ((currentWork && Array.isArray(currentWork.chapters)) ? currentWork.chapters.length : 0);
+        await new Promise(r => setTimeout(r, 220));
 
+        // -------------------------------------------------------------
+        // PHASE 4: 🖼️ Artwork & Gallery Finalization
+        // -------------------------------------------------------------
+        updateStageText('[4/4] 🖼️ Artwork...');
+        showToast('🖼️ [4/4] Finalizing illustrations & artwork...', 3000);
+        const galleryCount = (chapData && Array.isArray(chapData.gallery)) ? chapData.gallery.length : ((currentWork && Array.isArray(currentWork.gallery)) ? currentWork.gallery.length : 0);
+        const tracksCount = (currentWork && Array.isArray(currentWork.tracks)) ? currentWork.tracks.length : 0;
+        const tagsCount = (currentWork && Array.isArray(currentWork.tags)) ? currentWork.tags.length : 0;
+        await new Promise(r => setTimeout(r, 220));
+
+        // Synchronize and render UI cleanly when all phases have completed
         if (currentWork && normRj(currentWork.rjCode) === normRj(rjCode)) {
           renderWorkDetailUI(currentWork);
         }
 
-        const chapsCount = (chapData && Array.isArray(chapData.chapters)) ? chapData.chapters.length : ((currentWork && Array.isArray(currentWork.chapters)) ? currentWork.chapters.length : 0);
-        const galleryCount = (chapData && Array.isArray(chapData.gallery)) ? chapData.gallery.length : ((currentWork && Array.isArray(currentWork.gallery)) ? currentWork.gallery.length : 0);
-
-        let asmrMsg = '';
-        if (chapsCount > 0 || galleryCount > 0) {
-          asmrMsg = ' (' + chapsCount + ' chapters, ' + galleryCount + ' art)';
-        }
-
+        currentSingleWorkRefreshStage = '';
         const updatedBtn = document.getElementById('btnWorkRefresh') || document.querySelector('button[onclick*="refreshSingleWork"]');
-
-        if (data.success) {
-          if (data.changed) {
-            showToast('✅ Work refreshed! Metadata updated' + asmrMsg, 3200);
-            if (updatedBtn) {
-              updatedBtn.disabled = true;
-              updatedBtn.innerHTML = '✅ Updated!';
-              setTimeout(() => {
-                const b = document.getElementById('btnWorkRefresh');
-                if (b) { b.disabled = false; b.innerHTML = '🔄 Refresh'; }
-              }, 1800);
-            }
-          } else {
-            if (!isAuto) {
-              showToast('✅ Work refreshed! Up-to-date' + asmrMsg, 3200);
-            }
-            if (updatedBtn) {
-              updatedBtn.disabled = true;
-              updatedBtn.innerHTML = '✅ Up-to-date!';
-              setTimeout(() => {
-                const b = document.getElementById('btnWorkRefresh');
-                if (b) { b.disabled = false; b.innerHTML = '🔄 Refresh'; }
-              }, 1800);
-            }
-          }
-        } else {
-          if (!isAuto) {
-            showToast('❌ Refresh failed: ' + (data.error || 'Unknown error'), 4000);
-          }
-          if (updatedBtn) {
-            updatedBtn.disabled = true;
-            updatedBtn.innerHTML = '❌ Failed';
-            setTimeout(() => {
-              const b = document.getElementById('btnWorkRefresh');
-              if (b) { b.disabled = false; b.innerHTML = '🔄 Refresh'; }
-            }, 2500);
-          }
+        if (updatedBtn) {
+          updatedBtn.disabled = true;
+          updatedBtn.innerHTML = '✅ Up-to-date!';
+          setTimeout(() => {
+            const b = document.getElementById('btnWorkRefresh');
+            if (b) { b.disabled = false; b.innerHTML = '🔄 Refresh'; }
+          }, 2000);
         }
+
+        const parts = [];
+        if (tracksCount > 0) parts.push('🎵 ' + tracksCount + ' tracks');
+        if (tagsCount > 0) parts.push('🏷️ ' + tagsCount + ' tags');
+        if (chapsCount > 0) parts.push('📑 ' + chapsCount + ' chapters');
+        if (galleryCount > 0) parts.push('🖼️ ' + galleryCount + ' artwork');
+        const asmrMsg = parts.length > 0 ? ' (' + parts.join(', ') + ')' : '';
+
+        showToast('✨ ' + rjCode + ': Refreshed' + asmrMsg, 3500);
       } catch (e) {
+        currentSingleWorkRefreshStage = '';
         if (!isAuto && e.message !== 'Unauthorized') {
-          showToast('❌ Error: ' + e.message, 4000);
+          showToast('❌ Refresh error: ' + (e.message || 'Unknown error'), 4000);
         }
         const b = document.getElementById('btnWorkRefresh') || btn;
         if (b) {
@@ -8488,6 +8623,12 @@ const INDEX_HTML = `<!DOCTYPE html>
           logs.scrollTop = logs.scrollHeight;
         }
 
+        let interItemDelayMs = 450; // Smooth 450ms pacing to stay under origin Cloudflare burst limits (20-req burst limit)
+
+        const KERNEL_SIZE = 10; // Ingestion Kernel: Process in micro-kernels of 10 works to guarantee zero origin rate limits
+        let kernelSucceededWorks = [];
+        let kernelFailedWorks = [];
+
         for (let i = 0; i < activeJob.total; i++) {
           if (activeJob.stopRequested) {
             activeJob.status = 'stopped';
@@ -8511,114 +8652,129 @@ const INDEX_HTML = `<!DOCTYPE html>
           renderBatchQueueUI();
           updateBackgroundImportWidgets(progressPct, statusMsg);
 
-          try {
-            const res = await apiFetch('/api/library/resolve', {
-              method: 'POST',
-              body: JSON.stringify({ rjCode: rj })
-            });
+          let resolvedData = null;
+          let lastFailReason = null;
+          const maxRetries = 2; // Up to 2 self-healing retries for transient 503 / gateway / rate limit errors
 
-            let data = null;
+          for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
+            if (activeJob.stopRequested) break;
             try {
-              const textData = await res.text();
-              data = JSON.parse(textData);
-            } catch (jsonErr) {
-              data = { error: 'Server returned HTTP ' + res.status + ' (' + (res.statusText || 'Gateway error') + ')' };
-            }
+              const res = await apiFetch('/api/library/resolve', {
+                method: 'POST',
+                body: JSON.stringify({ rjCode: rj, saveImmediately: false })
+              });
 
-            if (res.status === 401) {
-              if (logs) {
-                const logEntry = document.createElement('div');
-                logEntry.style.color = '#ef4444';
-                logEntry.innerText = '🔒 Unauthorized: Please enter your admin passcode.';
-                logs.appendChild(logEntry);
-                logs.scrollTop = logs.scrollHeight;
+              let data = null;
+              try {
+                const textData = await res.text();
+                data = JSON.parse(textData);
+              } catch (jsonErr) {
+                data = { error: 'Server returned HTTP ' + res.status + ' (' + (res.statusText || 'Gateway error') + ')' };
               }
-              activeJob.status = 'stopped';
-              activeJob.currentStatusText = 'Unauthorized';
+
+              if (res.status === 401) {
+                if (logs) {
+                  const logEntry = document.createElement('div');
+                  logEntry.style.color = '#ef4444';
+                  logEntry.innerText = '🔒 Unauthorized: Please enter your admin passcode.';
+                  logs.appendChild(logEntry);
+                  logs.scrollTop = logs.scrollHeight;
+                }
+                activeJob.status = 'stopped';
+                activeJob.currentStatusText = 'Unauthorized';
+                break;
+              }
+
+              const errString = ((data && data.error ? String(data.error) : '') + ' ' + (res.statusText || '')).toLowerCase();
+              const isTransientGateway = res.status === 503 || res.status === 502 || res.status === 504 || res.status === 429 ||
+                errString.includes('503') || errString.includes('502') || errString.includes('504') || errString.includes('429') ||
+                errString.includes('gateway') || errString.includes('timeout') || errString.includes('rate limit') || errString.includes('temporarily unavailable');
+
+              if (isTransientGateway && attempt <= maxRetries) {
+                interItemDelayMs = 750; // Increase inter-item delay for remainder of batch
+                const backoffMs = attempt === 1 ? 6000 : 12000; // Generous 6.0s / 12.0s cooldown to fully reset origin rate limit window
+                if (logs) {
+                  const retryLog = document.createElement('div');
+                  retryLog.style.color = '#fbbf24';
+                  retryLog.innerText = '⏳ ' + rj + ': Origin rate-limit / 503 detected. Cooling down ' + (backoffMs / 1000).toFixed(1) + 's before auto-retrying (attempt ' + (attempt + 1) + '/' + (maxRetries + 1) + ')...';
+                  logs.appendChild(retryLog);
+                  logs.scrollTop = logs.scrollHeight;
+                }
+                activeJob.currentStatusText = '⏳ Cooldown ' + (backoffMs / 1000).toFixed(1) + 's for ' + rj + ' (attempt ' + (attempt + 1) + ')...';
+                renderBatchQueueUI();
+                await new Promise(r => setTimeout(r, backoffMs));
+                continue;
+              }
+
+              resolvedData = data;
+              lastFailReason = (data && data.error) || ('HTTP ' + res.status + ' ' + (res.statusText || 'Error'));
+              break;
+            } catch (e) {
+              lastFailReason = e.message || 'Network/503 error';
+              if (attempt <= maxRetries) {
+                interItemDelayMs = 750;
+                const backoffMs = attempt === 1 ? 6000 : 12000;
+                if (logs) {
+                  const retryLog = document.createElement('div');
+                  retryLog.style.color = '#fbbf24';
+                  retryLog.innerText = '⏳ ' + rj + ': Network / Gateway cooldown (' + (e.message || 'error') + '). Cooling down ' + (backoffMs / 1000).toFixed(1) + 's (attempt ' + (attempt + 1) + '/' + (maxRetries + 1) + ')...';
+                  logs.appendChild(retryLog);
+                  logs.scrollTop = logs.scrollHeight;
+                }
+                activeJob.currentStatusText = '⏳ Cooldown ' + (backoffMs / 1000).toFixed(1) + 's for ' + rj + '...';
+                renderBatchQueueUI();
+                await new Promise(r => setTimeout(r, backoffMs));
+                continue;
+              }
               break;
             }
+          }
 
-            if (data && data.moeDiagnostic) {
-              const diag = data.moeDiagnostic;
-              if (data.work && Array.isArray(data.work.tracks) && data.work.tracks.length > 0) {
-                if (!diag.chosenTracks || diag.chosenTracks.length === 0) {
-                  diag.isWorkingAudioFound = true;
-                  diag.selectedSource = data.work.tracks[0]?.isHls ? 'JapaneseASMR (HLS Stream)' : (data.work.hasHls ? 'HLS Stream' : 'Alternative Source');
-                  diag.chosenTracks = data.work.tracks.map(t => ({
-                    title: t.title || '',
-                    rawUrl: t.rawUrl || t.streamUrl || '',
-                    streamUrl: t.streamUrl || '',
-                    isHls: !!t.isHls,
-                    category: t.category || 'main'
-                  }));
-                }
-              }
-              activeJob.moeDiagnostics = activeJob.moeDiagnostics || [];
-              activeJob.moeDiagnostics.push(diag);
-            }
+          if (activeJob.status === 'stopped') break;
 
-            if (data && data.work) {
-              activeJob.succeeded++;
-              if (logs) {
-                const logEntry = document.createElement('div');
-                logEntry.style.color = '#38bdf8';
-                logEntry.innerText = '✅ ' + rj + ': ' + (data.work.title ? data.work.title.slice(0, 32) : '') + '... (Added)';
-                logs.appendChild(logEntry);
-              }
-            } else {
-              activeJob.failed++;
-              const failReason = (data && data.error) || ('HTTP ' + res.status + ' ' + (res.statusText || 'Error'));
-              activeJob.failedItems = activeJob.failedItems || [];
-              activeJob.failedItems.push({ rjCode: rj, reason: failReason });
+          const data = resolvedData;
 
-              // Ensure failed works are always recorded in the diagnostic report!
-              activeJob.moeDiagnostics = activeJob.moeDiagnostics || [];
-              const existingDiag = activeJob.moeDiagnostics.find(d => d.rjCode === rj);
-              if (existingDiag) {
-                existingDiag.isWorkingAudioFound = false;
-                existingDiag.failureReason = failReason;
-              } else {
-                activeJob.moeDiagnostics.push({
-                  rjCode: rj,
-                  postId: 'N/A',
-                  slug: rj.toLowerCase(),
-                  title: 'Work ' + rj,
-                  sourcesBreakdown: {
-                    japaneseAsmr: { found: false },
-                    hentaiAsmrMoe: { found: false }
-                  },
-                  triedUrls: [],
-                  isWorkingAudioFound: false,
-                  selectedSource: 'NONE (Failed / Saved to Wishlist)',
-                  failureReason: failReason
-                });
-              }
-
-              if (logs) {
-                const logEntry = document.createElement('div');
-                logEntry.style.color = '#f59e0b';
-                logEntry.innerText = '⚠️ ' + rj + ': ' + failReason + ' -> Saved to Wishlist 📋';
-                logs.appendChild(logEntry);
-              }
-              // Explicit client-side backup save to wishlist if resolve failed with 503/error
-              if (!data || !data.wishlisted) {
-                apiFetch('/api/wishlist', {
-                  method: 'POST',
-                  body: JSON.stringify({ rjCode: rj, reason: failReason })
-                }).catch(() => {});
+          if (data && data.moeDiagnostic) {
+            const diag = data.moeDiagnostic;
+            if (data.work && Array.isArray(data.work.tracks) && data.work.tracks.length > 0) {
+              if (!diag.chosenTracks || diag.chosenTracks.length === 0) {
+                diag.isWorkingAudioFound = true;
+                diag.selectedSource = data.work.tracks[0]?.isHls ? 'JapaneseASMR (HLS Stream)' : (data.work.hasHls ? 'HLS Stream' : 'Alternative Source');
+                diag.chosenTracks = data.work.tracks.map(t => ({
+                  title: t.title || '',
+                  rawUrl: t.rawUrl || t.streamUrl || '',
+                  streamUrl: t.streamUrl || '',
+                  isHls: !!t.isHls,
+                  category: t.category || 'main'
+                }));
               }
             }
-          } catch (e) {
+            activeJob.moeDiagnostics = activeJob.moeDiagnostics || [];
+            activeJob.moeDiagnostics.push(diag);
+          }
+
+          if (data && data.work) {
+            activeJob.succeeded++;
+            kernelSucceededWorks.push(data.work);
+            if (logs) {
+              const logEntry = document.createElement('div');
+              logEntry.style.color = '#38bdf8';
+              logEntry.innerText = '✅ ' + rj + ': ' + (data.work.title ? data.work.title.slice(0, 32) : '') + '... (Added)';
+              logs.appendChild(logEntry);
+            }
+          } else {
             activeJob.failed++;
+            const failReason = lastFailReason || 'All tried sources failed';
             activeJob.failedItems = activeJob.failedItems || [];
-            activeJob.failedItems.push({ rjCode: rj, reason: e.message || 'Network/503 error' });
+            activeJob.failedItems.push({ rjCode: rj, reason: failReason });
+            kernelFailedWorks.push({ rjCode: rj, reason: failReason, title: 'Work ' + rj });
 
-            // Ensure network error failures are also in diagnostic log
+            // Ensure failed works are always recorded in the diagnostic report!
             activeJob.moeDiagnostics = activeJob.moeDiagnostics || [];
             const existingDiag = activeJob.moeDiagnostics.find(d => d.rjCode === rj);
             if (existingDiag) {
               existingDiag.isWorkingAudioFound = false;
-              existingDiag.failureReason = e.message || 'Network/503 error';
+              existingDiag.failureReason = failReason;
             } else {
               activeJob.moeDiagnostics.push({
                 rjCode: rj,
@@ -8632,33 +8788,73 @@ const INDEX_HTML = `<!DOCTYPE html>
                 triedUrls: [],
                 isWorkingAudioFound: false,
                 selectedSource: 'NONE (Failed / Saved to Wishlist)',
-                failureReason: e.message || 'Network/503 error'
+                failureReason: failReason
               });
             }
 
             if (logs) {
               const logEntry = document.createElement('div');
               logEntry.style.color = '#f59e0b';
-              logEntry.innerText = '⚠️ ' + rj + ': ' + e.message + ' -> Saved to Wishlist 📋';
+              logEntry.innerText = '⚠️ ' + rj + ': ' + failReason + ' -> Saved to Wishlist 📋';
               logs.appendChild(logEntry);
             }
-            apiFetch('/api/wishlist', {
-              method: 'POST',
-              body: JSON.stringify({ rjCode: rj, reason: e.message || 'Network/503 error' })
-            }).catch(() => {});
           }
+
           if (logs) logs.scrollTop = logs.scrollHeight;
           renderBatchQueueUI();
-          updateWishlistBadge();
-          if (window.location.hash === '#/wishlist') {
-            loadWishlist();
+
+          // Soft-reset breather & Atomic KV Kernel Commit after every Kernel of 10 works
+          if ((i + 1) % KERNEL_SIZE === 0 && (i + 1) < activeJob.total && !activeJob.stopRequested) {
+            // Commit all works in this kernel in a single atomic transaction
+            if (kernelSucceededWorks.length > 0 || kernelFailedWorks.length > 0) {
+              await apiFetch('/api/library/kernel-commit', {
+                method: 'POST',
+                body: JSON.stringify({ works: kernelSucceededWorks, failed: kernelFailedWorks })
+              }).catch(() => {});
+              kernelSucceededWorks = [];
+              kernelFailedWorks = [];
+            }
+
+            updateWishlistBadge();
+            if (window.location.hash === '#/wishlist') {
+              loadWishlist();
+            }
+            const kernelNum = Math.floor((i + 1) / KERNEL_SIZE);
+            const totalKernels = Math.ceil(activeJob.total / KERNEL_SIZE);
+            const breatherMs = 3200; // 3.2s pause to fully reset origin rate-limit burst windows
+            if (logs) {
+              const breatherLog = document.createElement('div');
+              breatherLog.style.color = '#a78bfa';
+              breatherLog.innerText = '☕ Completed Kernel #' + kernelNum + '/' + totalKernels + ' (' + (i + 1) + '/' + activeJob.total + ' works). Committed to DB. Taking a ' + (breatherMs / 1000).toFixed(1) + 's breather...';
+              logs.appendChild(breatherLog);
+              logs.scrollTop = logs.scrollHeight;
+            }
+            activeJob.currentStatusText = '☕ Kernel #' + kernelNum + ' committed (' + (breatherMs / 1000).toFixed(1) + 's)...';
+            renderBatchQueueUI();
+            await new Promise(r => setTimeout(r, breatherMs));
+          } else {
+            await new Promise(r => setTimeout(r, interItemDelayMs));
           }
-          await new Promise(r => setTimeout(r, 120));
+        }
+
+        // Final Kernel Commit for any remaining works at end of job
+        if (kernelSucceededWorks.length > 0 || kernelFailedWorks.length > 0) {
+          await apiFetch('/api/library/kernel-commit', {
+            method: 'POST',
+            body: JSON.stringify({ works: kernelSucceededWorks, failed: kernelFailedWorks })
+          }).catch(() => {});
+          kernelSucceededWorks = [];
+          kernelFailedWorks = [];
         }
 
         if (activeJob.status !== 'stopped') {
           activeJob.status = 'completed';
           activeJob.currentStatusText = '🎉 Completed: ' + activeJob.succeeded + ' added, ' + activeJob.failed + ' wishlist';
+        }
+
+        updateWishlistBadge();
+        if (window.location.hash === '#/wishlist') {
+          loadWishlist();
         }
 
         // Auto-download failsafe if there are any failed/503 works in this job

@@ -34,6 +34,23 @@ for (const file of files) {
     console.error(`   Message: ${err.message}`);
   }
 
+  // 1.5. Check duplicate top-level function / variable names in ES module / scripts
+  const topLevelDeclarations = new Map();
+  const lines = rawCode.split('\n');
+  lines.forEach((l, idx) => {
+    const fnMatch = l.match(/^(?:export\s+)?(?:async\s+)?function\s+([a-zA-Z0-9_$]+)\s*\(/);
+    if (fnMatch) {
+      const sym = fnMatch[1];
+      if (topLevelDeclarations.has(sym)) {
+        fileErrorCount++;
+        totalErrors++;
+        console.error(`\n❌ [Duplicate Declaration Error] ${file}: Symbol "${sym}" declared on line ${idx + 1}, already declared on line ${topLevelDeclarations.get(sym)}`);
+      } else {
+        topLevelDeclarations.set(sym, idx + 1);
+      }
+    }
+  });
+
   // 2. Embedded INDEX_HTML Template Evaluation
   let evaluatedHtml = '';
   const htmlMatch = rawCode.match(/const\s+INDEX_HTML\s*=\s*`([\s\S]*?)`;/);

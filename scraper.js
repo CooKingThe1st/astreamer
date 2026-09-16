@@ -656,18 +656,15 @@ async function probeMediaCdn(rjCode, dlsiteMeta) {
     });
   }
 
-  // 2. Fetch Ground-Truth Reference Tracks from ASMR.one or DLsite
+  // 2. Fetch Ground-Truth Reference Tracks from ASMR.one only if JapaneseASMR audio was NOT found
   let gtTracks = [];
-  try {
-    const cleanNum = cleanRj.replace(/^(?:RJ|VJ|BJ)/i, '');
-    const trackIdsToTry = [cleanNum, cleanNum.replace(/^0+/, '')];
-    const apiHosts = ['https://api.asmr.one', 'https://api.asmr-200.com', 'https://api.asmr-300.com', 'https://api.asmr-100.com'];
-    
-    for (const tid of trackIdsToTry) {
-      if (!tid) continue;
+  if (japTracks.length === 0) {
+    try {
+      const cleanNum = cleanRj.replace(/^(?:RJ|VJ|BJ)/i, '');
+      const apiHosts = ['https://api.asmr.one', 'https://api.asmr-200.com'];
       for (const host of apiHosts) {
         try {
-          const asmrRes = await axios.get(`${host}/api/tracks/${tid}`, {
+          const asmrRes = await axios.get(`${host}/api/tracks/${cleanNum}`, {
             httpAgent,
             httpsAgent,
             headers: { 'User-Agent': BROWSER_HEADERS['User-Agent'], 'Accept': 'application/json' },
@@ -710,10 +707,10 @@ async function probeMediaCdn(rjCode, dlsiteMeta) {
             }
           }
         } catch (e) {}
+        if (gtTracks.length > 0) break;
       }
-      if (gtTracks.length > 0) break;
-    }
-  } catch (e) {}
+    } catch (e) {}
+  }
 
   // 3. Concurrently Probe HentaiASMR Moe Audio Tracks (Pure API + Direct Media CDN)
   // Optimization: If JapaneseASMR audio is already available, skip Moe CDN audio probing during initial import
@@ -1049,21 +1046,29 @@ async function resolveLazyWorkAudio(work) {
   return work;
 }
 
-function parseAsmrTreeData(treeData, hasM3u8 = true, targetDuration = 0) {
+function parseAsmrTreeData(treeData, hasM3u8 = true, targetDuration = 0, hostUrl = 'https://api.asmr-200.com') {
   if (!Array.isArray(treeData) || treeData.length === 0) {
     return { chapters: [], gallery: [] };
   }
 
+  const defaultHost = hostUrl || 'https://api.asmr-200.com';
   const gallery = [];
   const folderAudioMap = {};
   const rootAudio = [];
 
-  const isImageFile = (title, type) => {
-    return type === 'image' || /\.(jpg|jpeg|png|webp|gif|bmp|avif)$/i.test(title);
+  const isImageFolder = (folderName) => {
+    return /(img|image|images|cover|jacket|booklet|gazou|cg|illust|イラスト|画像|ジャケット|ブックレット|表紙|挿絵|写真|配图|附图|壁纸|wallpaper|art|artwork)/i.test(folderName || '');
   };
 
-  const isAudioFile = (title, type) => {
-    return (type === 'audio' || /\.(mp3|wav|flac|m4a|aac|ogg|opus)$/i.test(title)) && !isImageFile(title, type);
+  const isImageFile = (title, type, folder = '') => {
+    if (type === 'image') return true;
+    if (/\.(jpg|jpeg|png|webp|gif|bmp|avif|tif|tiff|jfif|ico|svg)$/i.test(title)) return true;
+    if (isImageFolder(folder) && type !== 'audio' && type !== 'folder' && !/\.(mp3|wav|flac|m4a|aac|ogg|opus|txt|lrc|vtt|pdf|zip|rar|7z)$/i.test(title)) return true;
+    return false;
+  };
+
+  const isAudioFile = (title, type, folder = '') => {
+    return (type === 'audio' || /\.(mp3|wav|flac|m4a|aac|ogg|opus)$/i.test(title)) && !isImageFile(title, type, folder);
   };
 
   const isBonusPattern = (str) => /(特典|おまけ|bonus|extra|ex_|sp_|後日談|アフター|ショートストーリー|ss)/i.test(str || '');
@@ -1087,18 +1092,24 @@ function parseAsmrTreeData(treeData, hasM3u8 = true, targetDuration = 0) {
       if (!item) continue;
       const title = (item.title || '').trim();
       const type = (item.type || '').toLowerCase();
-      const rawUrl = item.mediaStreamUrl || item.streamLowQualityUrl || item.mediaDownloadUrl || item.url || '';
+      const rawUrl = item.mediaStreamUrl || item.streamLowQualityUrl || item.mediaDownloadUrl || item.downloadUrl || item.streamUrl || item.url || item.mediaUrl || item.sourceUrl || '';
+      let fullUrl = rawUrl;
+      if (fullUrl && !fullUrl.startsWith('http') && !fullUrl.startsWith('//')) {
+        fullUrl = defaultHost + (fullUrl.startsWith('/') ? '' : '/') + fullUrl;
+      }
 
-      if (isImageFile(title, type) && rawUrl) {
+      if (isImageFile(title, type, currentFolder) && (fullUrl || item.hash)) {
+        const finalImgUrl = fullUrl || `${defaultHost}/api/media/stream/${item.hash}`;
         gallery.push({
           title: title.replace(/\.[a-zA-Z0-9]+$/, ''),
-          url: rawUrl,
-          proxyUrl: `/image-proxy?url=${encodeURIComponent(rawUrl)}`
+          source: 'ASMR.one',
+          url: finalImgUrl,
+          proxyUrl: `/image-proxy?url=${encodeURIComponent(finalImgUrl)}`
         });
       }
 
       const dur = Math.max(0, Math.round(Number(item.duration) || 0));
-      if (isAudioFile(title, type) && dur > 0 && type !== 'folder' && !isSamplePromo(title)) {
+      if (isAudioFile(title, type, currentFolder) && dur > 0 && type !== 'folder' && !isSamplePromo(title)) {
         const audioObj = {
           title: title.replace(/\.[a-zA-Z0-9]+$/, '').trim(),
           duration: dur,
@@ -1342,19 +1353,276 @@ function parseAsmrTreeData(treeData, hasM3u8 = true, targetDuration = 0) {
   return { chapters, gallery, audioTracks: finalAudioList };
 }
 
-async function fetchChaptersAndGallery(cleanRj, hasM3u8 = true, targetDuration = 0) {
-  const cleanNum = cleanRj.replace(/^(?:RJ|VJ|BJ)/i, '');
-  const trackIdsToTry = [cleanNum];
+async function probeDlsiteAndWeeabGallery(cleanRj) {
+  const cleanUpper = (cleanRj || '').toUpperCase().trim();
+  const cleanNum = cleanUpper.replace(/^(?:RJ|VJ|BJ)/i, '');
   const strippedNum = cleanNum.replace(/^0+/, '');
-  if (strippedNum && !trackIdsToTry.includes(strippedNum)) trackIdsToTry.push(strippedNum);
+  const bucket = getDlsiteCoverBucket(cleanUpper);
+  const candidates = [];
+
+  // 1. DLsite Doujin: High-res main illustration, sample preview banner, and sample pages 1-10
+  const dlsiteDoujin = { key: 'doujin', label: 'DLsite Doujin' };
+  const dlsiteMainUrl = `https://img.dlsite.jp/modpub/images2/work/${dlsiteDoujin.key}/${bucket}/${cleanUpper}_img_main.jpg`;
+  candidates.push({
+    title: 'Main Package Artwork',
+    role: 'main_cover',
+    source: dlsiteDoujin.label,
+    url: dlsiteMainUrl,
+    proxyUrl: `/image-proxy?url=${encodeURIComponent(dlsiteMainUrl)}`
+  });
+  const dlsiteSamUrl = `https://img.dlsite.jp/modpub/images2/work/${dlsiteDoujin.key}/${bucket}/${cleanUpper}_img_sam.jpg`;
+  candidates.push({
+    title: 'Sample Preview / Banner',
+    role: 'sam_cover',
+    source: dlsiteDoujin.label,
+    url: dlsiteSamUrl,
+    proxyUrl: `/image-proxy?url=${encodeURIComponent(dlsiteSamUrl)}`
+  });
+
+  for (let i = 1; i <= 10; i++) {
+    const urlImgSmp = `https://img.dlsite.jp/modpub/images2/work/${dlsiteDoujin.key}/${bucket}/${cleanUpper}_img_smp${i}.jpg`;
+    candidates.push({
+      title: `Sample Illustration #${i}`,
+      role: `sample_${i}`,
+      source: dlsiteDoujin.label,
+      url: urlImgSmp,
+      proxyUrl: `/image-proxy?url=${encodeURIComponent(urlImgSmp)}`
+    });
+    const urlSmp = `https://img.dlsite.jp/modpub/images2/work/${dlsiteDoujin.key}/${bucket}/${cleanUpper}_smp${i}.jpg`;
+    candidates.push({
+      title: `Sample Illustration #${i}`,
+      role: `sample_${i}`,
+      source: dlsiteDoujin.label,
+      url: urlSmp,
+      proxyUrl: `/image-proxy?url=${encodeURIComponent(urlSmp)}`
+    });
+  }
+
+  // 2. Fallback ASMR.one Official Cover (used if DLsite main cover is not available)
+  if (strippedNum) {
+    const asmrCoverUrl = `https://api.asmr-200.com/api/cover/${strippedNum}.jpg?type=main`;
+    candidates.push({
+      title: 'Official Cover / CD Jacket',
+      role: 'asmr_fallback_cover',
+      source: 'ASMR.one',
+      url: asmrCoverUrl,
+      proxyUrl: `/image-proxy?url=${encodeURIComponent(asmrCoverUrl)}`
+    });
+  }
+
+  // 3. Weeab0o / JapaneseASMR sample images
+  for (let i = 1; i <= 8; i++) {
+    const weeabImgUrl = `https://pic.weeabo0.xyz/${cleanUpper}_img_smp${i}.jpg`;
+    candidates.push({
+      title: `Sample Artwork #${i}`,
+      role: `weeab_sample_${i}`,
+      source: 'Weeab0o',
+      url: weeabImgUrl,
+      proxyUrl: `/image-proxy?url=${encodeURIComponent(weeabImgUrl)}`
+    });
+    const weeabSmpUrl = `https://pic.weeabo0.xyz/${cleanUpper}_smp${i}.jpg`;
+    candidates.push({
+      title: `Sample Artwork #${i}`,
+      role: `weeab_sample_${i}`,
+      source: 'Weeab0o',
+      url: weeabSmpUrl,
+      proxyUrl: `/image-proxy?url=${encodeURIComponent(weeabSmpUrl)}`
+    });
+  }
+
+  try {
+    const checked = await Promise.all(
+      candidates.map(async (item) => {
+        try {
+          let referer = 'https://www.dlsite.com/';
+          const isAsmr = item.url.includes('asmr.one') || item.url.includes('asmr-200.com') || item.url.includes('asmr-300.com') || item.url.includes('asmr-100.com');
+          if (item.url.includes('weeabo0') || item.url.includes('japaneseasmr')) {
+            referer = 'https://japaneseasmr.com/';
+          } else if (isAsmr) {
+            referer = 'https://www.asmr.one/';
+          }
+          const headers = {
+            'Referer': referer,
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
+          };
+          if (isAsmr) {
+            headers['Range'] = 'bytes=0-0';
+          }
+          const res = await axios({
+            method: isAsmr ? 'get' : 'head',
+            url: item.url,
+            headers,
+            timeout: 5000,
+            validateStatus: (status) => (status >= 200 && status < 400)
+          });
+          if (res.status >= 200 && res.status < 400) {
+            const cl = res.headers ? (res.headers['content-length'] || '') : '';
+            const et = res.headers ? (res.headers['etag'] || '') : '';
+            return { ...item, contentLength: cl ? parseInt(cl, 10) : null, etag: et };
+          }
+        } catch (e) {}
+        return null;
+      })
+    );
+
+    let validList = checked.filter(Boolean);
+
+    // Fallback: If 0 DLsite doujin images were found, try other categories (pro, books, girls, bl, ai) with small footprint
+    const hasDlsite = validList.some(v => v.source && v.source.includes('DLsite'));
+    if (!hasDlsite) {
+      const altCats = [
+        { key: 'pro', label: 'DLsite Pro' },
+        { key: 'books', label: 'DLsite Books' },
+        { key: 'girls', label: 'DLsite Girls' },
+        { key: 'bl', label: 'DLsite BL' },
+        { key: 'ai', label: 'DLsite AI' }
+      ];
+      const altCandidates = [];
+      for (const cat of altCats) {
+        altCandidates.push({
+          title: 'Main Package Artwork',
+          role: 'main_cover',
+          source: cat.label,
+          url: `https://img.dlsite.jp/modpub/images2/work/${cat.key}/${bucket}/${cleanUpper}_img_main.jpg`,
+          proxyUrl: `/image-proxy?url=${encodeURIComponent(`https://img.dlsite.jp/modpub/images2/work/${cat.key}/${bucket}/${cleanUpper}_img_main.jpg`)}`
+        });
+        const altSamUrl = `https://img.dlsite.jp/modpub/images2/work/${cat.key}/${bucket}/${cleanUpper}_img_sam.jpg`;
+        altCandidates.push({
+          title: 'Sample Preview / Banner',
+          role: 'sam_cover',
+          source: cat.label,
+          url: altSamUrl,
+          proxyUrl: `/image-proxy?url=${encodeURIComponent(altSamUrl)}`
+        });
+        for (let i = 1; i <= 4; i++) {
+          altCandidates.push({
+            title: `Sample Illustration #${i}`,
+            role: `sample_${i}`,
+            source: cat.label,
+            url: `https://img.dlsite.jp/modpub/images2/work/${cat.key}/${bucket}/${cleanUpper}_img_smp${i}.jpg`,
+            proxyUrl: `/image-proxy?url=${encodeURIComponent(`https://img.dlsite.jp/modpub/images2/work/${cat.key}/${bucket}/${cleanUpper}_img_smp${i}.jpg`)}`
+          });
+        }
+      }
+      const altChecked = await Promise.all(
+        altCandidates.map(async (item) => {
+          try {
+            const res = await axios.head(item.url, {
+              headers: { 'Referer': 'https://www.dlsite.com/', 'User-Agent': 'Mozilla/5.0' },
+              timeout: 3000,
+              validateStatus: (status) => status >= 200 && status < 400
+            });
+            if (res.status >= 200 && res.status < 400) {
+              const cl = res.headers ? (res.headers['content-length'] || '') : '';
+              const et = res.headers ? (res.headers['etag'] || '') : '';
+              return { ...item, contentLength: cl ? parseInt(cl, 10) : null, etag: et };
+            }
+          } catch (e) {}
+          return null;
+        })
+      );
+      validList = validList.concat(altChecked.filter(Boolean));
+    }
+
+    // --- Deduplication Logic ---
+    // 1. If we have a primary DLsite Main Cover, discard the ASMR.one fallback mirror cover
+    const hasPrimaryMain = validList.some(v => v.role === 'main_cover');
+    if (hasPrimaryMain) {
+      validList = validList.filter(v => v.role !== 'asmr_fallback_cover');
+    }
+
+    // 2. If Sample Preview / Banner has the same Content-Length or ETag as Main Package Artwork, discard duplicate banner!
+    const mainItem = validList.find(v => v.role === 'main_cover');
+    if (mainItem && mainItem.contentLength) {
+      validList = validList.filter(v => {
+        if (v.role === 'sam_cover') {
+          if (v.contentLength && v.contentLength === mainItem.contentLength) {
+            return false; // Exact duplicate of main package cover!
+          }
+          if (v.etag && mainItem.etag && v.etag === mainItem.etag) {
+            return false; // Exact duplicate of main package cover!
+          }
+        }
+        return true;
+      });
+    }
+
+    // 3. Deduplicate by unique sample roles (e.g. keep one of img_smpX vs smpX)
+    const seenRoles = new Set();
+    const finalFiltered = [];
+    for (const item of validList) {
+      if (item.role && item.role.startsWith('sample_')) {
+        if (seenRoles.has(item.role)) continue;
+        seenRoles.add(item.role);
+      }
+      finalFiltered.push(item);
+    }
+
+    return finalFiltered;
+  } catch (e) {
+    return [];
+  }
+}
+
+function extractArtworkFromTree(treeList, defaultHost = 'https://api.asmr-200.com') {
+  const images = [];
+  const seenUrls = new Set();
+
+  function parseNode(node, folderPath = '') {
+    if (!node) return;
+    const title = (node.title || '').trim();
+    const type = (node.type || '').toLowerCase();
+    const currentPath = folderPath ? `${folderPath} / ${title}` : title;
+    const isImage = type === 'image' || /\.(?:png|jpe?g|webp|gif|bmp|avif)$/i.test(title);
+    
+    if (isImage) {
+      const rawUrl = node.mediaDownloadUrl || node.mediaStreamUrl || (node.hash ? `${defaultHost}/api/media/stream/${node.hash}` : '');
+      if (rawUrl && !seenUrls.has(rawUrl)) {
+        seenUrls.add(rawUrl);
+        images.push({
+          title: title.replace(/\.[a-zA-Z0-9]+$/, ''),
+          folder: folderPath || 'Root',
+          source: 'ASMR.one',
+          url: rawUrl,
+          proxyUrl: `/image-proxy?url=${encodeURIComponent(rawUrl)}`
+        });
+      }
+    }
+    if (Array.isArray(node.children)) {
+      for (const child of node.children) {
+        parseNode(child, currentPath);
+      }
+    }
+  }
+
+  if (Array.isArray(treeList)) {
+    for (const rootNode of treeList) {
+      parseNode(rootNode);
+    }
+  }
+  return images;
+}
+
+async function fetchChaptersAndGallery(cleanRj, hasM3u8 = true, targetDuration = 0) {
+  const cleanUpper = (cleanRj || '').toUpperCase().trim();
+  const cleanNum = cleanUpper.replace(/^(?:RJ|VJ|BJ)/i, '');
+  const strippedNum = cleanNum.replace(/^0+/, '');
+  const trackIdsToTry = [];
+  if (strippedNum) trackIdsToTry.push(strippedNum);
+  if (cleanNum && !trackIdsToTry.includes(cleanNum)) trackIdsToTry.push(cleanNum);
 
   const apiHosts = [
-    'https://api.asmr.one',
     'https://api.asmr-200.com',
     'https://api.asmr-300.com',
-    'https://api.asmr-100.com'
+    'https://api.asmr-100.com',
+    'https://api.asmr.one'
   ];
 
+  let parsed = { chapters: [], gallery: [], audioTracks: [] };
+  const extractedArtworks = [];
+
+  // 1. Try ASMR.one track tree (high-res booklets, illustrations, CD jackets)
   for (const tid of trackIdsToTry) {
     for (const host of apiHosts) {
       try {
@@ -1362,21 +1630,92 @@ async function fetchChaptersAndGallery(cleanRj, hasM3u8 = true, targetDuration =
           headers: {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
             'Accept': 'application/json, text/plain, */*',
-            'Referer': 'https://www.asmr.one/'
+            'Referer': 'https://www.asmr.one/',
+            'Origin': 'https://www.asmr.one'
           },
           timeout: 8000
         });
-        if (asmrTracksRes.data && Array.isArray(asmrTracksRes.data) && asmrTracksRes.data.length > 0) {
-          const parsed = parseAsmrTreeData(asmrTracksRes.data, hasM3u8, targetDuration);
-          if (parsed.chapters.length > 0 || parsed.gallery.length > 0 || (parsed.audioTracks && parsed.audioTracks.length > 0)) {
-            return parsed;
+        if (asmrTracksRes.data) {
+          const treeList = Array.isArray(asmrTracksRes.data) ? asmrTracksRes.data : (asmrTracksRes.data.tracks || asmrTracksRes.data.data || []);
+          if (treeList.length > 0) {
+            const treeArt = extractArtworkFromTree(treeList, host);
+            if (treeArt.length > 0) {
+              extractedArtworks.push(...treeArt);
+            }
+            const res = parseAsmrTreeData(treeList, hasM3u8, targetDuration, host);
+            parsed = res;
+            if (res.gallery && res.gallery.length > 0) {
+              extractedArtworks.push(...res.gallery);
+            }
+            break;
           }
+        }
+      } catch (e) {}
+    }
+    if (parsed.chapters.length > 0 || extractedArtworks.length > 0 || (parsed.audioTracks && parsed.audioTracks.length > 0)) {
+      break;
+    }
+  }
+
+  // 2. Query ASMR.one /api/work/:id metadata for official covers
+  if (strippedNum) {
+    for (const host of ['https://api.asmr-200.com', 'https://api.asmr-300.com', 'https://api.asmr.one']) {
+      try {
+        const workRes = await axios.get(`${host}/api/work/${strippedNum}`, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Referer': 'https://www.asmr.one/',
+            'Origin': 'https://www.asmr.one'
+          },
+          timeout: 6000
+        });
+        if (workRes.data) {
+          const wData = workRes.data;
+          if (wData.mainCoverUrl) {
+            extractedArtworks.push({
+              title: 'Official Cover / CD Jacket',
+              source: 'ASMR.one',
+              url: wData.mainCoverUrl,
+              proxyUrl: `/image-proxy?url=${encodeURIComponent(wData.mainCoverUrl)}`
+            });
+          }
+          if (wData.samCoverUrl) {
+            extractedArtworks.push({
+              title: 'Sample Preview / Banner',
+              source: 'ASMR.one',
+              url: wData.samCoverUrl,
+              proxyUrl: `/image-proxy?url=${encodeURIComponent(wData.samCoverUrl)}`
+            });
+          }
+          break;
         }
       } catch (e) {}
     }
   }
 
-  return { chapters: [], gallery: [], audioTracks: [] };
+  // 3. Probe DLsite and Weeab0o for official sample artwork and merge
+  const sampleImages = await probeDlsiteAndWeeabGallery(cleanUpper);
+  const hasDlsiteCover = sampleImages.some(img => img.role === 'main_cover' || img.title === 'Main Package Artwork');
+
+  // If DLsite primary cover is present, filter out ASMR.one mirror covers (only keep authentic track tree illustrations)
+  let cleanExtractedArt = extractedArtworks;
+  if (hasDlsiteCover) {
+    cleanExtractedArt = extractedArtworks.filter(a => a.title !== 'Official Cover / CD Jacket' && a.title !== 'Sample Preview / Banner');
+  }
+
+  const combinedGallery = [...cleanExtractedArt, ...sampleImages];
+  const seenUrls = new Set();
+  const dedupedGallery = [];
+
+  for (const item of combinedGallery) {
+    if (item && item.url && !seenUrls.has(item.url)) {
+      seenUrls.add(item.url);
+      dedupedGallery.push(item);
+    }
+  }
+
+  parsed.gallery = dedupedGallery;
+  return parsed;
 }
 
 async function fetchChaptersForRj(cleanRj, hasM3u8 = true, targetDuration = 0) {
@@ -1385,7 +1724,7 @@ async function fetchChaptersForRj(cleanRj, hasM3u8 = true, targetDuration = 0) {
 }
 
 // 3. Resolve and Save Work by RJ Code
-async function resolveAndSaveWork(rjInput) {
+async function resolveAndSaveWork(rjInput, saveImmediately = true) {
   const match = rjInput.trim().match(/(?:RJ|VJ|BJ)\d+/i);
   if (!match) throw new Error(`Invalid work code format: "${rjInput}". Please provide a valid RJ/VJ/BJ code (e.g. RJ01473335, BJ01267551).`);
   
@@ -1395,7 +1734,9 @@ async function resolveAndSaveWork(rjInput) {
   const existing = db.getWorkByRj(rjCode);
   if (existing) {
     console.log(`[DB Cache Hit] Loaded ${rjCode} from local database`);
-    db.removeWishlistItem(rjCode);
+    if (saveImmediately) {
+      db.removeWishlistItem(rjCode);
+    }
     return existing;
   }
 
@@ -1405,23 +1746,30 @@ async function resolveAndSaveWork(rjInput) {
     dlsiteMeta = await fetchDlsiteMetadata(rjCode);
     const workData = await probeMediaCdn(rjCode, dlsiteMeta);
 
-    // Save to persistent database
-    const saved = db.saveWork(workData);
-    // Remove from wishlist if it was there
-    db.removeWishlistItem(rjCode);
-    console.log(`[DB Saved] Successfully indexed and cached ${rjCode} into library`);
-    return saved;
+    if (saveImmediately) {
+      // Save to persistent database
+      const saved = db.saveWork(workData);
+      // Remove from wishlist if it was there
+      db.removeWishlistItem(rjCode);
+      console.log(`[DB Saved] Successfully indexed and cached ${rjCode} into library`);
+      return saved;
+    } else {
+      console.log(`[Work Ingested] ${rjCode} resolved (deferred DB commit)`);
+      return workData;
+    }
   } catch (err) {
-    // Auto-save to wishlist on error
-    db.saveWishlistItem({
-      rjCode,
-      title: dlsiteMeta?.title || `Work ${rjCode}`,
-      coverUrl: dlsiteMeta?.rawCoverUrl || '',
-      cv: dlsiteMeta?.cv || '',
-      circle: dlsiteMeta?.circle || '',
-      reason: err.message || 'Audio stream not yet available on CDN'
-    });
-    console.log(`[Wishlist Auto-Saved] ${rjCode} added to Wishlist: ${err.message}`);
+    if (saveImmediately) {
+      // Auto-save to wishlist on error
+      db.saveWishlistItem({
+        rjCode,
+        title: dlsiteMeta?.title || `Work ${rjCode}`,
+        coverUrl: dlsiteMeta?.rawCoverUrl || '',
+        cv: dlsiteMeta?.cv || '',
+        circle: dlsiteMeta?.circle || '',
+        reason: err.message || 'Audio stream not yet available on CDN'
+      });
+      console.log(`[Wishlist Auto-Saved] ${rjCode} added to Wishlist: ${err.message}`);
+    }
     throw err;
   }
 }

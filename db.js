@@ -1040,6 +1040,16 @@ function removeWishlistItem(rjCode) {
   return db.wishlist;
 }
 
+function cleanWishlistDuplicates() {
+  const db = readDb();
+  const initialCount = (db.wishlist || []).length;
+  const works = db.works || {};
+  db.wishlist = (db.wishlist || []).filter(item => !works[item.rjCode]);
+  const removedCount = initialCount - db.wishlist.length;
+  writeDb(db);
+  return { removedCount, remaining: db.wishlist.length, wishlist: db.wishlist };
+}
+
 function preStashWishlistItems(items) {
   const db = readDb();
   if (!db.wishlist) db.wishlist = [];
@@ -1121,6 +1131,7 @@ module.exports = {
   saveWishlistItem,
   preStashWishlistItems,
   removeWishlistItem,
+  cleanWishlistDuplicates,
   clearWishlist,
   readDb,
   BASE_TAG_DICT,

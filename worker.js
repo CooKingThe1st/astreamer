@@ -636,17 +636,35 @@ const SEED_DATA = {
 
 // In-Memory Database fallback (if KV is not yet bound)
 let memoryDb = JSON.parse(JSON.stringify(SEED_DATA));
+let cachedDb = null;
+let lastDbFetch = 0;
+const DB_CACHE_TTL = 5000; // 5 seconds in-memory cache per worker isolate to eliminate KV read storms
 
-async function getDb(env) {
+async function getDb(env, forceFresh = false) {
+  const now = Date.now();
+  if (!forceFresh && cachedDb && (now - lastDbFetch < DB_CACHE_TTL)) {
+    return cachedDb;
+  }
   if (env && env.ASTREAMER_KV) {
-    const raw = await env.ASTREAMER_KV.get('astreamer_db', 'json');
-    if (raw) {
-      raw.tagDict = Object.assign({}, BASE_TAG_DICT, raw.tagDict || {});
-      return raw;
+    try {
+      const raw = await env.ASTREAMER_KV.get('astreamer_db', 'json');
+      if (raw) {
+        raw.tagDict = Object.assign({}, BASE_TAG_DICT, raw.tagDict || {});
+        cachedDb = raw;
+        lastDbFetch = now;
+        return raw;
+      }
+    } catch (kvErr) {
+      console.error('[KV Get Error]', kvErr);
+      if (cachedDb) return cachedDb;
     }
     const initial = JSON.parse(JSON.stringify(SEED_DATA));
     initial.tagDict = Object.assign({}, BASE_TAG_DICT);
-    await env.ASTREAMER_KV.put('astreamer_db', JSON.stringify(initial));
+    try {
+      await env.ASTREAMER_KV.put('astreamer_db', JSON.stringify(initial));
+    } catch (e) {}
+    cachedDb = initial;
+    lastDbFetch = now;
     return initial;
   }
   memoryDb.tagDict = Object.assign({}, BASE_TAG_DICT, memoryDb.tagDict || {});
@@ -655,6 +673,10 @@ async function getDb(env) {
 
 async function saveDb(env, data) {
   if (!data) return;
+  // Invalidate and update local cache immediately
+  cachedDb = data;
+  lastDbFetch = Date.now();
+
   // Never save chapter arrays to KV: keep KV payload clean, lightweight, and write quota minimal
   if (data.works && typeof data.works === 'object') {
     for (const k of Object.keys(data.works)) {
@@ -668,7 +690,11 @@ async function saveDb(env, data) {
     }
   }
   if (env && env.ASTREAMER_KV) {
-    await env.ASTREAMER_KV.put('astreamer_db', JSON.stringify(data));
+    try {
+      await env.ASTREAMER_KV.put('astreamer_db', JSON.stringify(data));
+    } catch (putErr) {
+      console.error('[KV Put Error]', putErr);
+    }
   } else {
     memoryDb = data;
   }
@@ -717,6 +743,22 @@ function getCoverCandidates(targetUrl, rjCode) {
     let u = targetUrl.trim();
     if (u.startsWith('//')) u = 'https:' + u;
     candidates.push(u);
+
+    if (u.includes('api.asmr.one') || u.includes('api.asmr-200.com') || u.includes('api.asmr-300.com') || u.includes('api.asmr-100.com')) {
+      const asmrHosts = ['https://api.asmr-200.com', 'https://api.asmr-300.com', 'https://api.asmr.one', 'https://api.asmr-100.com'];
+      for (const h of asmrHosts) {
+        const alt = u.replace(/https?:\/\/[^\/]+/, h);
+        if (!candidates.includes(alt)) candidates.push(alt);
+      }
+    }
+
+    if (u.includes('/media/download/')) {
+      const alt = u.replace('/media/download/', '/media/stream/');
+      if (!candidates.includes(alt)) candidates.push(alt);
+    } else if (u.includes('/media/stream/')) {
+      const alt = u.replace('/media/stream/', '/media/download/');
+      if (!candidates.includes(alt)) candidates.push(alt);
+    }
   }
 
   let cleanRj = rjCode ? rjCode.toUpperCase().trim() : '';
@@ -735,15 +777,25 @@ function getCoverCandidates(targetUrl, rjCode) {
 
     const list = [
       `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${standardRj}_img_main.jpg`,
+      `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${standardRj}_img_main_240x240.jpg`,
       `https://img.dlsite.jp/modpub/images2/work/pro/${bucket}/${standardRj}_img_main.jpg`,
       `https://img.dlsite.jp/modpub/images2/work/books/${bucket}/${standardRj}_img_main.jpg`,
+      `https://img.dlsite.jp/modpub/images2/work/girls/${bucket}/${standardRj}_img_main.jpg`,
+      `https://img.dlsite.jp/modpub/images2/work/bl/${bucket}/${standardRj}_img_main.jpg`,
+      `https://img.dlsite.jp/modpub/images2/work/ai/${bucket}/${standardRj}_img_main.jpg`,
       `https://api.asmr-200.com/api/cover/${cleanNum}.jpg?type=main`,
       `https://api.asmr-200.com/api/cover/${cleanNum}.jpg`,
+      `https://api.asmr-300.com/api/cover/${cleanNum}.jpg?type=main`,
+      `https://api.asmr-300.com/api/cover/${cleanNum}.jpg`,
+      `https://api.asmr.one/api/cover/${cleanNum}.jpg?type=main`,
+      `https://api.asmr.one/api/cover/${cleanNum}.jpg`,
       `https://api.asmr-200.com/api/cover/${digits}.jpg?type=main`,
       `https://api.asmr-200.com/api/cover/${digits}.jpg`,
       `https://pic.weeabo0.xyz/${standardRj}_img_main.jpg`,
       `https://pic.weeabo0.xyz/${standardRj}_img_main.webp`,
-      `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${standardRj}_img_sam.jpg`
+      `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${standardRj}_img_sam.jpg`,
+      `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${standardRj}_img_smp1.jpg`,
+      `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${standardRj}_smp1.jpg`
     ];
 
     for (const item of list) {
@@ -1337,18 +1389,15 @@ async function resolveRjWork(rjCode) {
     } catch (e) {}
   }
 
-  // 2. Fetch Ground-Truth Reference Tracks from ASMR.one or DLsite
+  // 2. Fetch Ground-Truth Reference Tracks from ASMR.one only if JapaneseASMR audio was NOT found
   let gtTracks = [];
-  try {
-    const cleanNum = cleanRj.replace(/^(?:RJ|VJ|BJ)/i, '');
-    const trackIdsToTry = [cleanNum, cleanNum.replace(/^0+/, '')];
-    const apiHosts = ['https://api.asmr.one', 'https://api.asmr-200.com', 'https://api.asmr-300.com', 'https://api.asmr-100.com'];
-    
-    for (const tid of trackIdsToTry) {
-      if (!tid) continue;
+  if (japTracks.length === 0) {
+    try {
+      const cleanNum = cleanRj.replace(/^(?:RJ|VJ|BJ)/i, '');
+      const apiHosts = ['https://api.asmr.one', 'https://api.asmr-200.com'];
       for (const host of apiHosts) {
         try {
-          const asmrRes = await fetch(`${host}/api/tracks/${tid}`, {
+          const asmrRes = await fetch(`${host}/api/tracks/${cleanNum}`, {
             headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
           });
           if (asmrRes.ok) {
@@ -1391,10 +1440,10 @@ async function resolveRjWork(rjCode) {
             }
           }
         } catch (e) {}
+        if (gtTracks.length > 0) break;
       }
-      if (gtTracks.length > 0) break;
-    }
-  } catch (e) {}
+    } catch (e) {}
+  }
 
   // 3. Concurrently Probe HentaiASMR Moe Audio Tracks (Pure API + Direct Media CDN)
   // Optimization: If JapaneseASMR audio is already available, skip Moe CDN audio probing during initial import
@@ -1873,21 +1922,29 @@ function isWorkMetadataChanged(oldWork, freshWork) {
   return false;
 }
 
-function parseAsmrTreeData(treeData, hasHls = true, targetDuration = 0) {
+function parseAsmrTreeData(treeData, hasHls = true, targetDuration = 0, hostUrl = 'https://api.asmr-200.com') {
   if (!Array.isArray(treeData) || treeData.length === 0) {
     return { chapters: [], gallery: [] };
   }
 
+  const defaultHost = hostUrl || 'https://api.asmr-200.com';
   const gallery = [];
   const folderAudioMap = {};
   const rootAudio = [];
 
-  const isImageFile = (title, type) => {
-    return type === 'image' || /\.(jpg|jpeg|png|webp|gif|bmp|avif)$/i.test(title);
+  const isImageFolder = (folderName) => {
+    return /(img|image|images|cover|jacket|booklet|gazou|cg|illust|イラスト|画像|ジャケット|ブックレット|表紙|挿絵|写真|配图|附图|壁纸|wallpaper|art|artwork)/i.test(folderName || '');
   };
 
-  const isAudioFile = (title, type) => {
-    return (type === 'audio' || /\.(mp3|wav|flac|m4a|aac|ogg|opus)$/i.test(title)) && !isImageFile(title, type);
+  const isImageFile = (title, type, folder = '') => {
+    if (type === 'image') return true;
+    if (/\.(jpg|jpeg|png|webp|gif|bmp|avif|tif|tiff|jfif|ico|svg)$/i.test(title)) return true;
+    if (isImageFolder(folder) && type !== 'audio' && type !== 'folder' && !/\.(mp3|wav|flac|m4a|aac|ogg|opus|txt|lrc|vtt|pdf|zip|rar|7z)$/i.test(title)) return true;
+    return false;
+  };
+
+  const isAudioFile = (title, type, folder = '') => {
+    return (type === 'audio' || /\.(mp3|wav|flac|m4a|aac|ogg|opus)$/i.test(title)) && !isImageFile(title, type, folder);
   };
 
   const isBonusPattern = (str) => /(特典|おまけ|bonus|extra|ex_|sp_|後日談|アフター|ショートストーリー|ss)/i.test(str || '');
@@ -1911,18 +1968,24 @@ function parseAsmrTreeData(treeData, hasHls = true, targetDuration = 0) {
       if (!item) continue;
       const title = (item.title || '').trim();
       const type = (item.type || '').toLowerCase();
-      const rawUrl = item.mediaStreamUrl || item.streamLowQualityUrl || item.mediaDownloadUrl || item.url || '';
+      const rawUrl = item.mediaStreamUrl || item.streamLowQualityUrl || item.mediaDownloadUrl || item.downloadUrl || item.streamUrl || item.url || item.mediaUrl || item.sourceUrl || '';
+      let fullUrl = rawUrl;
+      if (fullUrl && !fullUrl.startsWith('http') && !fullUrl.startsWith('//')) {
+        fullUrl = defaultHost + (fullUrl.startsWith('/') ? '' : '/') + fullUrl;
+      }
 
-      if (isImageFile(title, type) && rawUrl) {
+      if (isImageFile(title, type, currentFolder) && (fullUrl || item.hash)) {
+        const finalImgUrl = fullUrl || `${defaultHost}/api/media/stream/${item.hash}`;
         gallery.push({
           title: title.replace(/\.[a-zA-Z0-9]+$/, ''),
-          url: rawUrl,
-          proxyUrl: `/image-proxy?url=${encodeURIComponent(rawUrl)}`
+          source: 'ASMR.one',
+          url: finalImgUrl,
+          proxyUrl: `/image-proxy?url=${encodeURIComponent(finalImgUrl)}`
         });
       }
 
       const dur = Math.max(0, Math.round(Number(item.duration) || 0));
-      if (isAudioFile(title, type) && dur > 0 && type !== 'folder' && !isSamplePromo(title)) {
+      if (isAudioFile(title, type, currentFolder) && dur > 0 && type !== 'folder' && !isSamplePromo(title)) {
         const audioObj = {
           title: title.replace(/\.[a-zA-Z0-9]+$/, '').trim(),
           duration: dur,
@@ -2157,7 +2220,7 @@ function parseAsmrTreeData(treeData, hasHls = true, targetDuration = 0) {
       title: t.title,
       startTime: startSecs,
       duration: t.duration,
-      formattedTime: formatTime(startSecs),
+      formattedTime: formatServerTime(startSecs),
       trackIndex: trackIdx,
       category: t.category || 'main'
     });
@@ -2166,43 +2229,388 @@ function parseAsmrTreeData(treeData, hasHls = true, targetDuration = 0) {
   return { chapters, gallery, audioTracks: finalAudioList };
 }
 
-async function fetchChaptersAndGallery(cleanRj, hasHls = true, targetDuration = 0) {
-  const cleanNum = cleanRj.replace(/^(?:RJ|VJ|BJ)/i, '');
-  const trackIdsToTry = [cleanNum];
+async function safeWorkerFetch(targetUrl, options = {}, timeoutMs = 8000) {
+  let timer;
+  let signal;
+  if (typeof AbortController !== 'undefined') {
+    const controller = new AbortController();
+    timer = setTimeout(() => {
+      try { controller.abort(); } catch (e) {}
+    }, timeoutMs);
+    signal = controller.signal;
+  }
+  try {
+    const res = await fetch(targetUrl, { ...options, signal });
+    if (timer) clearTimeout(timer);
+    return res;
+  } catch (err) {
+    if (timer) clearTimeout(timer);
+    throw err;
+  }
+}
+
+async function probeDlsiteAndWeeabGallery(cleanRj) {
+  const cleanUpper = (cleanRj || '').toUpperCase().trim();
+  const cleanNum = cleanUpper.replace(/^(?:RJ|VJ|BJ)/i, '');
   const strippedNum = cleanNum.replace(/^0+/, '');
-  if (strippedNum && !trackIdsToTry.includes(strippedNum)) trackIdsToTry.push(strippedNum);
+  const bucket = getDlsiteCoverBucket(cleanUpper);
+  const candidates = [];
+
+  // 1. DLsite Doujin: High-res main illustration, sample preview banner, and sample pages 1-10
+  const dlsiteDoujin = { key: 'doujin', label: 'DLsite Doujin' };
+  const dlsiteMainUrl = `https://img.dlsite.jp/modpub/images2/work/${dlsiteDoujin.key}/${bucket}/${cleanUpper}_img_main.jpg`;
+  candidates.push({
+    title: 'Main Package Artwork',
+    role: 'main_cover',
+    source: dlsiteDoujin.label,
+    url: dlsiteMainUrl,
+    proxyUrl: `/image-proxy?url=${encodeURIComponent(dlsiteMainUrl)}`
+  });
+  const dlsiteSamUrl = `https://img.dlsite.jp/modpub/images2/work/${dlsiteDoujin.key}/${bucket}/${cleanUpper}_img_sam.jpg`;
+  candidates.push({
+    title: 'Sample Preview / Banner',
+    role: 'sam_cover',
+    source: dlsiteDoujin.label,
+    url: dlsiteSamUrl,
+    proxyUrl: `/image-proxy?url=${encodeURIComponent(dlsiteSamUrl)}`
+  });
+
+  for (let i = 1; i <= 10; i++) {
+    const urlImgSmp = `https://img.dlsite.jp/modpub/images2/work/${dlsiteDoujin.key}/${bucket}/${cleanUpper}_img_smp${i}.jpg`;
+    candidates.push({
+      title: `Sample Illustration #${i}`,
+      role: `sample_${i}`,
+      source: dlsiteDoujin.label,
+      url: urlImgSmp,
+      proxyUrl: `/image-proxy?url=${encodeURIComponent(urlImgSmp)}`
+    });
+    const urlSmp = `https://img.dlsite.jp/modpub/images2/work/${dlsiteDoujin.key}/${bucket}/${cleanUpper}_smp${i}.jpg`;
+    candidates.push({
+      title: `Sample Illustration #${i}`,
+      role: `sample_${i}`,
+      source: dlsiteDoujin.label,
+      url: urlSmp,
+      proxyUrl: `/image-proxy?url=${encodeURIComponent(urlSmp)}`
+    });
+  }
+
+  // 2. Fallback ASMR.one Official Cover (used if DLsite main cover is not available)
+  if (strippedNum) {
+    const asmrCoverUrl = `https://api.asmr-200.com/api/cover/${strippedNum}.jpg?type=main`;
+    candidates.push({
+      title: 'Official Cover / CD Jacket',
+      role: 'asmr_fallback_cover',
+      source: 'ASMR.one',
+      url: asmrCoverUrl,
+      proxyUrl: `/image-proxy?url=${encodeURIComponent(asmrCoverUrl)}`
+    });
+  }
+
+  // 3. Weeab0o / JapaneseASMR sample images
+  for (let i = 1; i <= 8; i++) {
+    const weeabImgUrl = `https://pic.weeabo0.xyz/${cleanUpper}_img_smp${i}.jpg`;
+    candidates.push({
+      title: `Sample Artwork #${i}`,
+      role: `weeab_sample_${i}`,
+      source: 'Weeab0o',
+      url: weeabImgUrl,
+      proxyUrl: `/image-proxy?url=${encodeURIComponent(weeabImgUrl)}`
+    });
+    const weeabSmpUrl = `https://pic.weeabo0.xyz/${cleanUpper}_smp${i}.jpg`;
+    candidates.push({
+      title: `Sample Artwork #${i}`,
+      role: `weeab_sample_${i}`,
+      source: 'Weeab0o',
+      url: weeabSmpUrl,
+      proxyUrl: `/image-proxy?url=${encodeURIComponent(weeabSmpUrl)}`
+    });
+  }
+
+  try {
+    const checked = await Promise.all(
+      candidates.map(async (item) => {
+        try {
+          let referer = 'https://www.dlsite.com/';
+          const isAsmr = item.url.includes('asmr.one') || item.url.includes('asmr-200.com') || item.url.includes('asmr-300.com') || item.url.includes('asmr-100.com');
+          if (item.url.includes('weeabo0') || item.url.includes('japaneseasmr')) {
+            referer = 'https://japaneseasmr.com/';
+          } else if (isAsmr) {
+            referer = 'https://www.asmr.one/';
+          }
+          const fetchHeaders = {
+            'Referer': referer,
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
+          };
+          if (isAsmr) {
+            fetchHeaders['Range'] = 'bytes=0-0';
+          }
+          const res = await safeWorkerFetch(item.url, {
+            method: isAsmr ? 'GET' : 'HEAD',
+            headers: fetchHeaders,
+            cf: { cacheEverything: true, cacheTtl: 86400 }
+          }, 4500);
+          if (res.ok || res.status === 200 || res.status === 206) {
+            const cl = res.headers.get('content-length') || '';
+            const et = res.headers.get('etag') || '';
+            return { ...item, contentLength: cl ? parseInt(cl, 10) : null, etag: et };
+          }
+        } catch (e) {}
+        return null;
+      })
+    );
+
+    let validList = checked.filter(Boolean);
+
+    // Fallback: If 0 DLsite doujin images were found, try other categories (pro, books, girls, bl, ai) with small footprint
+    const hasDlsite = validList.some(v => v.source && v.source.includes('DLsite'));
+    if (!hasDlsite) {
+      const altCats = [
+        { key: 'pro', label: 'DLsite Pro' },
+        { key: 'books', label: 'DLsite Books' },
+        { key: 'girls', label: 'DLsite Girls' },
+        { key: 'bl', label: 'DLsite BL' },
+        { key: 'ai', label: 'DLsite AI' }
+      ];
+      const altCandidates = [];
+      for (const cat of altCats) {
+        altCandidates.push({
+          title: 'Main Package Artwork',
+          role: 'main_cover',
+          source: cat.label,
+          url: `https://img.dlsite.jp/modpub/images2/work/${cat.key}/${bucket}/${cleanUpper}_img_main.jpg`,
+          proxyUrl: `/image-proxy?url=${encodeURIComponent(`https://img.dlsite.jp/modpub/images2/work/${cat.key}/${bucket}/${cleanUpper}_img_main.jpg`)}`
+        });
+        const altSamUrl = `https://img.dlsite.jp/modpub/images2/work/${cat.key}/${bucket}/${cleanUpper}_img_sam.jpg`;
+        altCandidates.push({
+          title: 'Sample Preview / Banner',
+          role: 'sam_cover',
+          source: cat.label,
+          url: altSamUrl,
+          proxyUrl: `/image-proxy?url=${encodeURIComponent(altSamUrl)}`
+        });
+        for (let i = 1; i <= 4; i++) {
+          altCandidates.push({
+            title: `Sample Illustration #${i}`,
+            role: `sample_${i}`,
+            source: cat.label,
+            url: `https://img.dlsite.jp/modpub/images2/work/${cat.key}/${bucket}/${cleanUpper}_img_smp${i}.jpg`,
+            proxyUrl: `/image-proxy?url=${encodeURIComponent(`https://img.dlsite.jp/modpub/images2/work/${cat.key}/${bucket}/${cleanUpper}_img_smp${i}.jpg`)}`
+          });
+        }
+      }
+      const altChecked = await Promise.all(
+        altCandidates.map(async (item) => {
+          try {
+            const res = await safeWorkerFetch(item.url, {
+              method: 'HEAD',
+              headers: { 'Referer': 'https://www.dlsite.com/', 'User-Agent': 'Mozilla/5.0' },
+              cf: { cacheEverything: true, cacheTtl: 86400 }
+            }, 3000);
+            if (res.ok || res.status === 200 || res.status === 206) {
+              const cl = res.headers.get('content-length') || '';
+              const et = res.headers.get('etag') || '';
+              return { ...item, contentLength: cl ? parseInt(cl, 10) : null, etag: et };
+            }
+          } catch (e) {}
+          return null;
+        })
+      );
+      validList = validList.concat(altChecked.filter(Boolean));
+    }
+
+    // --- Deduplication Logic ---
+    // 1. If we have a primary DLsite Main Cover, discard the ASMR.one fallback mirror cover
+    const hasPrimaryMain = validList.some(v => v.role === 'main_cover');
+    if (hasPrimaryMain) {
+      validList = validList.filter(v => v.role !== 'asmr_fallback_cover');
+    }
+
+    // 2. If Sample Preview / Banner has the same Content-Length or ETag as Main Package Artwork, discard duplicate banner!
+    const mainItem = validList.find(v => v.role === 'main_cover');
+    if (mainItem && mainItem.contentLength) {
+      validList = validList.filter(v => {
+        if (v.role === 'sam_cover') {
+          if (v.contentLength && v.contentLength === mainItem.contentLength) {
+            return false; // Exact duplicate of main package cover!
+          }
+          if (v.etag && mainItem.etag && v.etag === mainItem.etag) {
+            return false; // Exact duplicate of main package cover!
+          }
+        }
+        return true;
+      });
+    }
+
+    // 3. Deduplicate by unique sample roles (e.g. keep one of img_smpX vs smpX)
+    const seenRoles = new Set();
+    const finalFiltered = [];
+    for (const item of validList) {
+      if (item.role && item.role.startsWith('sample_')) {
+        if (seenRoles.has(item.role)) continue;
+        seenRoles.add(item.role);
+      }
+      finalFiltered.push(item);
+    }
+
+    return finalFiltered;
+  } catch (e) {
+    return [];
+  }
+}
+
+function extractArtworkFromTree(treeList, defaultHost = 'https://api.asmr-200.com') {
+  const images = [];
+  const seenUrls = new Set();
+
+  function parseNode(node, folderPath = '') {
+    if (!node) return;
+    const title = (node.title || '').trim();
+    const type = (node.type || '').toLowerCase();
+    const currentPath = folderPath ? `${folderPath} / ${title}` : title;
+    const isImage = type === 'image' || /\.(?:png|jpe?g|webp|gif|bmp|avif)$/i.test(title);
+    
+    if (isImage) {
+      const rawUrl = node.mediaDownloadUrl || node.mediaStreamUrl || (node.hash ? `${defaultHost}/api/media/stream/${node.hash}` : '');
+      if (rawUrl && !seenUrls.has(rawUrl)) {
+        seenUrls.add(rawUrl);
+        images.push({
+          title: title.replace(/\.[a-zA-Z0-9]+$/, ''),
+          folder: folderPath || 'Root',
+          source: 'ASMR.one',
+          url: rawUrl,
+          proxyUrl: `/image-proxy?url=${encodeURIComponent(rawUrl)}`
+        });
+      }
+    }
+    if (Array.isArray(node.children)) {
+      for (const child of node.children) {
+        parseNode(child, currentPath);
+      }
+    }
+  }
+
+  if (Array.isArray(treeList)) {
+    for (const rootNode of treeList) {
+      parseNode(rootNode);
+    }
+  }
+  return images;
+}
+
+async function fetchChaptersAndGallery(cleanRj, hasHls = true, targetDuration = 0) {
+  const cleanUpper = (cleanRj || '').toUpperCase().trim();
+  const cleanNum = cleanUpper.replace(/^(?:RJ|VJ|BJ)/i, '');
+  const strippedNum = cleanNum.replace(/^0+/, '');
+  const trackIdsToTry = [];
+  if (strippedNum) trackIdsToTry.push(strippedNum);
+  if (cleanNum && !trackIdsToTry.includes(cleanNum)) trackIdsToTry.push(cleanNum);
 
   const apiHosts = [
-    'https://api.asmr.one',
     'https://api.asmr-200.com',
     'https://api.asmr-300.com',
+    'https://api.asmr.one',
     'https://api.asmr-100.com'
   ];
 
+  let parsed = { chapters: [], gallery: [], audioTracks: [] };
+  const extractedArtworks = [];
+
+  // 1. Try ASMR.one track tree (high-res booklets, illustrations, CD jackets)
   for (const tid of trackIdsToTry) {
     for (const host of apiHosts) {
       try {
-        const asmrTracksRes = await fetch(`${host}/api/tracks/${tid}`, {
+        const asmrTracksRes = await safeWorkerFetch(`${host}/api/tracks/${tid}`, {
           headers: {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
             'Accept': 'application/json, text/plain, */*',
-            'Referer': 'https://www.asmr.one/'
+            'Referer': 'https://www.asmr.one/',
+            'Origin': 'https://www.asmr.one'
           }
-        });
+        }, 8000);
         if (asmrTracksRes.ok) {
           const tracksData = await asmrTracksRes.json();
-          if (Array.isArray(tracksData) && tracksData.length > 0) {
-            const parsed = parseAsmrTreeData(tracksData, hasHls, targetDuration);
-            if (parsed.chapters.length > 0 || parsed.gallery.length > 0 || (parsed.audioTracks && parsed.audioTracks.length > 0)) {
-              return parsed;
+          const treeList = Array.isArray(tracksData) ? tracksData : (tracksData && Array.isArray(tracksData.tracks) ? tracksData.tracks : (tracksData && Array.isArray(tracksData.data) ? tracksData.data : []));
+          if (treeList.length > 0) {
+            const treeArt = extractArtworkFromTree(treeList, host);
+            if (treeArt.length > 0) {
+              extractedArtworks.push(...treeArt);
+            }
+            const res = parseAsmrTreeData(treeList, hasHls, targetDuration, host);
+            parsed = res;
+            if (res.gallery && res.gallery.length > 0) {
+              extractedArtworks.push(...res.gallery);
+            }
+            break;
+          }
+        }
+      } catch (e) {}
+    }
+    if (parsed.chapters.length > 0 || extractedArtworks.length > 0 || (parsed.audioTracks && parsed.audioTracks.length > 0)) {
+      break;
+    }
+  }
+
+  // 2. Query ASMR.one /api/work/:id metadata for official covers
+  if (strippedNum) {
+    for (const host of ['https://api.asmr-200.com', 'https://api.asmr-300.com', 'https://api.asmr.one']) {
+      try {
+        const workRes = await safeWorkerFetch(`${host}/api/work/${strippedNum}`, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Referer': 'https://www.asmr.one/',
+            'Origin': 'https://www.asmr.one'
+          }
+        }, 6000);
+        if (workRes.ok) {
+          const wData = await workRes.json();
+          if (wData) {
+            if (wData.mainCoverUrl) {
+              extractedArtworks.push({
+                title: 'Official Cover / CD Jacket',
+                source: 'ASMR.one',
+                url: wData.mainCoverUrl,
+                proxyUrl: `/image-proxy?url=${encodeURIComponent(wData.mainCoverUrl)}`
+              });
+            }
+            if (wData.samCoverUrl) {
+              extractedArtworks.push({
+                title: 'Sample Preview / Banner',
+                source: 'ASMR.one',
+                url: wData.samCoverUrl,
+                proxyUrl: `/image-proxy?url=${encodeURIComponent(wData.samCoverUrl)}`
+              });
             }
           }
+          break;
         }
       } catch (e) {}
     }
   }
 
-  return { chapters: [], gallery: [], audioTracks: [] };
+  // 3. Probe DLsite and Weeab0o for official sample artwork and merge
+  const sampleImages = await probeDlsiteAndWeeabGallery(cleanUpper);
+  const hasDlsiteCover = sampleImages.some(img => img.role === 'main_cover' || img.title === 'Main Package Artwork');
+
+  // If DLsite primary cover is present, filter out ASMR.one mirror covers (only keep authentic track tree illustrations)
+  let cleanExtractedArt = extractedArtworks;
+  if (hasDlsiteCover) {
+    cleanExtractedArt = extractedArtworks.filter(a => a.title !== 'Official Cover / CD Jacket' && a.title !== 'Sample Preview / Banner');
+  }
+
+  const combinedGallery = [...cleanExtractedArt, ...sampleImages];
+  const seenUrls = new Set();
+  const dedupedGallery = [];
+
+  for (const item of combinedGallery) {
+    if (item && item.url && !seenUrls.has(item.url)) {
+      seenUrls.add(item.url);
+      dedupedGallery.push(item);
+    }
+  }
+
+  parsed.gallery = dedupedGallery;
+  return parsed;
 }
 
 async function fetchChaptersForRj(cleanRj, hasHls = true, targetDuration = 0) {
@@ -2278,7 +2686,7 @@ export default {
             referer = 'https://www.dlsite.com/';
           } else if (candLower.includes('hentaiasmr.moe') || candLower.includes('asmr.moe')) {
             referer = 'https://hentaiasmr.moe/';
-          } else if (candLower.includes('asmr.one') || candLower.includes('asmr-200.com')) {
+          } else if (candLower.includes('asmr.one') || candLower.includes('asmr-200.com') || candLower.includes('asmr-300.com') || candLower.includes('asmr-100.com') || candLower.includes('kiko-play') || candLower.includes('kikoeru') || candLower.includes('niptan')) {
             referer = 'https://www.asmr.one/';
           } else if (candLower.includes('weeab') || candLower.includes('japaneseasmr')) {
             referer = 'https://japaneseasmr.com/';
@@ -2506,16 +2914,17 @@ export default {
       if (!match) return json({ error: 'Invalid RJ/VJ/BJ Code' }, 400);
 
       const rjCode = match[0].toUpperCase();
+      const saveImmediately = body.saveImmediately !== false;
 
       // Quick check if already in DB
       const dbCheck = await getDb(env);
       if (dbCheck.works && dbCheck.works[rjCode]) {
-        if ((dbCheck.wishlist || []).some(w => w.rjCode === rjCode)) {
+        if (saveImmediately && (dbCheck.wishlist || []).some(w => w.rjCode === rjCode)) {
           const freshDb = await getDb(env);
           freshDb.wishlist = (freshDb.wishlist || []).filter(w => w.rjCode !== rjCode);
           await saveDb(env, freshDb);
         }
-        return json({ success: true, work: dbCheck.works[rjCode] });
+        return json({ success: true, work: dbCheck.works[rjCode], alreadyInLibrary: true });
       }
 
       let work = null;
@@ -2526,29 +2935,75 @@ export default {
         resolveErr = err;
       }
 
-      // Fresh DB fetch right before saving to eliminate stale KV overwrite race condition
+      if (work) {
+        if (saveImmediately) {
+          const db = await getDb(env);
+          db.works = db.works || {};
+          db.wishlist = db.wishlist || [];
+          db.works[rjCode] = work;
+          db.wishlist = db.wishlist.filter(w => w.rjCode !== rjCode);
+          await saveDb(env, db);
+        }
+        return json({ success: true, work, moeDiagnostic: work.moeDiagnostic || null });
+      } else {
+        if (saveImmediately) {
+          const db = await getDb(env);
+          db.wishlist = db.wishlist || [];
+          const existingIdx = db.wishlist.findIndex(w => w.rjCode === rjCode);
+          const wishItem = {
+            rjCode,
+            title: `Work ${rjCode}`,
+            reason: resolveErr ? (resolveErr.message || 'Audio stream not yet available on CDN') : 'Audio stream not yet available on CDN',
+            addedAt: new Date().toISOString()
+          };
+          if (existingIdx >= 0) db.wishlist[existingIdx] = { ...db.wishlist[existingIdx], ...wishItem };
+          else db.wishlist.unshift(wishItem);
+          await saveDb(env, db);
+        }
+        return json({ error: resolveErr ? resolveErr.message : 'Audio stream not yet available on CDN', wishlisted: true, moeDiagnostic: resolveErr?.moeDiagnostic || null }, 404);
+      }
+    }
+
+    // Batch Commit a completed Ingestion Kernel (Atomic single KV write)
+    if (pathname === '/api/library/kernel-commit' && request.method === 'POST') {
+      if (!isAuth()) return json({ error: 'Unauthorized' }, 401);
+      const body = await request.json().catch(() => ({}));
+      const worksToCommit = Array.isArray(body.works) ? body.works : [];
+      const failedToCommit = Array.isArray(body.failed) ? body.failed : [];
+
+      if (worksToCommit.length === 0 && failedToCommit.length === 0) {
+        return json({ success: true, committedCount: 0 });
+      }
+
       const db = await getDb(env);
       db.works = db.works || {};
       db.wishlist = db.wishlist || [];
 
-      if (work) {
-        db.works[rjCode] = work;
-        db.wishlist = db.wishlist.filter(w => w.rjCode !== rjCode);
-        await saveDb(env, db);
-        return json({ success: true, work, moeDiagnostic: work.moeDiagnostic || null });
-      } else {
-        const existingIdx = db.wishlist.findIndex(w => w.rjCode === rjCode);
-        const wishItem = {
-          rjCode,
-          title: `Work ${rjCode}`,
-          reason: resolveErr ? (resolveErr.message || 'Audio stream not yet available on CDN') : 'Audio stream not yet available on CDN',
-          addedAt: new Date().toISOString()
-        };
-        if (existingIdx >= 0) db.wishlist[existingIdx] = { ...db.wishlist[existingIdx], ...wishItem };
-        else db.wishlist.unshift(wishItem);
-        await saveDb(env, db);
-        return json({ error: resolveErr ? resolveErr.message : 'Audio stream not yet available on CDN', wishlisted: true, moeDiagnostic: resolveErr?.moeDiagnostic || null }, 500);
+      let committedCount = 0;
+      for (const w of worksToCommit) {
+        if (!w || !w.rjCode) continue;
+        db.works[w.rjCode] = w;
+        db.wishlist = db.wishlist.filter(item => item.rjCode !== w.rjCode);
+        committedCount++;
       }
+
+      for (const f of failedToCommit) {
+        if (!f || !f.rjCode) continue;
+        if (!db.works[f.rjCode]) {
+          const existingIdx = db.wishlist.findIndex(item => item.rjCode === f.rjCode);
+          const wishItem = {
+            rjCode: f.rjCode,
+            title: f.title || `Work ${f.rjCode}`,
+            reason: f.reason || 'Audio stream not yet available on CDN',
+            addedAt: new Date().toISOString()
+          };
+          if (existingIdx >= 0) db.wishlist[existingIdx] = { ...db.wishlist[existingIdx], ...wishItem };
+          else db.wishlist.unshift(wishItem);
+        }
+      }
+
+      await saveDb(env, db);
+      return json({ success: true, committedCount, totalWorks: Object.keys(db.works).length, wishlistCount: db.wishlist.length });
     }
 
     // Resolve Lazy Stream On-Demand for a work
@@ -3071,6 +3526,17 @@ export default {
 
       await saveDb(env, db);
       return json(results);
+    }
+
+    if (pathname === '/api/wishlist/clean' && request.method === 'POST') {
+      if (!isAuth()) return json({ error: 'Unauthorized' }, 401);
+      const db = await getDb(env);
+      const initialCount = (db.wishlist || []).length;
+      const works = db.works || {};
+      db.wishlist = (db.wishlist || []).filter(item => !works[item.rjCode]);
+      const removedCount = initialCount - db.wishlist.length;
+      await saveDb(env, db);
+      return json({ success: true, removedCount, remaining: db.wishlist.length, wishlist: db.wishlist });
     }
 
     if (pathname.startsWith('/api/wishlist/') && request.method === 'DELETE') {
@@ -3842,6 +4308,10 @@ const INDEX_HTML = `<!DOCTYPE html>
     .btn-primary:hover { background: var(--accent-hover); box-shadow: 0 0 12px var(--accent-glow); }
     .btn-outline { background: transparent; color: #fff; border: 1px solid var(--border); padding: 9px 14px; border-radius: 10px; font-weight: 600; font-size: 0.88rem; cursor: pointer; transition: 0.15s; display: inline-flex; align-items: center; gap: 6px; }
     .btn-outline:hover { background: var(--bg-card-hover); border-color: rgba(255,255,255,0.2); }
+    .btn-gallery { background: rgba(16, 185, 129, 0.16) !important; color: #34d399 !important; border: 1px solid rgba(16, 185, 129, 0.4) !important; }
+    .btn-gallery:hover { background: #10b981 !important; color: #fff !important; border-color: #10b981 !important; box-shadow: 0 0 14px rgba(16, 185, 129, 0.45); }
+    .btn-remove { background: rgba(239, 68, 68, 0.16) !important; color: #f87171 !important; border: 1px solid rgba(239, 68, 68, 0.4) !important; }
+    .btn-remove:hover { background: #ef4444 !important; color: #fff !important; border-color: #ef4444 !important; box-shadow: 0 0 14px rgba(239, 68, 68, 0.45); }
     .btn-icon { background: var(--bg-card); border: 1px solid var(--border); color: #fff; width: 38px; height: 38px; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; font-size: 1.05rem; cursor: pointer; transition: 0.15s; }
     .btn-icon:hover { background: var(--bg-card-hover); border-color: rgba(255,255,255,0.2); }
     @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
@@ -6476,7 +6946,13 @@ const INDEX_HTML = `<!DOCTYPE html>
       try {
         const url = new URL('/api/library', window.location.origin);
         Object.keys(filterParams).forEach(k => { if (filterParams[k]) url.searchParams.set(k, filterParams[k]); });
-        let works = await apiFetchJson(url);
+        let works = null;
+        try {
+          works = await apiFetchJson(url);
+        } catch (firstErr) {
+          await new Promise(r => setTimeout(r, 1200));
+          works = await apiFetchJson(url);
+        }
         if (!Array.isArray(works)) works = [];
         if (contentMode === 'SFW') works = works.filter(w => !isWorkNsfw(w));
         allWorks = works;
@@ -6920,7 +7396,10 @@ const INDEX_HTML = `<!DOCTYPE html>
       currentWorkChapters = chaptersList;
 
       const galleryCount = (Array.isArray(work.gallery) ? work.gallery.length : 0);
-      let html = '<div class="work-detail-banner"><img class="detail-cover" src="' + display.coverUrl + '" onerror="handleImgError(this)"><div class="detail-info"><div style="display:flex; gap:8px; margin-bottom:8px;"><span class="card-rj">' + work.rjCode + '</span><span style="background:#0e7490; color:#fff; font-size:0.75rem; font-weight:700; padding:2px 8px; border-radius:4px;">' + (work.hasHls ? 'HLS Chapters' : 'Multi-Track') + '</span></div><h1 class="detail-title">' + work.title + '</h1><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Voice Actor (CV):</strong> ' + cvPills + '</div><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Circle:</strong> ' + circlePill + '</div><div class="tags-row">' + tagPills + '</div><div style="margin-top:auto; padding-top:16px; display:flex; flex-wrap:wrap; gap:10px;"><button class="btn-primary" onclick="playTrack(0, true)">▶ Play All</button><button class="btn-outline" id="btnWorkGallery" data-rj="' + work.rjCode + '" onclick="openWorkGalleryModal()" style="display:' + (galleryCount > 0 ? 'inline-flex' : 'none') + ';">🖼️ Gallery (<span id="btnWorkGalleryCount">' + galleryCount + '</span>)</button><button class="btn-outline" data-rj="' + work.rjCode + '" onclick="addWorkToPlaylistAction(this.dataset.rj)">➕ Add Work to Playlist</button><button class="btn-outline" id="btnWorkRefresh" data-rj="' + work.rjCode + '" onclick="refreshSingleWork(this.dataset.rj, this)">🔄 Refresh</button><button class="btn-outline" data-rj="' + work.rjCode + '" onclick="deleteWorkItem(this.dataset.rj)">🗑️ Remove</button><button class="btn-outline" onclick="navBack()">← Back</button></div></div></div>';
+      const refreshBtnContent = currentSingleWorkRefreshStage ? ('<span class="spin">🔄</span> <span id="refreshStageText">' + currentSingleWorkRefreshStage + '</span>') : '🔄 Refresh';
+      const refreshBtnDisabled = currentSingleWorkRefreshStage ? ' disabled' : '';
+
+      let html = '<div class="work-detail-banner"><img class="detail-cover" src="' + display.coverUrl + '" onerror="handleImgError(this)"><div class="detail-info"><div style="display:flex; gap:8px; margin-bottom:8px;"><span class="card-rj">' + work.rjCode + '</span><span style="background:#0e7490; color:#fff; font-size:0.75rem; font-weight:700; padding:2px 8px; border-radius:4px;">' + (work.hasHls ? 'HLS Chapters' : 'Multi-Track') + '</span></div><h1 class="detail-title">' + work.title + '</h1><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Voice Actor (CV):</strong> ' + cvPills + '</div><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Circle:</strong> ' + circlePill + '</div><div class="tags-row">' + tagPills + '</div><div style="margin-top:auto; padding-top:16px; display:flex; flex-wrap:wrap; gap:10px;"><button class="btn-primary" onclick="playTrack(0, true)">▶ Play All</button><button class="btn-outline btn-gallery" id="btnWorkGallery" data-rj="' + work.rjCode + '" onclick="openWorkGalleryModal()" style="display:' + (galleryCount > 0 ? 'inline-flex' : 'none') + ';">🖼️ Gallery (<span id="btnWorkGalleryCount">' + galleryCount + '</span>)</button><button class="btn-outline" data-rj="' + work.rjCode + '" onclick="addWorkToPlaylistAction(this.dataset.rj)">➕ Add Work to Playlist</button><button class="btn-outline" id="btnWorkRefresh"' + refreshBtnDisabled + ' data-rj="' + work.rjCode + '" onclick="refreshSingleWork(this.dataset.rj, this)">' + refreshBtnContent + '</button><button class="btn-outline btn-remove" data-rj="' + work.rjCode + '" onclick="deleteWorkItem(this.dataset.rj)">🗑️ Remove</button><button class="btn-outline" onclick="navBack()">← Back</button></div></div></div>';
 
       // 1. Physical Audio Tracklist Section
       html += '<h3 style="font-size:1.2rem; font-weight:700; margin-top:24px; margin-bottom:12px; display:flex; align-items:center; gap:8px;"><span>🎵 Audio Tracks (' + tracksList.length + ')</span></h3>';
@@ -7080,6 +7559,18 @@ const INDEX_HTML = `<!DOCTYPE html>
       }
       updateGalleryViewModeUI();
       
+      function getSourceBadgeStyle(source) {
+        const s = (source || '').toLowerCase();
+        if (s.includes('dlsite')) {
+          return 'color:#38bdf8; background:rgba(56,189,248,0.15); border:1px solid rgba(56,189,248,0.35);'; // Sapphire Blue / Cyan
+        } else if (s.includes('asmr.one') || s.includes('asmr')) {
+          return 'color:#34d399; background:rgba(16,185,129,0.15); border:1px solid rgba(16,185,129,0.35);'; // Emerald Mint
+        } else if (s.includes('weeab') || s.includes('japaneseasmr')) {
+          return 'color:#c084fc; background:rgba(192,132,252,0.15); border:1px solid rgba(192,132,252,0.35);'; // Violet / Purple
+        }
+        return 'color:#fb923c; background:rgba(251,146,60,0.15); border:1px solid rgba(251,146,60,0.35);'; // Amber Accent
+      }
+
       if (gallery.length === 0) {
         grid.innerHTML = '<div style="color:var(--text-muted); text-align:center; padding:30px; width:100%;">No illustrations or bonus artwork found for this work.</div>';
       } else {
@@ -7087,10 +7578,13 @@ const INDEX_HTML = `<!DOCTYPE html>
         gallery.forEach(function(g, gi) {
           const cap = (g.title || ('Artwork #' + (gi + 1))).replace(/'/g, "\\'");
           const pUrl = g.proxyUrl || g.url;
-          const label = (g.title ? g.title : ('Page #' + (gi + 1))) + ' (' + (gi + 1) + '/' + gallery.length + ')';
+          const src = g.source || (g.url && g.url.includes('dlsite') ? 'DLsite' : (g.url && g.url.includes('weeabo0') ? 'Weeab0o' : 'ASMR.one'));
+          const label = g.title ? g.title : ('Page #' + (gi + 1));
+          const srcStyle = getSourceBadgeStyle(src);
           html += '<div class="gallery-card" data-idx="' + gi + '" onclick="openLightboxModal(null, null, null, parseInt(this.dataset.idx))">';
           html += '<div class="gallery-thumb-wrap"><img class="gallery-thumb" src="' + pUrl + '" loading="lazy" onerror="handleImgError(this)"></div>';
           html += '<div class="gallery-card-title" title="' + (g.title || '') + '">' + label + '</div>';
+          html += '<div class="gallery-card-source" style="font-size:0.72rem; color:var(--text-muted); margin-top:3px; display:flex; justify-content:space-between; align-items:center; width:100%;"><span>#' + (gi + 1) + '</span><span style="font-weight:700; padding:1px 6px; border-radius:4px; font-size:0.68rem; ' + srcStyle + '">' + src + '</span></div>';
           html += '</div>';
         });
         grid.innerHTML = html;
@@ -7143,8 +7637,10 @@ const INDEX_HTML = `<!DOCTYPE html>
       img.src = item.proxyUrl || item.url || '';
       const total = currentLightboxGallery.length;
       const titleText = item.title || ('Artwork #' + (currentLightboxIndex + 1));
+      const src = item.source || (item.url && item.url.includes('dlsite') ? 'DLsite' : (item.url && item.url.includes('weeabo0') ? 'Weeab0o' : 'ASMR.one'));
+      const srcStyle = (typeof getSourceBadgeStyle === 'function') ? getSourceBadgeStyle(src) : 'color:var(--accent); background:rgba(255,255,255,0.15); border:1px solid rgba(255,255,255,0.25);';
       if (cap) {
-        cap.innerText = total > 1 ? '[' + (currentLightboxIndex + 1) + ' / ' + total + '] ' + titleText : titleText;
+        cap.innerHTML = (total > 1 ? '[' + (currentLightboxIndex + 1) + ' / ' + total + '] ' : '') + titleText + ' <span style="font-weight:700; margin-left:8px; font-size:0.78rem; padding:2px 8px; border-radius:4px; ' + srcStyle + '">' + src + '</span>';
       }
       if (prevBtn) prevBtn.style.display = total > 1 ? 'flex' : 'none';
       if (nextBtn) nextBtn.style.display = total > 1 ? 'flex' : 'none';
@@ -7283,6 +7779,7 @@ const INDEX_HTML = `<!DOCTYPE html>
         html += '<div style="display:flex; gap:10px; flex-wrap:wrap;">';
         if (list.length > 0) {
           html += '<button class="btn-primary" id="btnRetryAllWishlist" onclick="retryAllWishlist()">🔄 Re-try All Ingestion</button>';
+          html += '<button class="btn-outline" onclick="cleanWishlistDuplicates()">🧹 Clean Imported</button>';
           html += '<button class="btn-outline" onclick="clearAllWishlist()">🗑️ Clear Wishlist</button>';
         }
         html += '<button class="btn-outline" onclick="addManualWishlist()">➕ Add RJ to Wishlist</button>';
@@ -7395,6 +7892,27 @@ const INDEX_HTML = `<!DOCTYPE html>
         updateWishlistBadge();
         loadWishlist();
       } catch(e) { alert('Error: ' + e.message); }
+    }
+
+    async function cleanWishlistDuplicates() {
+      if (!isAdmin) {
+        openAdminModal('Please unlock Admin access first.');
+        return;
+      }
+      showToast('🧹 Cleaning Wishlist against Library...');
+      try {
+        const res = await apiFetch('/api/wishlist/clean', { method: 'POST' });
+        if (res.ok) {
+          const data = await res.json();
+          showToast('✨ Cleaned ' + (data.removedCount || 0) + ' already-imported works from Wishlist');
+          updateWishlistBadge(data.remaining);
+          loadWishlist();
+        } else {
+          loadWishlist();
+        }
+      } catch (e) {
+        loadWishlist();
+      }
     }
 
     async function clearAllWishlist() {
@@ -8360,95 +8878,108 @@ const INDEX_HTML = `<!DOCTYPE html>
       }
     }
 
+    let currentSingleWorkRefreshStage = '';
+
     async function refreshSingleWork(rjCode, btnEl, isAuto = false) {
       workAutoRefreshedInSession.add(normRj(rjCode));
       const btn = btnEl || document.getElementById('btnWorkRefresh') || document.querySelector('button[onclick*="refreshSingleWork"]');
-      const origHtml = btn ? btn.innerHTML : '🔄 Refresh';
-      if (btn) {
-        btn.disabled = true;
-        btn.innerHTML = '<span class="spin">🔄</span> Refreshing...';
-      }
+      const origHtml = '🔄 Refresh';
+
+      const updateStageText = (txt) => {
+        currentSingleWorkRefreshStage = txt;
+        const b = document.getElementById('btnWorkRefresh') || btn;
+        if (b) {
+          b.disabled = true;
+          b.innerHTML = '<span class="spin">🔄</span> <span id="refreshStageText">' + txt + '</span>';
+        }
+      };
 
       try {
         chapterFetchCache.delete(rjCode);
         chapterFetchCache.delete(normRj(rjCode));
 
-        const res = await apiFetch('/api/library/refresh/' + encodeURIComponent(rjCode), { method: 'POST' });
-        const data = await res.json();
+        // -------------------------------------------------------------
+        // PHASE 1: 🎵 Fast Tracks Stream Fetch
+        // -------------------------------------------------------------
+        updateStageText('[1/4] 🎵 Tracks...');
+        showToast('🎵 [1/4] Resolving tracks for ' + rjCode + '...', 3000);
+        const chapData = await fetchChaptersLazy(rjCode, true);
+        await new Promise(r => setTimeout(r, 220));
 
-        if (data.success) {
+        // -------------------------------------------------------------
+        // PHASE 2: 🏷️ Tags, CV, Circle & Metadata Refresh
+        // -------------------------------------------------------------
+        updateStageText('[2/4] 🏷️ CV & Tags...');
+        showToast('🏷️ [2/4] Updating CV, Circle & Tags for ' + rjCode + '...', 3000);
+        const metaRes = await apiFetch('/api/library/refresh/' + encodeURIComponent(rjCode), { method: 'POST' });
+        const metaData = await metaRes.json();
+
+        if (metaData && metaData.success && metaData.work) {
           const idx = allWorks.findIndex(w => normRj(w.rjCode) === normRj(rjCode));
-          if (idx !== -1 && data.work) {
-            allWorks[idx] = Object.assign({}, allWorks[idx], data.work);
+          if (idx !== -1) {
+            allWorks[idx] = Object.assign({}, allWorks[idx], metaData.work);
           }
           if (currentWork && normRj(currentWork.rjCode) === normRj(rjCode)) {
-            currentWork = Object.assign({}, currentWork, data.work);
+            const curTracks = currentWork.tracks;
+            const curGallery = currentWork.gallery;
+            const curChapters = currentWork.chapters;
+            currentWork = Object.assign({}, currentWork, metaData.work);
+            if (curTracks && curTracks.length > 1) currentWork.tracks = curTracks;
+            if (curGallery && curGallery.length > 0) currentWork.gallery = curGallery;
+            if (curChapters && curChapters.length > 0) currentWork.chapters = curChapters;
           }
         }
+        await new Promise(r => setTimeout(r, 220));
 
-        // Fetch fresh chapters directly from on-demand API
-        const chapData = await fetchChaptersLazy(rjCode, true);
+        // -------------------------------------------------------------
+        // PHASE 3: 📑 Chapters & Cue Alignment
+        // -------------------------------------------------------------
+        updateStageText('[3/4] 📑 Chapters...');
+        showToast('📑 [3/4] Aligning chapters & timestamps...', 3000);
+        const chapsCount = (chapData && Array.isArray(chapData.chapters)) ? chapData.chapters.length : ((currentWork && Array.isArray(currentWork.chapters)) ? currentWork.chapters.length : 0);
+        await new Promise(r => setTimeout(r, 220));
 
+        // -------------------------------------------------------------
+        // PHASE 4: 🖼️ Artwork & Gallery Finalization
+        // -------------------------------------------------------------
+        updateStageText('[4/4] 🖼️ Artwork...');
+        showToast('🖼️ [4/4] Finalizing illustrations & artwork...', 3000);
+        const galleryCount = (chapData && Array.isArray(chapData.gallery)) ? chapData.gallery.length : ((currentWork && Array.isArray(currentWork.gallery)) ? currentWork.gallery.length : 0);
+        const tracksCount = (currentWork && Array.isArray(currentWork.tracks)) ? currentWork.tracks.length : 0;
+        const tagsCount = (currentWork && Array.isArray(currentWork.tags)) ? currentWork.tags.length : 0;
+        await new Promise(r => setTimeout(r, 220));
+
+        // Synchronize and render UI cleanly when all phases have completed
         if (currentWork && normRj(currentWork.rjCode) === normRj(rjCode)) {
           renderWorkDetailUI(currentWork);
         }
 
-        const chapsCount = (chapData && Array.isArray(chapData.chapters)) ? chapData.chapters.length : ((currentWork && Array.isArray(currentWork.chapters)) ? currentWork.chapters.length : 0);
-        const galleryCount = (chapData && Array.isArray(chapData.gallery)) ? chapData.gallery.length : ((currentWork && Array.isArray(currentWork.gallery)) ? currentWork.gallery.length : 0);
-
-        let asmrMsg = '';
-        if (chapsCount > 0 || galleryCount > 0) {
-          asmrMsg = ' (' + chapsCount + ' chapters, ' + galleryCount + ' art)';
-        }
-
+        currentSingleWorkRefreshStage = '';
         const updatedBtn = document.getElementById('btnWorkRefresh') || document.querySelector('button[onclick*="refreshSingleWork"]');
-
-        if (data.success) {
-          if (data.changed) {
-            showToast('✅ Work refreshed! Metadata updated' + asmrMsg, 3200);
-            if (updatedBtn) {
-              updatedBtn.disabled = true;
-              updatedBtn.innerHTML = '✅ Updated!';
-              setTimeout(() => {
-                const b = document.getElementById('btnWorkRefresh');
-                if (b) { b.disabled = false; b.innerHTML = '🔄 Refresh'; }
-              }, 1800);
-            }
-          } else {
-            if (!isAuto) {
-              showToast('✅ Work refreshed! Up-to-date' + asmrMsg, 3200);
-            }
-            if (updatedBtn) {
-              updatedBtn.disabled = true;
-              updatedBtn.innerHTML = '✅ Up-to-date!';
-              setTimeout(() => {
-                const b = document.getElementById('btnWorkRefresh');
-                if (b) { b.disabled = false; b.innerHTML = '🔄 Refresh'; }
-              }, 1800);
-            }
-          }
-        } else {
-          if (!isAuto) {
-            showToast('❌ Refresh failed: ' + (data.error || 'Unknown error'), 4000);
-          }
-          if (updatedBtn) {
-            updatedBtn.disabled = true;
-            updatedBtn.innerHTML = '❌ Failed';
-            setTimeout(() => {
-              const b = document.getElementById('btnWorkRefresh');
-              if (b) { b.disabled = false; b.innerHTML = '🔄 Refresh'; }
-            }, 2500);
-          }
+        if (updatedBtn) {
+          updatedBtn.disabled = true;
+          updatedBtn.innerHTML = '✅ Up-to-date!';
+          setTimeout(() => {
+            const b = document.getElementById('btnWorkRefresh');
+            if (b) { b.disabled = false; b.innerHTML = '🔄 Refresh'; }
+          }, 2000);
         }
+
+        const parts = [];
+        if (tracksCount > 0) parts.push('🎵 ' + tracksCount + ' tracks');
+        if (tagsCount > 0) parts.push('🏷️ ' + tagsCount + ' tags');
+        if (chapsCount > 0) parts.push('📑 ' + chapsCount + ' chapters');
+        if (galleryCount > 0) parts.push('🖼️ ' + galleryCount + ' artwork');
+        const asmrMsg = parts.length > 0 ? ' (' + parts.join(', ') + ')' : '';
+
+        showToast('✨ ' + rjCode + ': Up-to-date' + asmrMsg, 4000);
       } catch (e) {
+        currentSingleWorkRefreshStage = '';
         if (!isAuto && e.message !== 'Unauthorized') {
-          showToast('❌ Error: ' + e.message, 4000);
+          showToast('❌ Refresh error: ' + (e.message || 'Unknown error'), 4000);
         }
         const b = document.getElementById('btnWorkRefresh') || btn;
-        if (b) {
-          b.disabled = false;
-          b.innerHTML = origHtml;
-        }
+        if (b) { b.disabled = false; b.innerHTML = origHtml; }
       }
     }
 
@@ -11019,6 +11550,12 @@ const INDEX_HTML = `<!DOCTYPE html>
           logs.scrollTop = logs.scrollHeight;
         }
 
+        let interItemDelayMs = 450; // Smooth 450ms pacing to stay under origin Cloudflare burst limits (20-req burst limit)
+
+        const KERNEL_SIZE = 10; // Ingestion Kernel: Process in micro-kernels of 10 works to guarantee zero origin rate limits
+        let kernelSucceededWorks = [];
+        let kernelFailedWorks = [];
+
         for (let i = 0; i < activeJob.total; i++) {
           if (activeJob.stopRequested) {
             activeJob.status = 'stopped';
@@ -11042,114 +11579,129 @@ const INDEX_HTML = `<!DOCTYPE html>
           renderBatchQueueUI();
           updateBackgroundImportWidgets(progressPct, statusMsg);
 
-          try {
-            const res = await apiFetch('/api/library/resolve', {
-              method: 'POST',
-              body: JSON.stringify({ rjCode: rj })
-            });
+          let resolvedData = null;
+          let lastFailReason = null;
+          const maxRetries = 2; // Up to 2 self-healing retries for transient 503 / gateway / rate limit errors
 
-            let data = null;
+          for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
+            if (activeJob.stopRequested) break;
             try {
-              const textData = await res.text();
-              data = JSON.parse(textData);
-            } catch (jsonErr) {
-              data = { error: 'Server returned HTTP ' + res.status + ' (' + (res.statusText || 'Gateway error') + ')' };
-            }
+              const res = await apiFetch('/api/library/resolve', {
+                method: 'POST',
+                body: JSON.stringify({ rjCode: rj, saveImmediately: false })
+              });
 
-            if (res.status === 401) {
-              if (logs) {
-                const logEntry = document.createElement('div');
-                logEntry.style.color = '#ef4444';
-                logEntry.innerText = '🔒 Unauthorized: Please enter your admin passcode.';
-                logs.appendChild(logEntry);
-                logs.scrollTop = logs.scrollHeight;
+              let data = null;
+              try {
+                const textData = await res.text();
+                data = JSON.parse(textData);
+              } catch (jsonErr) {
+                data = { error: 'Server returned HTTP ' + res.status + ' (' + (res.statusText || 'Gateway error') + ')' };
               }
-              activeJob.status = 'stopped';
-              activeJob.currentStatusText = 'Unauthorized';
+
+              if (res.status === 401) {
+                if (logs) {
+                  const logEntry = document.createElement('div');
+                  logEntry.style.color = '#ef4444';
+                  logEntry.innerText = '🔒 Unauthorized: Please enter your admin passcode.';
+                  logs.appendChild(logEntry);
+                  logs.scrollTop = logs.scrollHeight;
+                }
+                activeJob.status = 'stopped';
+                activeJob.currentStatusText = 'Unauthorized';
+                break;
+              }
+
+              const errString = ((data && data.error ? String(data.error) : '') + ' ' + (res.statusText || '')).toLowerCase();
+              const isTransientGateway = res.status === 503 || res.status === 502 || res.status === 504 || res.status === 429 ||
+                errString.includes('503') || errString.includes('502') || errString.includes('504') || errString.includes('429') ||
+                errString.includes('gateway') || errString.includes('timeout') || errString.includes('rate limit') || errString.includes('temporarily unavailable');
+
+              if (isTransientGateway && attempt <= maxRetries) {
+                interItemDelayMs = 750; // Increase inter-item delay for remainder of batch
+                const backoffMs = attempt === 1 ? 6000 : 12000; // Generous 6.0s / 12.0s cooldown to fully reset origin rate limit window
+                if (logs) {
+                  const retryLog = document.createElement('div');
+                  retryLog.style.color = '#fbbf24';
+                  retryLog.innerText = '⏳ ' + rj + ': Origin rate-limit / 503 detected. Cooling down ' + (backoffMs / 1000).toFixed(1) + 's before auto-retrying (attempt ' + (attempt + 1) + '/' + (maxRetries + 1) + ')...';
+                  logs.appendChild(retryLog);
+                  logs.scrollTop = logs.scrollHeight;
+                }
+                activeJob.currentStatusText = '⏳ Cooldown ' + (backoffMs / 1000).toFixed(1) + 's for ' + rj + ' (attempt ' + (attempt + 1) + ')...';
+                renderBatchQueueUI();
+                await new Promise(r => setTimeout(r, backoffMs));
+                continue;
+              }
+
+              resolvedData = data;
+              lastFailReason = (data && data.error) || ('HTTP ' + res.status + ' ' + (res.statusText || 'Error'));
+              break;
+            } catch (e) {
+              lastFailReason = e.message || 'Network/503 error';
+              if (attempt <= maxRetries) {
+                interItemDelayMs = 750;
+                const backoffMs = attempt === 1 ? 6000 : 12000;
+                if (logs) {
+                  const retryLog = document.createElement('div');
+                  retryLog.style.color = '#fbbf24';
+                  retryLog.innerText = '⏳ ' + rj + ': Network / Gateway cooldown (' + (e.message || 'error') + '). Cooling down ' + (backoffMs / 1000).toFixed(1) + 's (attempt ' + (attempt + 1) + '/' + (maxRetries + 1) + ')...';
+                  logs.appendChild(retryLog);
+                  logs.scrollTop = logs.scrollHeight;
+                }
+                activeJob.currentStatusText = '⏳ Cooldown ' + (backoffMs / 1000).toFixed(1) + 's for ' + rj + '...';
+                renderBatchQueueUI();
+                await new Promise(r => setTimeout(r, backoffMs));
+                continue;
+              }
               break;
             }
+          }
 
-            if (data && data.moeDiagnostic) {
-              const diag = data.moeDiagnostic;
-              if (data.work && Array.isArray(data.work.tracks) && data.work.tracks.length > 0) {
-                if (!diag.chosenTracks || diag.chosenTracks.length === 0) {
-                  diag.isWorkingAudioFound = true;
-                  diag.selectedSource = data.work.tracks[0]?.isHls ? 'JapaneseASMR (HLS Stream)' : (data.work.hasHls ? 'HLS Stream' : 'Alternative Source');
-                  diag.chosenTracks = data.work.tracks.map(t => ({
-                    title: t.title || '',
-                    rawUrl: t.rawUrl || t.streamUrl || '',
-                    streamUrl: t.streamUrl || '',
-                    isHls: !!t.isHls,
-                    category: t.category || 'main'
-                  }));
-                }
-              }
-              activeJob.moeDiagnostics = activeJob.moeDiagnostics || [];
-              activeJob.moeDiagnostics.push(diag);
-            }
+          if (activeJob.status === 'stopped') break;
 
-            if (data && data.work) {
-              activeJob.succeeded++;
-              if (logs) {
-                const logEntry = document.createElement('div');
-                logEntry.style.color = '#38bdf8';
-                logEntry.innerText = '✅ ' + rj + ': ' + (data.work.title ? data.work.title.slice(0, 32) : '') + '... (Added)';
-                logs.appendChild(logEntry);
-              }
-            } else {
-              activeJob.failed++;
-              const failReason = (data && data.error) || ('HTTP ' + res.status + ' ' + (res.statusText || 'Error'));
-              activeJob.failedItems = activeJob.failedItems || [];
-              activeJob.failedItems.push({ rjCode: rj, reason: failReason });
+          const data = resolvedData;
 
-              // Ensure failed works are always recorded in the diagnostic report!
-              activeJob.moeDiagnostics = activeJob.moeDiagnostics || [];
-              const existingDiag = activeJob.moeDiagnostics.find(d => d.rjCode === rj);
-              if (existingDiag) {
-                existingDiag.isWorkingAudioFound = false;
-                existingDiag.failureReason = failReason;
-              } else {
-                activeJob.moeDiagnostics.push({
-                  rjCode: rj,
-                  postId: 'N/A',
-                  slug: rj.toLowerCase(),
-                  title: 'Work ' + rj,
-                  sourcesBreakdown: {
-                    japaneseAsmr: { found: false },
-                    hentaiAsmrMoe: { found: false }
-                  },
-                  triedUrls: [],
-                  isWorkingAudioFound: false,
-                  selectedSource: 'NONE (Failed / Saved to Wishlist)',
-                  failureReason: failReason
-                });
-              }
-
-              if (logs) {
-                const logEntry = document.createElement('div');
-                logEntry.style.color = '#f59e0b';
-                logEntry.innerText = '⚠️ ' + rj + ': ' + failReason + ' -> Saved to Wishlist 📋';
-                logs.appendChild(logEntry);
-              }
-              // Explicit client-side backup save to wishlist if resolve failed with 503/error
-              if (!data || !data.wishlisted) {
-                apiFetch('/api/wishlist', {
-                  method: 'POST',
-                  body: JSON.stringify({ rjCode: rj, reason: failReason })
-                }).catch(() => {});
+          if (data && data.moeDiagnostic) {
+            const diag = data.moeDiagnostic;
+            if (data.work && Array.isArray(data.work.tracks) && data.work.tracks.length > 0) {
+              if (!diag.chosenTracks || diag.chosenTracks.length === 0) {
+                diag.isWorkingAudioFound = true;
+                diag.selectedSource = data.work.tracks[0]?.isHls ? 'JapaneseASMR (HLS Stream)' : (data.work.hasHls ? 'HLS Stream' : 'Alternative Source');
+                diag.chosenTracks = data.work.tracks.map(t => ({
+                  title: t.title || '',
+                  rawUrl: t.rawUrl || t.streamUrl || '',
+                  streamUrl: t.streamUrl || '',
+                  isHls: !!t.isHls,
+                  category: t.category || 'main'
+                }));
               }
             }
-          } catch (e) {
+            activeJob.moeDiagnostics = activeJob.moeDiagnostics || [];
+            activeJob.moeDiagnostics.push(diag);
+          }
+
+          if (data && data.work) {
+            activeJob.succeeded++;
+            kernelSucceededWorks.push(data.work);
+            if (logs) {
+              const logEntry = document.createElement('div');
+              logEntry.style.color = '#38bdf8';
+              logEntry.innerText = '✅ ' + rj + ': ' + (data.work.title ? data.work.title.slice(0, 32) : '') + '... (Added)';
+              logs.appendChild(logEntry);
+            }
+          } else {
             activeJob.failed++;
+            const failReason = lastFailReason || 'All tried sources failed';
             activeJob.failedItems = activeJob.failedItems || [];
-            activeJob.failedItems.push({ rjCode: rj, reason: e.message || 'Network/503 error' });
+            activeJob.failedItems.push({ rjCode: rj, reason: failReason });
+            kernelFailedWorks.push({ rjCode: rj, reason: failReason, title: 'Work ' + rj });
 
-            // Ensure network error failures are also in diagnostic log
+            // Ensure failed works are always recorded in the diagnostic report!
             activeJob.moeDiagnostics = activeJob.moeDiagnostics || [];
             const existingDiag = activeJob.moeDiagnostics.find(d => d.rjCode === rj);
             if (existingDiag) {
               existingDiag.isWorkingAudioFound = false;
-              existingDiag.failureReason = e.message || 'Network/503 error';
+              existingDiag.failureReason = failReason;
             } else {
               activeJob.moeDiagnostics.push({
                 rjCode: rj,
@@ -11163,33 +11715,73 @@ const INDEX_HTML = `<!DOCTYPE html>
                 triedUrls: [],
                 isWorkingAudioFound: false,
                 selectedSource: 'NONE (Failed / Saved to Wishlist)',
-                failureReason: e.message || 'Network/503 error'
+                failureReason: failReason
               });
             }
 
             if (logs) {
               const logEntry = document.createElement('div');
               logEntry.style.color = '#f59e0b';
-              logEntry.innerText = '⚠️ ' + rj + ': ' + e.message + ' -> Saved to Wishlist 📋';
+              logEntry.innerText = '⚠️ ' + rj + ': ' + failReason + ' -> Saved to Wishlist 📋';
               logs.appendChild(logEntry);
             }
-            apiFetch('/api/wishlist', {
-              method: 'POST',
-              body: JSON.stringify({ rjCode: rj, reason: e.message || 'Network/503 error' })
-            }).catch(() => {});
           }
+
           if (logs) logs.scrollTop = logs.scrollHeight;
           renderBatchQueueUI();
-          updateWishlistBadge();
-          if (window.location.hash === '#/wishlist') {
-            loadWishlist();
+
+          // Soft-reset breather & Atomic KV Kernel Commit after every Kernel of 10 works
+          if ((i + 1) % KERNEL_SIZE === 0 && (i + 1) < activeJob.total && !activeJob.stopRequested) {
+            // Commit all works in this kernel to KV in a single atomic transaction
+            if (kernelSucceededWorks.length > 0 || kernelFailedWorks.length > 0) {
+              await apiFetch('/api/library/kernel-commit', {
+                method: 'POST',
+                body: JSON.stringify({ works: kernelSucceededWorks, failed: kernelFailedWorks })
+              }).catch(() => {});
+              kernelSucceededWorks = [];
+              kernelFailedWorks = [];
+            }
+
+            updateWishlistBadge();
+            if (window.location.hash === '#/wishlist') {
+              loadWishlist();
+            }
+            const kernelNum = Math.floor((i + 1) / KERNEL_SIZE);
+            const totalKernels = Math.ceil(activeJob.total / KERNEL_SIZE);
+            const breatherMs = 3200; // 3.2s pause to fully reset origin rate-limit burst windows
+            if (logs) {
+              const breatherLog = document.createElement('div');
+              breatherLog.style.color = '#a78bfa';
+              breatherLog.innerText = '☕ Completed Kernel #' + kernelNum + '/' + totalKernels + ' (' + (i + 1) + '/' + activeJob.total + ' works). Committed to DB. Taking a ' + (breatherMs / 1000).toFixed(1) + 's breather...';
+              logs.appendChild(breatherLog);
+              logs.scrollTop = logs.scrollHeight;
+            }
+            activeJob.currentStatusText = '☕ Kernel #' + kernelNum + ' committed (' + (breatherMs / 1000).toFixed(1) + 's)...';
+            renderBatchQueueUI();
+            await new Promise(r => setTimeout(r, breatherMs));
+          } else {
+            await new Promise(r => setTimeout(r, interItemDelayMs));
           }
-          await new Promise(r => setTimeout(r, 120));
+        }
+
+        // Final Kernel Commit for any remaining works at end of job
+        if (kernelSucceededWorks.length > 0 || kernelFailedWorks.length > 0) {
+          await apiFetch('/api/library/kernel-commit', {
+            method: 'POST',
+            body: JSON.stringify({ works: kernelSucceededWorks, failed: kernelFailedWorks })
+          }).catch(() => {});
+          kernelSucceededWorks = [];
+          kernelFailedWorks = [];
         }
 
         if (activeJob.status !== 'stopped') {
           activeJob.status = 'completed';
           activeJob.currentStatusText = '🎉 Completed: ' + activeJob.succeeded + ' added, ' + activeJob.failed + ' wishlist';
+        }
+
+        updateWishlistBadge();
+        if (window.location.hash === '#/wishlist') {
+          loadWishlist();
         }
 
         // Auto-download failsafe if there are any failed/503 works in this job
