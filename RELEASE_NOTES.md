@@ -58,6 +58,18 @@
 - **Eliminated Fuzzy Post Fallback**: Fixed an issue where WordPress full-text search for non-existent works returned fuzzy keywords and fell back to `posts[0]`.
 - **Guaranteed Match Verification**: Audio sources now strictly require the exact RJ code in post slug, title, or body before flagging a work as available with on-demand lazy audio. Works with no audio on either mirror are now correctly rejected or sent to wishlist.
 
+### 🎧 10. Official DLsite Preview Audio Source (DLsite Chobit CDN)
+- **Direct Chobit API & CloudFront Integration**: Integrated official DLsite player endpoint (`chobit.cc/api/v1/dlsite/embed`) extracting authentic sample preview clips (`.m4a` hosted on AWS CloudFront `file.chobit.cc`) along with official clip titles and durations.
+- **Resolver & Ingestion Fallback**: Brand new works that are not yet available on community sources (e.g. `RJ01600344`, `RJ01624439`) can now be imported and enjoyed immediately via their official DLsite preview audio clips.
+- **Configurable Preview Audio Mode (`⚙️ Settings`)**:
+  - ✨ **Always Show (Recommended)**: Probes and displays official DLsite preview audio alongside full tracks for every work.
+  - 🔄 **Fallback Only (Default)**: Uses official preview audio only when community rips are missing.
+  - 🚫 **Disabled**: Ignores sample preview clips.
+- **Work Detail Preview Tracklist**: Rendered with dedicated `✨ Sample` badge, precise playtime indicator, and direct `▶ Play Sample` / `➕ Playlist` actions.
+
+### ⚡ 11. Cloudflare Workers Subrequest Deadlock Fix
+- **Prevented `workerd` Stream Deadlock**: Replaced unthrottled concurrent gallery probing with batched subrequests ($\le 4$ per chunk) and explicit `res.body.cancel()` stream releases, completely eliminating `"A stalled HTTP response was canceled to prevent deadlock"` 500 errors.
+
 ---
 
 ## 🚀 Version 1.5.0 — Milestone Release

@@ -1,0 +1,661 @@
+{
+    "id": 148762,
+    "date": "2026-06-17T10:52:02",
+    "date_gmt": "2026-06-17T14:52:02",
+    "guid": {
+        "rendered": "https://hentaiasmr.moe/?p=148762"
+    },
+    "modified": "2026-06-17T10:52:02",
+    "modified_gmt": "2026-06-17T14:52:02",
+    "slug": "rj01135324",
+    "status": "publish",
+    "type": "post",
+    "link": "https://hentaiasmr.moe/rj01135324.html",
+    "title": {
+        "rendered": "二匹のメスガキ淫魔に「振り回され」「意地悪され」奪い合い引っ張り合い搾精される"
+    },
+    "content": {
+        "rendered": "\u003Cp\u003ERJ01135324\u003C/p\u003E\n\u003Cp\u003ERJ01135324\u003C/p\u003E\n",
+        "protected": false
+    },
+    "excerpt": {
+        "rendered": "\u003Cp\u003ERJ01135324 RJ01135324\u003C/p\u003E\n",
+        "protected": false
+    },
+    "author": 1,
+    "featured_media": 148763,
+    "comment_status": "open",
+    "ping_status": "open",
+    "sticky": false,
+    "template": "",
+    "format": "standard",
+    "meta": {
+        "_acf_changed": false,
+        "ep_exclude_from_search": false,
+        "footnotes": ""
+    },
+    "categories": [
+        20345
+    ],
+    "tags": [
+        37305,
+        19390,
+        8302,
+        37145,
+        28478,
+        19356
+    ],
+    "actors": [
+        41409
+    ],
+    "studio": [],
+    "circle": [],
+    "release": [],
+    "cv": [],
+    "male_va": [],
+    "illustrations": [],
+    "class_list": [
+        "post-148762",
+        "post",
+        "type-post",
+        "status-publish",
+        "format-standard",
+        "has-post-thumbnail",
+        "hentry",
+        "category-nsfw",
+        "tag-37305",
+        "tag-19390",
+        "tag-8302",
+        "tag-37145",
+        "tag-28478",
+        "tag-19356",
+        "actors-41409"
+    ],
+    "acf": [],
+    "_links": {
+        "self": [
+            {
+                "href": "https://hentaiasmr.moe/wp-json/wp/v2/posts/148762",
+                "targetHints": {
+                    "allow": [
+                        "GET"
+                    ]
+                }
+            }
+        ],
+        "collection": [
+            {
+                "href": "https://hentaiasmr.moe/wp-json/wp/v2/posts"
+            }
+        ],
+        "about": [
+            {
+                "href": "https://hentaiasmr.moe/wp-json/wp/v2/types/post"
+            }
+        ],
+        "author": [
+            {
+                "embeddable": true,
+                "href": "https://hentaiasmr.moe/wp-json/wp/v2/users/1"
+            }
+        ],
+        "replies": [
+            {
+                "embeddable": true,
+                "href": "https://hentaiasmr.moe/wp-json/wp/v2/comments?post=148762"
+            }
+        ],
+        "version-history": [
+            {
+                "count": 0,
+                "href": "https://hentaiasmr.moe/wp-json/wp/v2/posts/148762/revisions"
+            }
+        ],
+        "wp:featuredmedia": [
+            {
+                "embeddable": true,
+                "href": "https://hentaiasmr.moe/wp-json/wp/v2/media/148763"
+            }
+        ],
+        "wp:attachment": [
+            {
+                "href": "https://hentaiasmr.moe/wp-json/wp/v2/media?parent=148762"
+            }
+        ],
+        "wp:term": [
+            {
+                "taxonomy": "category",
+                "embeddable": true,
+                "href": "https://hentaiasmr.moe/wp-json/wp/v2/categories?post=148762"
+            },
+            {
+                "taxonomy": "post_tag",
+                "embeddable": true,
+                "href": "https://hentaiasmr.moe/wp-json/wp/v2/tags?post=148762"
+            },
+            {
+                "taxonomy": "actors",
+                "embeddable": true,
+                "href": "https://hentaiasmr.moe/wp-json/wp/v2/actors?post=148762"
+            },
+            {
+                "taxonomy": "studio",
+                "embeddable": true,
+                "href": "https://hentaiasmr.moe/wp-json/wp/v2/studio?post=148762"
+            },
+            {
+                "taxonomy": "circle",
+                "embeddable": true,
+                "href": "https://hentaiasmr.moe/wp-json/wp/v2/circle?post=148762"
+            },
+            {
+                "taxonomy": "release",
+                "embeddable": true,
+                "href": "https://hentaiasmr.moe/wp-json/wp/v2/release?post=148762"
+            },
+            {
+                "taxonomy": "cv",
+                "embeddable": true,
+                "href": "https://hentaiasmr.moe/wp-json/wp/v2/cv?post=148762"
+            },
+            {
+                "taxonomy": "male_va",
+                "embeddable": true,
+                "href": "https://hentaiasmr.moe/wp-json/wp/v2/male_va?post=148762"
+            },
+            {
+                "taxonomy": "illustrations",
+                "embeddable": true,
+                "href": "https://hentaiasmr.moe/wp-json/wp/v2/illustrations?post=148762"
+            }
+        ],
+        "curies": [
+            {
+                "name": "wp",
+                "href": "https://api.w.org/{rel}",
+                "templated": true
+            }
+        ]
+    },
+    "_embedded": {
+        "author": [
+            {
+                "code": "rest_user_invalid_id",
+                "message": "Invalid user ID.",
+                "data": {
+                    "status": 404
+                }
+            }
+        ],
+        "wp:featuredmedia": [
+            {
+                "id": 148763,
+                "date": "2026-05-06T10:51:58",
+                "slug": "rj01135324_img_main",
+                "type": "attachment",
+                "link": "https://hentaiasmr.moe/rj01135324.html/rj01135324_img_main",
+                "title": {
+                    "rendered": "rj01135324_img_main"
+                },
+                "author": 0,
+                "featured_media": 0,
+                "acf": [],
+                "caption": {
+                    "rendered": ""
+                },
+                "alt_text": "",
+                "media_type": "image",
+                "mime_type": "image/jpeg",
+                "media_details": {
+                    "width": 560,
+                    "height": 420,
+                    "file": "2026/05/rj01135324_img_main.jpg",
+                    "filesize": 224302,
+                    "sizes": {
+                        "post-thumbnail": {
+                            "file": "rj01135324_img_main-320x180.jpg",
+                            "width": 320,
+                            "height": 180,
+                            "filesize": 19430,
+                            "mime_type": "image/jpeg",
+                            "source_url": "https://hentaiasmr.moe/wp-content/uploads/2026/05/rj01135324_img_main-320x180.jpg"
+                        },
+                        "wpst_thumb_large": {
+                            "file": "rj01135324_img_main-560x360.jpg",
+                            "width": 560,
+                            "height": 360,
+                            "filesize": 58359,
+                            "mime_type": "image/jpeg",
+                            "source_url": "https://hentaiasmr.moe/wp-content/uploads/2026/05/rj01135324_img_main-560x360.jpg"
+                        },
+                        "wpst_thumb_medium": {
+                            "file": "rj01135324_img_main-320x180.jpg",
+                            "width": 320,
+                            "height": 180,
+                            "filesize": 19430,
+                            "mime_type": "image/jpeg",
+                            "source_url": "https://hentaiasmr.moe/wp-content/uploads/2026/05/rj01135324_img_main-320x180.jpg"
+                        },
+                        "wpst_thumb_small": {
+                            "file": "rj01135324_img_main-150x84.jpg",
+                            "width": 150,
+                            "height": 84,
+                            "filesize": 5692,
+                            "mime_type": "image/jpeg",
+                            "source_url": "https://hentaiasmr.moe/wp-content/uploads/2026/05/rj01135324_img_main-150x84.jpg"
+                        },
+                        "full": {
+                            "file": "rj01135324_img_main.jpg",
+                            "width": 560,
+                            "height": 420,
+                            "mime_type": "image/jpeg",
+                            "source_url": "https://hentaiasmr.moe/wp-content/uploads/2026/05/rj01135324_img_main.jpg"
+                        }
+                    },
+                    "image_meta": {
+                        "aperture": "0",
+                        "credit": "",
+                        "camera": "",
+                        "caption": "",
+                        "created_timestamp": "0",
+                        "copyright": "",
+                        "focal_length": "0",
+                        "iso": "0",
+                        "shutter_speed": "0",
+                        "title": "",
+                        "orientation": "0",
+                        "keywords": []
+                    }
+                },
+                "source_url": "https://hentaiasmr.moe/wp-content/uploads/2026/05/rj01135324_img_main.jpg",
+                "_links": {
+                    "self": [
+                        {
+                            "href": "https://hentaiasmr.moe/wp-json/wp/v2/media/148763",
+                            "targetHints": {
+                                "allow": [
+                                    "GET"
+                                ]
+                            }
+                        }
+                    ],
+                    "collection": [
+                        {
+                            "href": "https://hentaiasmr.moe/wp-json/wp/v2/media"
+                        }
+                    ],
+                    "about": [
+                        {
+                            "href": "https://hentaiasmr.moe/wp-json/wp/v2/types/attachment"
+                        }
+                    ],
+                    "replies": [
+                        {
+                            "embeddable": true,
+                            "href": "https://hentaiasmr.moe/wp-json/wp/v2/comments?post=148763"
+                        }
+                    ],
+                    "wp:attached-to": [
+                        {
+                            "embeddable": true,
+                            "post_type": "post",
+                            "id": 148762,
+                            "href": "https://hentaiasmr.moe/wp-json/wp/v2/posts/148762"
+                        }
+                    ],
+                    "curies": [
+                        {
+                            "name": "wp",
+                            "href": "https://api.w.org/{rel}",
+                            "templated": true
+                        }
+                    ]
+                }
+            }
+        ],
+        "wp:term": [
+            [
+                {
+                    "id": 20345,
+                    "link": "https://hentaiasmr.moe/category/nsfw",
+                    "name": "NSFW",
+                    "slug": "nsfw",
+                    "taxonomy": "category",
+                    "acf": [],
+                    "_links": {
+                        "self": [
+                            {
+                                "href": "https://hentaiasmr.moe/wp-json/wp/v2/categories/20345",
+                                "targetHints": {
+                                    "allow": [
+                                        "GET"
+                                    ]
+                                }
+                            }
+                        ],
+                        "collection": [
+                            {
+                                "href": "https://hentaiasmr.moe/wp-json/wp/v2/categories"
+                            }
+                        ],
+                        "about": [
+                            {
+                                "href": "https://hentaiasmr.moe/wp-json/wp/v2/taxonomies/category"
+                            }
+                        ],
+                        "wp:post_type": [
+                            {
+                                "href": "https://hentaiasmr.moe/wp-json/wp/v2/posts?categories=20345"
+                            }
+                        ],
+                        "curies": [
+                            {
+                                "name": "wp",
+                                "href": "https://api.w.org/{rel}",
+                                "templated": true
+                            }
+                        ]
+                    }
+                }
+            ],
+            [
+                {
+                    "id": 37305,
+                    "link": "https://hentaiasmr.moe/tag/%e3%81%96%e3%81%81%e3%81%93%e2%99%a1",
+                    "name": "ざぁ~こ♡",
+                    "slug": "%e3%81%96%e3%81%81%e3%81%93%e2%99%a1",
+                    "taxonomy": "post_tag",
+                    "_links": {
+                        "self": [
+                            {
+                                "href": "https://hentaiasmr.moe/wp-json/wp/v2/tags/37305",
+                                "targetHints": {
+                                    "allow": [
+                                        "GET"
+                                    ]
+                                }
+                            }
+                        ],
+                        "collection": [
+                            {
+                                "href": "https://hentaiasmr.moe/wp-json/wp/v2/tags"
+                            }
+                        ],
+                        "about": [
+                            {
+                                "href": "https://hentaiasmr.moe/wp-json/wp/v2/taxonomies/post_tag"
+                            }
+                        ],
+                        "wp:post_type": [
+                            {
+                                "href": "https://hentaiasmr.moe/wp-json/wp/v2/posts?tags=37305"
+                            }
+                        ],
+                        "curies": [
+                            {
+                                "name": "wp",
+                                "href": "https://api.w.org/{rel}",
+                                "templated": true
+                            }
+                        ]
+                    }
+                },
+                {
+                    "id": 19390,
+                    "link": "https://hentaiasmr.moe/tag/%e3%82%b5%e3%82%ad%e3%83%a5%e3%83%90%e3%82%b9-%e6%b7%ab%e9%ad%94",
+                    "name": "サキュバス/淫魔",
+                    "slug": "%e3%82%b5%e3%82%ad%e3%83%a5%e3%83%90%e3%82%b9-%e6%b7%ab%e9%ad%94",
+                    "taxonomy": "post_tag",
+                    "_links": {
+                        "self": [
+                            {
+                                "href": "https://hentaiasmr.moe/wp-json/wp/v2/tags/19390",
+                                "targetHints": {
+                                    "allow": [
+                                        "GET"
+                                    ]
+                                }
+                            }
+                        ],
+                        "collection": [
+                            {
+                                "href": "https://hentaiasmr.moe/wp-json/wp/v2/tags"
+                            }
+                        ],
+                        "about": [
+                            {
+                                "href": "https://hentaiasmr.moe/wp-json/wp/v2/taxonomies/post_tag"
+                            }
+                        ],
+                        "wp:post_type": [
+                            {
+                                "href": "https://hentaiasmr.moe/wp-json/wp/v2/posts?tags=19390"
+                            }
+                        ],
+                        "curies": [
+                            {
+                                "name": "wp",
+                                "href": "https://api.w.org/{rel}",
+                                "templated": true
+                            }
+                        ]
+                    }
+                },
+                {
+                    "id": 8302,
+                    "link": "https://hentaiasmr.moe/tag/%e5%a5%b3%e6%80%a7%e5%84%aa%e4%bd%8d",
+                    "name": "女性優位",
+                    "slug": "%e5%a5%b3%e6%80%a7%e5%84%aa%e4%bd%8d",
+                    "taxonomy": "post_tag",
+                    "_links": {
+                        "self": [
+                            {
+                                "href": "https://hentaiasmr.moe/wp-json/wp/v2/tags/8302",
+                                "targetHints": {
+                                    "allow": [
+                                        "GET"
+                                    ]
+                                }
+                            }
+                        ],
+                        "collection": [
+                            {
+                                "href": "https://hentaiasmr.moe/wp-json/wp/v2/tags"
+                            }
+                        ],
+                        "about": [
+                            {
+                                "href": "https://hentaiasmr.moe/wp-json/wp/v2/taxonomies/post_tag"
+                            }
+                        ],
+                        "wp:post_type": [
+                            {
+                                "href": "https://hentaiasmr.moe/wp-json/wp/v2/posts?tags=8302"
+                            }
+                        ],
+                        "curies": [
+                            {
+                                "name": "wp",
+                                "href": "https://api.w.org/{rel}",
+                                "templated": true
+                            }
+                        ]
+                    }
+                },
+                {
+                    "id": 37145,
+                    "link": "https://hentaiasmr.moe/tag/%e9%80%86%e3%83%ac",
+                    "name": "逆レ",
+                    "slug": "%e9%80%86%e3%83%ac",
+                    "taxonomy": "post_tag",
+                    "_links": {
+                        "self": [
+                            {
+                                "href": "https://hentaiasmr.moe/wp-json/wp/v2/tags/37145",
+                                "targetHints": {
+                                    "allow": [
+                                        "GET"
+                                    ]
+                                }
+                            }
+                        ],
+                        "collection": [
+                            {
+                                "href": "https://hentaiasmr.moe/wp-json/wp/v2/tags"
+                            }
+                        ],
+                        "about": [
+                            {
+                                "href": "https://hentaiasmr.moe/wp-json/wp/v2/taxonomies/post_tag"
+                            }
+                        ],
+                        "wp:post_type": [
+                            {
+                                "href": "https://hentaiasmr.moe/wp-json/wp/v2/posts?tags=37145"
+                            }
+                        ],
+                        "curies": [
+                            {
+                                "name": "wp",
+                                "href": "https://api.w.org/{rel}",
+                                "templated": true
+                            }
+                        ]
+                    }
+                },
+                {
+                    "id": 28478,
+                    "link": "https://hentaiasmr.moe/tag/%e9%80%86%e8%bb%a2%e7%84%a1%e3%81%97",
+                    "name": "逆転無し",
+                    "slug": "%e9%80%86%e8%bb%a2%e7%84%a1%e3%81%97",
+                    "taxonomy": "post_tag",
+                    "_links": {
+                        "self": [
+                            {
+                                "href": "https://hentaiasmr.moe/wp-json/wp/v2/tags/28478",
+                                "targetHints": {
+                                    "allow": [
+                                        "GET"
+                                    ]
+                                }
+                            }
+                        ],
+                        "collection": [
+                            {
+                                "href": "https://hentaiasmr.moe/wp-json/wp/v2/tags"
+                            }
+                        ],
+                        "about": [
+                            {
+                                "href": "https://hentaiasmr.moe/wp-json/wp/v2/taxonomies/post_tag"
+                            }
+                        ],
+                        "wp:post_type": [
+                            {
+                                "href": "https://hentaiasmr.moe/wp-json/wp/v2/posts?tags=28478"
+                            }
+                        ],
+                        "curies": [
+                            {
+                                "name": "wp",
+                                "href": "https://api.w.org/{rel}",
+                                "templated": true
+                            }
+                        ]
+                    }
+                },
+                {
+                    "id": 19356,
+                    "link": "https://hentaiasmr.moe/tag/%e9%80%a3%e7%b6%9a%e7%b5%b6%e9%a0%82",
+                    "name": "連続絶頂",
+                    "slug": "%e9%80%a3%e7%b6%9a%e7%b5%b6%e9%a0%82",
+                    "taxonomy": "post_tag",
+                    "_links": {
+                        "self": [
+                            {
+                                "href": "https://hentaiasmr.moe/wp-json/wp/v2/tags/19356",
+                                "targetHints": {
+                                    "allow": [
+                                        "GET"
+                                    ]
+                                }
+                            }
+                        ],
+                        "collection": [
+                            {
+                                "href": "https://hentaiasmr.moe/wp-json/wp/v2/tags"
+                            }
+                        ],
+                        "about": [
+                            {
+                                "href": "https://hentaiasmr.moe/wp-json/wp/v2/taxonomies/post_tag"
+                            }
+                        ],
+                        "wp:post_type": [
+                            {
+                                "href": "https://hentaiasmr.moe/wp-json/wp/v2/posts?tags=19356"
+                            }
+                        ],
+                        "curies": [
+                            {
+                                "name": "wp",
+                                "href": "https://api.w.org/{rel}",
+                                "templated": true
+                            }
+                        ]
+                    }
+                }
+            ],
+            [
+                {
+                    "id": 41409,
+                    "link": "https://hentaiasmr.moe/actor/%e5%b1%b1%e7%94%b0%e3%81%98%e3%81%87%e3%81%bf%e5%ad%90-%e8%a5%bf%e7%93%9c%e3%81%99%e3%81%84%e3%81%8b",
+                    "name": "山田じぇみ子', '西瓜すいか",
+                    "slug": "%e5%b1%b1%e7%94%b0%e3%81%98%e3%81%87%e3%81%bf%e5%ad%90-%e8%a5%bf%e7%93%9c%e3%81%99%e3%81%84%e3%81%8b",
+                    "taxonomy": "actors",
+                    "acf": [],
+                    "_links": {
+                        "self": [
+                            {
+                                "href": "https://hentaiasmr.moe/wp-json/wp/v2/actors/41409",
+                                "targetHints": {
+                                    "allow": [
+                                        "GET"
+                                    ]
+                                }
+                            }
+                        ],
+                        "collection": [
+                            {
+                                "href": "https://hentaiasmr.moe/wp-json/wp/v2/actors"
+                            }
+                        ],
+                        "about": [
+                            {
+                                "href": "https://hentaiasmr.moe/wp-json/wp/v2/taxonomies/actors"
+                            }
+                        ],
+                        "wp:post_type": [
+                            {
+                                "href": "https://hentaiasmr.moe/wp-json/wp/v2/posts?actors=41409"
+                            }
+                        ],
+                        "curies": [
+                            {
+                                "name": "wp",
+                                "href": "https://api.w.org/{rel}",
+                                "templated": true
+                            }
+                        ]
+                    }
+                }
+            ],
+            [],
+            [],
+            [],
+            [],
+            [],
+            []
+        ]
+    }
+}

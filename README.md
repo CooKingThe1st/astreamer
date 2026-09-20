@@ -58,9 +58,21 @@
   * **Adaptive Audio Resolving**: Supports both multi-track playlist arrays and single merged continuous session audio streams (e.g. `RJ01668482`).
   * **Automatic Bilingual Voice Actors**: Automatically extracts Japanese CV names with native English/Romaji romanizations (e.g. `雲八はち / Hachi Kumoya`), eliminating translation lookups.
   * **Series & Release Tracking**: Automatically indexes work series franchises (e.g. `しつけあい！`) and release dates into the tag explorer.
+* **🖼️ Multi-Source Artwork & Gallery Prober**:
+  * **Primary High-Resolution Artwork**: Directly resolved from DLsite's official CDNs (`img.dlsite.jp`) and ASMR.one track tree JSON, providing original, lossless package art and promotional illustrations.
+  * **Byte-Size Deduplication (0.01% Tolerance)**: Eliminates mirror duplicates between DLsite, ASMR.one, and fallback sources.
 * **📥 Background Batch Ingestion & Dock Mode**:
   * **Non-Blocking Ingestion**: Batch imports can be minimized to a floating background dock (`🗕 Background`), letting you browse the library, play audio, or manage playlists without interruption.
   * **Tab Protection**: Integrated `beforeunload` warning prevents accidental page refresh or tab closure while an import is in flight.
+
+---
+
+## 🎨 Note on Artwork Sources & Community Hashed CDNs
+
+> [!NOTE]
+> **Architectural Decision on Gallery Artwork Sources**:
+> - **Official DLsite CDN & ASMR.one Track Trees**: aStreamer prioritizes DLsite's official master image repository (`img.dlsite.jp/modpub/images2/work/...`) and ASMR.one's track tree API. These sources provide authentic, uncompressed artwork with deterministic URL paths and reliable proxying.
+> - **Omission of Community Hashed Image Mirrors (`img.weeabo0.xyz/images/<md5>.jpg`)**: Third-party community hosts (e.g. Weeab0o / JapaneseASMR) recently transitioned to randomized/content-hashed image paths behind aggressive anti-bot WAFs. Because scraping those non-deterministic hashes requires fragile HTML DOM parsing prone to Cloudflare rate-limits, and because DLsite already serves the original higher-resolution source artwork directly, third-party hashed image scraping is intentionally omitted in favor of fast, reliable official probers.
 
 ---
 

@@ -4,7 +4,9 @@
   "description": "Minimal hotlink bypass and audio stream proxy POC",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "validate": "node advance_validate_syntax.js",
+    "deploy": "wrangler deploy"
   },
   "dependencies": {
     "axios": "^1.7.9",
