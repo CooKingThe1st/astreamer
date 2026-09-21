@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "validate": "node advance_validate_syntax.js",
+    "organize": "node organize_project.js",
     "deploy": "wrangler deploy"
   },
   "dependencies": {
