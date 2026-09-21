@@ -1,6 +1,6 @@
 # 🎧 aStreamer — Universal ASMR & Doujin Audio Streaming Platform
 
-[![Version](https://img.shields.io/badge/Version-1.5%20Stable%20Release-38bdf8?style=for-the-badge)](https://github.com/CooKingThe1st/astreamer)
+[![Version](https://img.shields.io/badge/Version-2.1.0%20Official-38bdf8?style=for-the-badge)](https://github.com/CooKingThe1st/astreamer)
 [![Deploy to Cloudflare](https://img.shields.io/badge/Deploy-Cloudflare%20Workers-f38020?style=for-the-badge&logo=cloudflare)](https://workers.cloudflare.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 
@@ -12,7 +12,21 @@
 
 ---
 
-## 🚀 Version 1.5 Official Stable Release Highlights
+## 🚀 Version 2.1.0 Official Milestone Release Highlights
+
+* **🌐 Client-Assisted Moe Audio Stream Discovery & Zero-403 WAF Fallback**:
+  * Seamlessly bypasses Cloudflare Bot Management / Datacenter IP blocking by querying public WordPress REST endpoints directly from the client browser.
+  * Ingests confirmed Moe Post IDs and synthesizes merge streams (`/mf/{postId}/merge/{rjCode}.mp3`) with exact ground-truth duration.
+* **🔬 Verbose Diagnostic Tracing & Log Filter Engine**:
+  * Real-time `🔬 Verbose Tracing` toggle and dedicated `TRACE` filter in Dev Activity Log modal.
+  * Live monitoring of network candidate probes, slug normalizations, and exact backend error responses.
+* **⚡ High-Resilience Ingestion & Dynamic Multi-Slug Search**:
+  * Automatic multi-slug candidate generation (`rj01653286`, `rj1653286`, `1653286`) with search fallback.
+  * Enhanced single-work refetch and batch metadata synchronization with zero KV write wastage.
+
+---
+
+## 🚀 Version 1.5 Highlights
 
 * **🏷️ Zen Tag & CV Command Search Modal**:
   * **Instant Bilingual Autocomplete**: Real-time suggestion dropdown with Japanese, Romaji, and English translations.

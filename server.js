@@ -3144,7 +3144,7 @@ const INDEX_HTML = `<!DOCTYPE html>
           <div style="width: 36px; height: 36px; border-radius: 10px; background: var(--accent-gradient, linear-gradient(135deg, #ff7a00, #ff9500)); display: flex; align-items: center; justify-content: center; font-size: 1.3rem; box-shadow: 0 0 14px var(--accent-glow);">🚀</div>
           <div>
             <h3 style="font-size: 1.3rem; font-weight: 800;">aStreamer Release Notes</h3>
-            <span style="font-size: 0.8rem; color: var(--accent); font-weight: 700;">Version 2.0 Official Milestone Release</span>
+            <span style="font-size: 0.8rem; color: var(--accent); font-weight: 700;">Version 2.1 Official Milestone Release</span>
           </div>
         </div>
         <button class="btn-outline" style="padding: 4px 10px;" onclick="closeChangelogModal()">✖</button>
@@ -3631,7 +3631,7 @@ const INDEX_HTML = `<!DOCTYPE html>
       <div class="logo-icon">🐧</div>
       <div>
         <div class="logo-title">aStreamer</div>
-        <span id="appVersionTag" style="font-size: 0.65rem; color: var(--accent); font-weight: 700; background: var(--accent-glow); padding: 1px 6px; border-radius: 4px; border: 1px solid var(--accent);">v2.0 Official</span>
+        <span id="appVersionTag" style="font-size: 0.65rem; color: var(--accent); font-weight: 700; background: var(--accent-glow); padding: 1px 6px; border-radius: 4px; border: 1px solid var(--accent);">v2.1 Official</span>
       </div>
     </a>
 
@@ -7776,8 +7776,8 @@ const INDEX_HTML = `<!DOCTYPE html>
       html += '<div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center;"><button class="btn-primary" onclick="openDevLogModal()">📋 Open Activity Log Viewer</button><button class="btn-outline" onclick="clearDevLogs()">🗑️ Clear Log Cache</button><button class="btn-outline" onclick="exportDevLogs()">💾 Download .log File</button></div>';
       html += '</div></div>';
 
-      html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🚀 aStreamer v2.0 Milestone Release</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Instant Batch Ingestion with Parallel Fast-Probing, On-Demand Lazy Audio Stream Extraction, Custom Accent Color Themes (Orange Default), and Streamlined Audio Controls.</p>';
-      html += '<button class="btn-outline" onclick="openChangelogModal()">📜 View Version 2.0 Release Notes & Architecture</button></div>';
+      html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🚀 aStreamer v2.1 Milestone Release</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Client-Assisted Moe Stream Discovery, Zero-403 WAF Fallback, Verbose Diagnostic Tracing, and High-Resilience Ingestion Engine.</p>';
+      html += '<button class="btn-outline" onclick="openChangelogModal()">📜 View Version 2.1 Release Notes & Architecture</button></div>';
 
       container.innerHTML = html;
     }
