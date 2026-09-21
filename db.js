@@ -970,23 +970,48 @@ function getHistory() {
   return db.history || [];
 }
 
-function addHistoryEntry(entry) {
-  if (!entry || !entry.rjCode) return getHistory();
+function addHistoryEntry(entryOrList) {
+  if (!entryOrList) return getHistory();
   const db = readDb();
-  db.history = db.history || [];
-  const item = {
-    rjCode: entry.rjCode,
-    title: entry.title || '',
-    trackTitle: entry.trackTitle || '',
-    trackIndex: entry.trackIndex || 0,
-    coverUrl: entry.coverUrl || '',
-    cv: entry.cv || '',
-    circle: entry.circle || '',
-    playedAt: entry.playedAt || new Date().toISOString()
-  };
-  db.history = db.history.filter(h => (h.rjCode || '').replace(/^RJ0+/, 'RJ') !== (entry.rjCode || '').replace(/^RJ0+/, 'RJ'));
-  db.history.unshift(item);
-  if (db.history.length > 20) db.history = db.history.slice(0, 20);
+  db.history = Array.isArray(db.history) ? db.history : [];
+
+  const incomingItems = Array.isArray(entryOrList.history) ? entryOrList.history : (Array.isArray(entryOrList) ? entryOrList : (entryOrList.rjCode ? [entryOrList] : []));
+  if (incomingItems.length === 0) return db.history;
+
+  const map = new Map();
+  const all = [...db.history, ...incomingItems];
+  for (const item of all) {
+    if (!item || !item.rjCode) continue;
+    const key = normRj(item.rjCode);
+    const existing = map.get(key);
+    if (!existing) {
+      map.set(key, {
+        rjCode: item.rjCode,
+        title: item.title || '',
+        trackTitle: item.trackTitle || '',
+        trackIndex: item.trackIndex || 0,
+        coverUrl: item.coverUrl || '',
+        cv: item.cv || '',
+        circle: item.circle || '',
+        isNsfw: item.isNsfw,
+        tags: item.tags || [],
+        playedAt: item.playedAt || new Date().toISOString()
+      });
+    } else {
+      const t1 = new Date(existing.playedAt || 0).getTime();
+      const t2 = new Date(item.playedAt || 0).getTime();
+      if (t2 >= t1) {
+        map.set(key, {
+          ...existing,
+          ...item,
+          playedAt: item.playedAt || existing.playedAt || new Date().toISOString()
+        });
+      }
+    }
+  }
+  const merged = Array.from(map.values());
+  merged.sort((a, b) => new Date(b.playedAt || 0) - new Date(a.playedAt || 0));
+  db.history = merged.slice(0, 20);
   writeDb(db);
   return db.history;
 }

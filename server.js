@@ -22,7 +22,7 @@ const http = require('http');
 const https = require('https');
 
 const db = require('./db');
-const { resolveAndSaveWork, batchImport, fetchChaptersForRj, fetchChaptersAndGallery, resolveLazyWorkAudio, isWorkMetadataChanged } = require('./scraper');
+const { resolveAndSaveWork, resolveRjMetadataOnly, batchImport, fetchChaptersForRj, fetchChaptersAndGallery, resolveLazyWorkAudio, isWorkMetadataChanged } = require('./scraper');
 
 const httpAgent = new http.Agent({ family: 4 });
 const httpsAgent = new https.Agent({ family: 4 });
@@ -85,15 +85,27 @@ const FALLBACK_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="400" height
   <text x="200" y="270" font-family="system-ui, -apple-system, sans-serif" font-size="15" font-weight="700" fill="#a6adc8" text-anchor="middle">ASMR Cover</text>
 </svg>`;
 
+function getCanonicalDlsiteRj(rjCode) {
+  const clean = (rjCode || '').toUpperCase().trim();
+  const match = clean.match(/^(?:RJ|VJ|BJ)?(\d+)$/i);
+  if (!match) return clean;
+  const pref = (clean.match(/^(RJ|VJ|BJ)/i) || [])[1] || 'RJ';
+  const num = parseInt(match[1], 10);
+  if (isNaN(num) || num <= 0) return clean;
+  const targetLen = num >= 1000000 ? 8 : 6;
+  return pref.toUpperCase() + String(num).padStart(targetLen, '0');
+}
+
 function getDlsiteCoverBucket(rjCode) {
   const clean = (rjCode || '').toUpperCase().trim();
   const match = clean.match(/^(?:RJ|VJ|BJ)?(\d+)$/i);
   if (!match) return clean;
   const pref = (clean.match(/^(RJ|VJ|BJ)/i) || [])[1] || 'RJ';
-  const digits = match[1];
-  const num = parseInt(digits, 10);
+  const num = parseInt(match[1], 10);
+  if (isNaN(num) || num <= 0) return clean;
   const bucketNum = Math.ceil(num / 1000) * 1000;
-  return pref.toUpperCase() + String(bucketNum).padStart(digits.length, '0');
+  const targetLen = num >= 1000000 ? 8 : 6;
+  return pref.toUpperCase() + String(bucketNum).padStart(targetLen, '0');
 }
 
 function getCoverCandidates(targetUrl, rjCode) {
@@ -101,22 +113,36 @@ function getCoverCandidates(targetUrl, rjCode) {
   if (targetUrl) {
     let u = targetUrl.trim();
     if (u.startsWith('//')) u = 'https:' + u;
-    candidates.push(u);
-
-    if (u.includes('api.asmr.one') || u.includes('api.asmr-200.com') || u.includes('api.asmr-300.com') || u.includes('api.asmr-100.com')) {
-      const asmrHosts = ['https://api.asmr-200.com', 'https://api.asmr-300.com', 'https://api.asmr.one', 'https://api.asmr-100.com'];
-      for (const h of asmrHosts) {
-        const alt = u.replace(/https?:\/\/[^\/]+/, h);
-        if (!candidates.includes(alt)) candidates.push(alt);
+    while (u.startsWith('/image-proxy') || (u.startsWith('http') && u.includes('/image-proxy?url='))) {
+      const match = u.match(/[?&]url=([^&]+)/);
+      if (match) {
+        try {
+          const dec = decodeURIComponent(match[1]);
+          if (dec === u) break;
+          u = dec;
+        } catch (e) {
+          break;
+        }
+      } else {
+        break;
       }
     }
-
-    if (u.includes('/media/download/')) {
-      const alt = u.replace('/media/download/', '/media/stream/');
-      if (!candidates.includes(alt)) candidates.push(alt);
-    } else if (u.includes('/media/stream/')) {
-      const alt = u.replace('/media/stream/', '/media/download/');
-      if (!candidates.includes(alt)) candidates.push(alt);
+    if (u.startsWith('http://') || u.startsWith('https://')) {
+      candidates.push(u);
+      if (u.includes('api.asmr.one') || u.includes('api.asmr-200.com') || u.includes('api.asmr-300.com') || u.includes('api.asmr-100.com')) {
+        const asmrHosts = ['https://api.asmr-200.com', 'https://api.asmr-300.com', 'https://api.asmr.one', 'https://api.asmr-100.com'];
+        for (const h of asmrHosts) {
+          const alt = u.replace(/https?:\/\/[^\/]+/, h);
+          if (!candidates.includes(alt)) candidates.push(alt);
+        }
+      }
+      if (u.includes('/media/download/')) {
+        const alt = u.replace('/media/download/', '/media/stream/');
+        if (!candidates.includes(alt)) candidates.push(alt);
+      } else if (u.includes('/media/stream/')) {
+        const alt = u.replace('/media/stream/', '/media/download/');
+        if (!candidates.includes(alt)) candidates.push(alt);
+      }
     }
   }
 
@@ -127,21 +153,19 @@ function getCoverCandidates(targetUrl, rjCode) {
   }
 
   if (cleanRj) {
-    const m = cleanRj.match(/^(?:(RJ|VJ|BJ))?(\d+)$/i);
-    const pref = (m && m[1]) ? m[1].toUpperCase() : 'RJ';
-    const digits = m ? m[2] : cleanRj.replace(/\D/g, '');
-    const standardRj = pref + digits;
-    const cleanNum = digits.replace(/^0+/, '');
-    const bucket = getDlsiteCoverBucket(standardRj);
+    const canonicalRj = getCanonicalDlsiteRj(cleanRj);
+    const bucket = getDlsiteCoverBucket(canonicalRj);
+    const cleanNum = cleanRj.replace(/\D/g, '').replace(/^0+/, '');
+    const digits = cleanRj.replace(/\D/g, '');
 
     const list = [
-      `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${standardRj}_img_main.jpg`,
-      `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${standardRj}_img_main_240x240.jpg`,
-      `https://img.dlsite.jp/modpub/images2/work/pro/${bucket}/${standardRj}_img_main.jpg`,
-      `https://img.dlsite.jp/modpub/images2/work/books/${bucket}/${standardRj}_img_main.jpg`,
-      `https://img.dlsite.jp/modpub/images2/work/girls/${bucket}/${standardRj}_img_main.jpg`,
-      `https://img.dlsite.jp/modpub/images2/work/bl/${bucket}/${standardRj}_img_main.jpg`,
-      `https://img.dlsite.jp/modpub/images2/work/ai/${bucket}/${standardRj}_img_main.jpg`,
+      `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${canonicalRj}_img_main.jpg`,
+      `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${canonicalRj}_img_main_240x240.jpg`,
+      `https://img.dlsite.jp/modpub/images2/work/pro/${bucket}/${canonicalRj}_img_main.jpg`,
+      `https://img.dlsite.jp/modpub/images2/work/books/${bucket}/${canonicalRj}_img_main.jpg`,
+      `https://img.dlsite.jp/modpub/images2/work/girls/${bucket}/${canonicalRj}_img_main.jpg`,
+      `https://img.dlsite.jp/modpub/images2/work/bl/${bucket}/${canonicalRj}_img_main.jpg`,
+      `https://img.dlsite.jp/modpub/images2/work/ai/${bucket}/${canonicalRj}_img_main.jpg`,
       `https://api.asmr-200.com/api/cover/${cleanNum}.jpg?type=main`,
       `https://api.asmr-200.com/api/cover/${cleanNum}.jpg`,
       `https://api.asmr-300.com/api/cover/${cleanNum}.jpg?type=main`,
@@ -150,11 +174,11 @@ function getCoverCandidates(targetUrl, rjCode) {
       `https://api.asmr.one/api/cover/${cleanNum}.jpg`,
       `https://api.asmr-200.com/api/cover/${digits}.jpg?type=main`,
       `https://api.asmr-200.com/api/cover/${digits}.jpg`,
-      `https://pic.weeabo0.xyz/${standardRj}_img_main.jpg`,
-      `https://pic.weeabo0.xyz/${standardRj}_img_main.webp`,
-      `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${standardRj}_img_sam.jpg`,
-      `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${standardRj}_img_smp1.jpg`,
-      `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${standardRj}_smp1.jpg`
+      `https://pic.weeabo0.xyz/${canonicalRj}_img_main.jpg`,
+      `https://pic.weeabo0.xyz/${canonicalRj}_img_main.webp`,
+      `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${canonicalRj}_img_sam.jpg`,
+      `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${canonicalRj}_img_smp1.jpg`,
+      `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${canonicalRj}_smp1.jpg`
     ];
 
     for (const item of list) {
@@ -163,6 +187,115 @@ function getCoverCandidates(targetUrl, rjCode) {
   }
 
   return candidates;
+}
+
+function safeEncodeUri(rawUrl) {
+  if (!rawUrl) return '';
+  try {
+    return encodeURI(decodeURI(rawUrl));
+  } catch (e) {
+    return encodeURI(rawUrl);
+  }
+}
+
+function getStreamCandidates(targetUrl, rjCode = '') {
+  const candidates = [];
+  if (!targetUrl) return candidates;
+  let u = targetUrl.trim();
+  if (u.startsWith('//')) u = 'https:' + u;
+
+  while (u.startsWith('/stream') || (u.startsWith('http') && u.includes('/stream?url='))) {
+    const match = u.match(/[?&]url=([^&]+)/);
+    if (match) {
+      try {
+        const dec = decodeURIComponent(match[1]);
+        if (dec === u) break;
+        u = dec;
+      } catch (e) {
+        break;
+      }
+    } else {
+      break;
+    }
+  }
+
+  candidates.push(u);
+
+  // Extract RJ code if present in URL or parameter
+  let rj = (rjCode || '').toUpperCase().trim();
+  if (!rj) {
+    const rjMatch = u.match(/(?:RJ|VJ|BJ)\d+/i);
+    if (rjMatch) rj = rjMatch[0].toUpperCase();
+  }
+  const cleanNum = rj.replace(/^(?:RJ|VJ|BJ)/i, '');
+  const strippedNum = cleanNum.replace(/^0+/, '');
+
+  if (u.includes('kiko-play-niptan.one') || u.includes('asmr.one') || u.includes('asmr-200.com') || u.includes('asmr-300.com') || u.includes('asmr-100.com')) {
+    if (u.includes('/media/stream/')) {
+      candidates.push(u.replace('/media/stream/', '/media/download/'));
+    } else if (u.includes('/media/download/')) {
+      candidates.push(u.replace('/media/download/', '/media/stream/'));
+    }
+
+    if (u.includes('raw.kiko-play-niptan.one')) {
+      candidates.push(u.replace('raw.kiko-play-niptan.one', 'fast.kiko-play-niptan.one'));
+    } else if (u.includes('fast.kiko-play-niptan.one')) {
+      candidates.push(u.replace('fast.kiko-play-niptan.one', 'raw.kiko-play-niptan.one'));
+    }
+
+    const apiGateways = ['https://api.asmr-200.com', 'https://api.asmr.one', 'https://api.asmr-300.com', 'https://api.asmr-100.com'];
+    for (const gw of apiGateways) {
+      const altGw = u.replace(/https?:\/\/[^\/]+/, gw);
+      if (!candidates.includes(altGw)) candidates.push(altGw);
+      if (altGw.includes('/media/stream/')) {
+        const altDl = altGw.replace('/media/stream/', '/media/download/');
+        if (!candidates.includes(altDl)) candidates.push(altDl);
+      }
+    }
+  }
+
+  if (u.includes('hentaiasmr.moe')) {
+    const cdnHosts = ['cdn.hentaiasmr.moe', 'cdn16.hentaiasmr.moe', 'cdn-otome.hentaiasmr.moe'];
+    for (const h of cdnHosts) {
+      const alt = u.replace(/cdn(?:16|-otome)?\.hentaiasmr\.moe/, h);
+      if (!candidates.includes(alt)) candidates.push(alt);
+    }
+  }
+
+  if (u.includes('weeab0o.xyz') || u.includes('japaneseasmr') || u.includes('jasmr.net')) {
+    if (u.endsWith('.m3u8')) {
+      candidates.push(u.replace(/\.m3u8$/i, '.mp3'));
+    } else if (u.endsWith('.mp3')) {
+      candidates.push(u.replace(/\.mp3$/i, '.m3u8'));
+    }
+    if (rj) {
+      const altWeeab = [
+        `https://v.weeab0o.xyz/${rj}.mp3`,
+        `https://v.weeab0o.xyz/RJ${strippedNum}.mp3`,
+        `https://v.weeab0o.xyz/${rj}.m3u8`,
+        `https://v.weeab0o.xyz/RJ${strippedNum}.m3u8`,
+        `https://play.jasmr.net/${rj}/index.m3u8`,
+        `https://play.jasmr.net/RJ${strippedNum}/index.m3u8`
+      ];
+      for (const w of altWeeab) {
+        if (!candidates.includes(w)) candidates.push(w);
+      }
+    }
+  }
+
+  if (rj) {
+    const chobit1 = `https://chobit.cc/api/v1/download?workno=${rj}`;
+    const chobit2 = `https://chobit.cc/api/v1/download?workno=RJ${strippedNum}`;
+    if (!candidates.includes(chobit1)) candidates.push(chobit1);
+    if (!candidates.includes(chobit2)) candidates.push(chobit2);
+  }
+
+  const unique = [];
+  for (const c of candidates) {
+    const encoded = safeEncodeUri(c);
+    if (encoded && !unique.includes(encoded)) unique.push(encoded);
+  }
+  return unique;
 }
 
 // Auth Routes
@@ -447,7 +580,26 @@ app.post('/api/library/refresh-all', checkAuth, async (req, res) => {
       const existing = w;
       const fresh = await resolveAndSaveWork(w.rjCode, false);
       if (isWorkMetadataChanged(existing, fresh)) {
-        db.saveWork(fresh);
+        const upWork = {
+          ...fresh,
+          chapters: (Array.isArray(existing.chapters) && existing.chapters.length > 0) ? existing.chapters : (fresh.chapters || []),
+          gallery: (Array.isArray(existing.gallery) && existing.gallery.length > 0) ? existing.gallery : (fresh.gallery || []),
+          sampleTracks: (Array.isArray(existing.sampleTracks) && existing.sampleTracks.length > 0) ? existing.sampleTracks : (fresh.sampleTracks || []),
+          _v: existing._v || getCodebaseVersion(),
+          _sampleChecked: existing._sampleChecked || false,
+          _fetchedAt: existing._fetchedAt || Date.now(),
+          favorite: existing.favorite || false,
+          addedAt: existing.addedAt || fresh.addedAt
+        };
+        if (existing.tracks && existing.tracks.length > 1 && (!fresh.tracks || fresh.tracks.length <= 1)) {
+          upWork.tracks = existing.tracks;
+          upWork.hasHls = Boolean(existing.hasHls);
+          upWork.totalTracks = existing.totalTracks || existing.tracks.length;
+        }
+        if (existing.coverUrl && (!upWork.coverUrl || !upWork.coverUrl.includes('img.dlsite.jp') || upWork.coverUrl.includes('placeholder') || upWork.coverUrl.includes('no-image'))) {
+          upWork.coverUrl = existing.coverUrl;
+        }
+        db.saveWork(upWork);
         results.updated++;
         hasAnyChanges = true;
       } else {
@@ -462,32 +614,113 @@ app.post('/api/library/refresh-all', checkAuth, async (req, res) => {
   res.json(results);
 });
 
-// Refresh Single Work
+// Refresh Single Work (Fast Metadata Refresh or Full Audio Reprobe)
 app.post('/api/library/refresh/:rjCode', checkAuth, async (req, res) => {
   const { rjCode } = req.params;
+  const reprobeAudio = req.query.reprobeAudio === 'true' || req.query.force === 'true';
+  const clientMoe = req.body && req.body.clientMoe ? req.body.clientMoe : null;
   try {
     const cleanRj = (rjCode || '').toUpperCase();
     const existing = db.getWorkByRj(cleanRj);
-    if (!existing) return res.status(404).json({ error: 'Work not found' });
-    const fresh = await resolveAndSaveWork(cleanRj, false, true);
-    
-    // Preserve existing authentic cover if fresh didn't find one or returned fallback
-    if (existing && existing.coverUrl && (!fresh.coverUrl || !fresh.coverUrl.includes('img.dlsite.jp') || fresh.coverUrl.includes('placeholder') || fresh.coverUrl.includes('no-image'))) {
-      fresh.coverUrl = existing.coverUrl;
+    if (!existing) {
+      try {
+        let fresh = null;
+        try {
+          fresh = await resolveAndSaveWork(cleanRj, false, true);
+        } catch (rErr) {
+          if (clientMoe && clientMoe.url) {
+            fresh = await resolveRjMetadataOnly(cleanRj).catch(() => ({ rjCode: cleanRj, title: `Work ${cleanRj}` }));
+          } else {
+            throw rErr;
+          }
+        }
+        if (clientMoe && clientMoe.url && (!fresh.tracks || fresh.tracks.length === 0)) {
+          fresh.tracks = [{
+            id: 1,
+            title: (fresh.title || clientMoe.title || cleanRj) + ' (Full)',
+            duration: fresh.totalDuration || clientMoe.duration || 0,
+            formattedTime: (fresh.totalDuration || clientMoe.duration) ? formatServerTime(fresh.totalDuration || clientMoe.duration) : '00:00:00',
+            rawUrl: clientMoe.url,
+            streamUrl: `/stream?url=${encodeURIComponent(clientMoe.url)}&referer=${encodeURIComponent(clientMoe.link || 'https://hentaiasmr.moe/')}&rj=${encodeURIComponent(cleanRj)}`,
+            category: 'main',
+            size: 0,
+            isHls: false,
+            poster: fresh.coverUrl || ''
+          }];
+          fresh.totalTracks = 1;
+          fresh.selectedSource = 'HentaiASMR Moe (Client-Assisted Stream)';
+        }
+        if (fresh) {
+          db.removeFromWishlist(cleanRj);
+          const saved = db.saveWork(fresh);
+          return res.json({ success: true, work: saved, changed: true, savedToKv: true });
+        }
+      } catch (re) {
+        return res.status(404).json({ error: 'Work not found: ' + re.message });
+      }
+      return res.status(404).json({ error: 'Work not found in library' });
     }
     
-    const changed = isWorkMetadataChanged(existing, fresh);
-    let work = existing;
-    if (changed) {
-      work = db.saveWork(fresh);
+    let fresh = null;
+    if (reprobeAudio) {
+      try {
+        fresh = await resolveAndSaveWork(cleanRj, false, true);
+      } catch (rErr) {
+        if (clientMoe && clientMoe.url) {
+          fresh = await resolveRjMetadataOnly(cleanRj, existing).catch(() => ({ rjCode: cleanRj, title: existing?.title || `Work ${cleanRj}` }));
+        } else {
+          throw rErr;
+        }
+      }
+    } else {
+      fresh = await resolveRjMetadataOnly(cleanRj, existing);
     }
-    res.json({ success: true, work, changed, savedToKv: changed });
+
+    if (clientMoe && clientMoe.url && (!fresh.tracks || fresh.tracks.length === 0)) {
+      fresh.tracks = [{
+        id: 1,
+        title: (fresh.title || clientMoe.title || cleanRj) + ' (Full)',
+        duration: fresh.totalDuration || clientMoe.duration || 0,
+        formattedTime: (fresh.totalDuration || clientMoe.duration) ? formatServerTime(fresh.totalDuration || clientMoe.duration) : '00:00:00',
+        rawUrl: clientMoe.url,
+        streamUrl: `/stream?url=${encodeURIComponent(clientMoe.url)}&referer=${encodeURIComponent(clientMoe.link || 'https://hentaiasmr.moe/')}&rj=${encodeURIComponent(cleanRj)}`,
+        category: 'main',
+        size: 0,
+        isHls: false,
+        poster: fresh.coverUrl || existing?.coverUrl || ''
+      }];
+      fresh.totalTracks = 1;
+      fresh.selectedSource = 'HentaiASMR Moe (Client-Assisted Stream)';
+    }
+    
+    const merged = {
+      ...existing,
+      ...fresh,
+      tracks: reprobeAudio ? (fresh.tracks || []) : ((existing.tracks && existing.tracks.length > 0) ? existing.tracks : (fresh.tracks || [])),
+      hasHls: reprobeAudio ? Boolean(fresh.hasHls) : Boolean(existing.hasHls),
+      totalTracks: reprobeAudio ? (fresh.tracks ? fresh.tracks.length : 0) : ((existing.tracks && existing.tracks.length > 0) ? existing.tracks.length : (existing.totalTracks || 0)),
+      chapters: (Array.isArray(existing.chapters) && existing.chapters.length > 0) ? existing.chapters : (fresh.chapters || []),
+      gallery: (Array.isArray(existing.gallery) && existing.gallery.length > 0) ? existing.gallery : (fresh.gallery || []),
+      sampleTracks: (Array.isArray(existing.sampleTracks) && existing.sampleTracks.length > 0) ? existing.sampleTracks : (fresh.sampleTracks || []),
+      _v: getCodebaseVersion(),
+      _sampleChecked: true,
+      _fetchedAt: Date.now(),
+      favorite: existing.favorite || false,
+      addedAt: existing.addedAt || fresh.addedAt
+    };
+
+    if (existing.coverUrl && (!merged.coverUrl || !merged.coverUrl.includes('img.dlsite.jp') || merged.coverUrl.includes('placeholder') || merged.coverUrl.includes('no-image'))) {
+      merged.coverUrl = existing.coverUrl;
+    }
+    
+    const work = db.saveWork(merged);
+    res.json({ success: true, work, changed: true, savedToKv: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-const CODEBASE_BUILD_HASH = "v2026.09.2";
+const CODEBASE_BUILD_HASH = "v2026.09.20.v16";
 
 function getCodebaseVersion() {
   return process.env.CODEBASE_VERSION || process.env.GIT_COMMIT || CODEBASE_BUILD_HASH;
@@ -502,8 +735,10 @@ app.get('/api/library/chapters/:rjCode', async (req, res) => {
   const work = db.getWorkByRj(cleanRj);
   const currentCodebaseVer = getCodebaseVersion();
 
-  // Instant return if already cached with rich gallery / chapters and matching codebase version
-  if (!forceRefresh && work && work._v === currentCodebaseVer && Array.isArray(work.gallery) && work.gallery.length > 0 && (work.chapters || work.tracks)) {
+  const hasValidGallery = (Array.isArray(work?.gallery) && work.gallery.length > 0) || (work?.gallery && work.gallery._tpl && (work.gallery.count > 0 || work.gallery.hasMain));
+  const hasSampleCheck = (work && Array.isArray(work.sampleTracks) && work.sampleTracks.length > 0) || (work && work._sampleChecked === true);
+  // Instant return if already cached with rich gallery / chapters, sample tracks check, and matching codebase version
+  if (!forceRefresh && work && work._v === currentCodebaseVer && hasValidGallery && (work.chapters || work.tracks) && hasSampleCheck) {
     return res.json({
       success: true,
       chapters: work.chapters || [],
@@ -559,7 +794,12 @@ app.get('/api/library/chapters/:rjCode', async (req, res) => {
       work._v = currentCodebaseVer;
       work._fetchedAt = Date.now();
       if (Array.isArray(result.chapters) && result.chapters.length > 0) work.chapters = result.chapters;
-      if (Array.isArray(result.sampleTracks) && result.sampleTracks.length > 0) work.sampleTracks = result.sampleTracks;
+      if (Array.isArray(result.sampleTracks) && result.sampleTracks.length > 0) {
+        work.sampleTracks = result.sampleTracks;
+      } else {
+        work.sampleTracks = [];
+      }
+      work._sampleChecked = true;
       if (Array.isArray(result.gallery) && result.gallery.length > 0) work.gallery = result.gallery;
       workChanged = true;
     }
@@ -916,124 +1156,163 @@ app.get('/image-proxy', async (req, res) => {
 });
 
 app.get('/stream', async (req, res) => {
-  let targetUrl = req.query.url;
-  if (!targetUrl) return res.status(400).send('Missing url');
-  if (targetUrl.startsWith('//')) targetUrl = 'https:' + targetUrl;
+  let rawTarget = req.query.url;
+  if (!rawTarget) return res.status(400).send('Missing url');
+  if (rawTarget.startsWith('//')) rawTarget = 'https:' + rawTarget;
 
-  try {
-    const isM3u8 = targetUrl.toLowerCase().includes('.m3u8');
-    const lowerTarget = targetUrl.toLowerCase();
-    const queryReferer = req.query.referer;
+  const rjParam = req.query.rj || '';
+  const candidates = getStreamCandidates(rawTarget, rjParam);
+  const queryReferer = req.query.referer;
+  const rangeHeader = req.headers.range;
 
-    let referer = queryReferer || '';
-    if (!referer) {
+  let lastError = null;
+
+  for (const candUrl of candidates) {
+    try {
+      const isM3u8 = candUrl.toLowerCase().includes('.m3u8');
+      const lowerTarget = candUrl.toLowerCase();
+
+      // Determine RJ code from param or URL for smart referer construction
+      const rjMatch = candUrl.match(/(?:RJ|VJ|BJ)\d+/i) || (rjParam ? [rjParam] : null);
+      const currentRj = rjMatch ? rjMatch[0].toLowerCase() : '';
+
+      // Build list of referers to try for this candidate
+      const referersToTry = [];
+      if (queryReferer) referersToTry.push(queryReferer);
+
       if (lowerTarget.includes('hentaiasmr.moe') || lowerTarget.includes('asmr-tracks') || lowerTarget.includes('asmr.moe')) {
-        referer = 'https://hentaiasmr.moe/';
+        const strippedRj = currentRj.replace(/^(?:rj|vj|bj)0+/i, 'rj');
+        if (currentRj) referersToTry.push(`https://hentaiasmr.moe/${currentRj}.html`);
+        if (strippedRj && strippedRj !== currentRj) referersToTry.push(`https://hentaiasmr.moe/${strippedRj}.html`);
+        referersToTry.push('https://hentaiasmr.moe/');
       } else if (lowerTarget.includes('chobit.cc') || lowerTarget.includes('file.chobit.cc')) {
-        referer = 'https://chobit.cc/';
+        referersToTry.push('https://chobit.cc/');
       } else if (lowerTarget.includes('asmr.one') || lowerTarget.includes('kikoeru') || lowerTarget.includes('kiko-play') || lowerTarget.includes('niptan.one') || lowerTarget.includes('asmr-200.com') || lowerTarget.includes('asmr-100.com') || lowerTarget.includes('asmr-300.com')) {
-        referer = 'https://www.asmr.one/';
+        referersToTry.push('https://www.asmr.one/');
       } else if (lowerTarget.includes('dlsite.com') || lowerTarget.includes('dlsite.jp')) {
-        referer = 'https://www.dlsite.com/';
-      } else if (lowerTarget.includes('weeab0o.xyz') || lowerTarget.includes('japaneseasmr') || lowerTarget.includes('weeab')) {
-        referer = 'https://japaneseasmr.com/';
+        referersToTry.push('https://www.dlsite.com/');
+      } else if (lowerTarget.includes('weeab0o.xyz') || lowerTarget.includes('japaneseasmr') || lowerTarget.includes('weeab') || lowerTarget.includes('jasmr.net')) {
+        referersToTry.push('https://japaneseasmr.com/');
       } else {
-        referer = 'https://www.asmr.one/';
+        referersToTry.push('https://www.asmr.one/');
       }
-    }
 
-    const rangeHeader = req.headers.range;
+      let origin = '';
+      if (lowerTarget.includes('hentaiasmr.moe')) origin = 'https://hentaiasmr.moe';
+      else if (lowerTarget.includes('chobit.cc')) origin = 'https://chobit.cc';
+      else if (lowerTarget.includes('asmr.one') || lowerTarget.includes('kiko-play') || lowerTarget.includes('niptan.one')) origin = 'https://www.asmr.one';
+      else if (lowerTarget.includes('weeab0o.xyz') || lowerTarget.includes('japaneseasmr')) origin = 'https://japaneseasmr.com';
 
-    const axiosHeaders = {
-      'Referer': referer,
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    };
-
-    if (rangeHeader && !isM3u8) {
-      axiosHeaders['Range'] = rangeHeader;
-    }
-
-    if (isM3u8) {
-      const response = await axios({
-        method: 'get',
-        url: targetUrl,
-        httpAgent,
-        httpsAgent,
-        responseType: 'text',
-        headers: axiosHeaders,
-        timeout: 10000
-      });
-
-      const originalM3u8 = response.data;
-      const baseUrl = new URL('.', targetUrl).href;
-
-      const rewrittenLines = originalM3u8.split(/\r?\n/).map(line => {
-        const trimmed = line.trim();
-        if (!trimmed) return line;
-
-        if (trimmed.startsWith('#EXT-X-KEY:')) {
-          return trimmed.replace(/URI="([^"]+)"/, (match, keyUrl) => {
-            const absoluteKeyUrl = new URL(keyUrl, baseUrl).href;
-            return `URI="/stream?url=${encodeURIComponent(absoluteKeyUrl)}"`;
-          });
+      let response = null;
+      for (const ref of referersToTry) {
+        const axiosHeaders = {
+          'Referer': ref,
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Accept': '*/*'
+        };
+        if (origin) axiosHeaders['Origin'] = origin;
+        if (rangeHeader && !isM3u8) {
+          axiosHeaders['Range'] = rangeHeader;
         }
 
-        if (trimmed.startsWith('#')) return line;
+        try {
+          if (isM3u8) {
+            response = await axios({
+              method: 'get',
+              url: candUrl,
+              httpAgent,
+              httpsAgent,
+              responseType: 'text',
+              headers: axiosHeaders,
+              timeout: 10000,
+              validateStatus: s => (s >= 200 && s < 400) || s === 206
+            });
+          } else {
+            response = await axios({
+              method: 'get',
+              url: candUrl,
+              httpAgent,
+              httpsAgent,
+              responseType: 'stream',
+              headers: axiosHeaders,
+              validateStatus: (status) => status >= 200 && status < 400,
+              timeout: 15000
+            });
+          }
+          if (response && (response.status >= 200 && response.status < 400)) {
+            break;
+          }
+        } catch (ae) {}
+      }
 
-        const absoluteSegmentUrl = new URL(trimmed, baseUrl).href;
-        return `/stream?url=${encodeURIComponent(absoluteSegmentUrl)}`;
+      if (!response || (response.status >= 400 && response.status !== 206)) {
+        lastError = new Error('Upstream failed for ' + candUrl);
+        continue;
+      }
+
+      if (isM3u8) {
+        const originalM3u8 = response.data;
+        const baseUrl = new URL('.', candUrl).href;
+
+        const rewrittenLines = originalM3u8.split(/\r?\n/).map(line => {
+          const trimmed = line.trim();
+          if (!trimmed) return line;
+
+          if (trimmed.startsWith('#EXT-X-KEY:')) {
+            return trimmed.replace(/URI="([^"]+)"/, (match, keyUrl) => {
+              const absoluteKeyUrl = new URL(keyUrl, baseUrl).href;
+              return `URI="/stream?url=${encodeURIComponent(absoluteKeyUrl)}${currentRj ? '&rj=' + encodeURIComponent(currentRj) : ''}"`;
+            });
+          }
+
+          if (trimmed.startsWith('#')) return line;
+
+          const absoluteSegmentUrl = new URL(trimmed, baseUrl).href;
+          return `/stream?url=${encodeURIComponent(absoluteSegmentUrl)}${currentRj ? '&rj=' + encodeURIComponent(currentRj) : ''}`;
+        });
+
+        res.setHeader('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8');
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Cache-Control', 'no-cache');
+        return res.send(rewrittenLines.join('\n'));
+      }
+
+      const isTs = candUrl.toLowerCase().endsWith('.ts');
+      res.status(response.status);
+
+      const headersToForward = [
+        'content-length',
+        'accept-ranges',
+        'content-range',
+        'last-modified',
+        'etag'
+      ];
+
+      headersToForward.forEach(header => {
+        if (response.headers[header]) {
+          res.setHeader(header, response.headers[header]);
+        }
       });
 
-      res.setHeader('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8');
-      res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('Cache-Control', 'no-cache');
-      return res.send(rewrittenLines.join('\n'));
-    }
-
-    const isTs = targetUrl.toLowerCase().endsWith('.ts');
-    const response = await axios({
-      method: 'get',
-      url: targetUrl,
-      httpAgent,
-      httpsAgent,
-      responseType: 'stream',
-      headers: axiosHeaders,
-      validateStatus: (status) => status >= 200 && status < 400,
-      timeout: 15000
-    });
-
-    res.status(response.status);
-
-    const headersToForward = [
-      'content-length',
-      'accept-ranges',
-      'content-range',
-      'last-modified',
-      'etag'
-    ];
-
-    headersToForward.forEach(header => {
-      if (response.headers[header]) {
-        res.setHeader(header, response.headers[header]);
+      if (isTs) {
+        res.setHeader('Content-Type', 'video/mp2t');
+      } else {
+        res.setHeader('Content-Type', response.headers['content-type'] || 'audio/mpeg');
       }
-    });
 
-    if (isTs) {
-      res.setHeader('Content-Type', 'video/mp2t');
-    } else {
-      res.setHeader('Content-Type', response.headers['content-type'] || 'audio/mpeg');
+      if (!response.headers['accept-ranges']) {
+        res.setHeader('Accept-Ranges', 'bytes');
+      }
+
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      return response.data.pipe(res);
+
+    } catch (error) {
+      lastError = error;
     }
-
-    if (!response.headers['accept-ranges']) {
-      res.setHeader('Accept-Ranges', 'bytes');
-    }
-
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    response.data.pipe(res);
-
-  } catch (error) {
-    res.status(500).send(`Stream error: ${error.message}`);
   }
+
+  res.status(500).send(`Stream error: ${lastError ? lastError.message : 'All stream candidates failed'}`);
 });
 
 // ==========================================
@@ -1100,27 +1379,29 @@ const INDEX_HTML = `<!DOCTYPE html>
     .nav-item:hover { background: var(--bg-card-hover); color: #fff; }
     .nav-item.active { background: var(--accent); color: #fff; }
 
-    /* Responsive Mobile Top Navbar */
-    .mobile-topbar {
-      display: none;
+    /* Responsive App Topbar (Unified for Desktop and Mobile) */
+    .mobile-topbar, .app-topbar {
+      display: flex;
       position: fixed;
       top: 0;
-      left: 0;
+      left: var(--sidebar-w);
       right: 0;
-      height: 58px;
+      height: 60px;
       background: rgba(12, 13, 20, 0.95);
       backdrop-filter: blur(14px);
       -webkit-backdrop-filter: blur(14px);
       border-bottom: 1px solid var(--border);
       z-index: 60;
-      padding: 0 14px;
+      padding: 0 28px;
       align-items: center;
       justify-content: space-between;
+      gap: 16px;
     }
+    .topbar-logo { display: none; }
     .mobile-nav-pills {
       display: none;
       position: fixed;
-      top: 58px;
+      top: 52px;
       left: 0;
       right: 0;
       background: rgba(10, 10, 15, 0.96);
@@ -1141,14 +1422,14 @@ const INDEX_HTML = `<!DOCTYPE html>
       position: relative;
       display: flex;
       align-items: center;
-      height: 36px;
+      height: 38px;
     }
     .mobile-search-bar span {
       position: absolute;
-      left: 10px;
+      left: 12px;
       top: 50%;
       transform: translateY(-50%);
-      font-size: 0.85rem;
+      font-size: 0.9rem;
       pointer-events: none;
       z-index: 2;
       line-height: 1;
@@ -1158,14 +1439,15 @@ const INDEX_HTML = `<!DOCTYPE html>
       height: 100%;
       background: #0c0d12;
       border: 1px solid var(--border);
-      padding: 0 8px 0 32px !important;
-      border-radius: 8px;
+      padding: 0 12px 0 36px !important;
+      border-radius: 9px;
       color: #fff;
-      font-size: 0.8rem;
+      font-size: 0.85rem;
       outline: none;
       min-width: 0;
       box-sizing: border-box;
       text-overflow: ellipsis;
+      transition: border-color 0.15s, box-shadow 0.15s;
     }
     .mobile-search-bar input:focus {
       border-color: var(--accent);
@@ -1199,7 +1481,7 @@ const INDEX_HTML = `<!DOCTYPE html>
     .mobile-pill.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 
     /* Main Container */
-    .app-main { margin-left: var(--sidebar-w); flex: 1; padding: 24px 36px 120px; min-height: 100vh; }
+    .app-main { margin-left: var(--sidebar-w); flex: 1; padding: 84px 36px 120px; min-height: 100vh; }
     .topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; gap: 16px; }
     .search-box { flex: 1; max-width: 480px; position: relative; display: flex; align-items: center; }
     .search-box input { width: 100%; background: var(--bg-card); border: 1px solid var(--border); padding: 10px 16px 10px 42px; border-radius: 10px; color: #fff; font-size: 0.9rem; outline: none; transition: 0.2s; }
@@ -1388,6 +1670,42 @@ const INDEX_HTML = `<!DOCTYPE html>
     .scroll-jump-btn:active {
       transform: scale(0.95);
     }
+    .dev-log-filter-btn {
+      background: rgba(255,255,255,0.06);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      padding: 3px 9px;
+      border-radius: 6px;
+      font-size: 0.74rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .dev-log-filter-btn:hover { color: #fff; background: rgba(255,255,255,0.12); }
+    .dev-log-filter-btn.active {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+      box-shadow: 0 0 8px var(--accent-glow);
+    }
+    .dev-log-entry {
+      padding: 3px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+      display: flex;
+      gap: 8px;
+      font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+      font-size: 0.78rem;
+      line-height: 1.45;
+    }
+    .dev-log-entry:last-child { border-bottom: none; }
+    .dev-log-ts { color: #64748b; flex-shrink: 0; }
+    .dev-log-lvl { font-weight: 800; flex-shrink: 0; width: 48px; }
+    .dev-log-lvl.lvl-INFO { color: #38bdf8; }
+    .dev-log-lvl.lvl-WARN { color: #fbbf24; }
+    .dev-log-lvl.lvl-ERROR { color: #f87171; }
+    .dev-log-lvl.lvl-DEBUG { color: #94a3b8; }
+    .dev-log-mod { color: #c084fc; font-weight: 700; flex-shrink: 0; }
+    .dev-log-msg { color: #e2e8f0; flex: 1; word-break: break-all; }
     .zen-chips-bar {
       display: flex;
       flex-wrap: wrap;
@@ -1627,6 +1945,7 @@ const INDEX_HTML = `<!DOCTYPE html>
     .works-list-row { cursor: pointer; transition: background 0.15s; }
     .works-list-row:hover { background: var(--bg-card-hover); }
     .list-thumb { width: 44px; height: 44px; border-radius: 6px; object-fit: cover; background: #0c0d12; flex-shrink: 0; }
+    .history-mobile-date { display: none !important; }
 
     /* Pagination Bar */
     .pagination-bar {
@@ -1963,11 +2282,17 @@ const INDEX_HTML = `<!DOCTYPE html>
       #playerBarChapterBtnMobile, #playerBarWorkBtnMobile { display: inline-flex; }
       #playerBarChapterBtn { display: none; }
       .app-sidebar { display: none; }
-      .mobile-topbar { display: flex; height: 52px; }
+      .mobile-topbar, .app-topbar {
+        left: 0;
+        right: 0;
+        height: 52px;
+        padding: 0 10px;
+      }
+      .topbar-logo { display: flex; }
       .mobile-nav-pills { display: flex; top: 52px; }
       .app-main {
         margin-left: 0 !important;
-        padding: 104px 12px 180px !important;
+        padding: 110px 12px 180px !important;
       }
       #dragWidget, .drag-widget { display: none !important; }
       .pagination-bar {
@@ -2494,6 +2819,9 @@ const INDEX_HTML = `<!DOCTYPE html>
       .works-list-table.history-list-table tr.works-list-row td.w-col-date {
         display: none !important;
       }
+      .history-mobile-date {
+        display: inline !important;
+      }
       .works-list-table tr.works-list-row td.w-col-actions,
       .works-list-table tr.works-list-row td:last-child {
         grid-area: actions !important;
@@ -2691,7 +3019,59 @@ const INDEX_HTML = `<!DOCTYPE html>
     }
     @keyframes pulseWidget {
       0%, 100% { border-color: rgba(56, 189, 248, 0.45); box-shadow: 0 4px 16px rgba(0,0,0,0.6); }
-      50% { border-color: rgba(56, 189, 248, 0.85); box-shadow: 0 4px 20px rgba(56, 189, 248, 0.35); }
+    /* 🛠️ Dev Mode Diagnostic Activity Log Modal Styles */
+    .dev-log-filter-btn {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 3px 8px;
+      font-size: 0.74rem;
+      font-weight: 700;
+      color: #94a3b8;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .dev-log-filter-btn:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: #fff;
+    }
+    .dev-log-filter-btn.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+      box-shadow: 0 0 10px var(--accent-glow);
+    }
+    .dev-log-entry {
+      padding: 2px 0;
+      display: flex;
+      gap: 8px;
+      align-items: baseline;
+      font-family: inherit;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+    }
+    .dev-log-ts {
+      color: #64748b;
+      font-size: 0.72rem;
+      flex-shrink: 0;
+    }
+    .dev-log-lvl {
+      font-weight: 800;
+      font-size: 0.72rem;
+      flex-shrink: 0;
+    }
+    .dev-log-lvl.lvl-INFO { color: #38bdf8; }
+    .dev-log-lvl.lvl-WARN { color: #fbbf24; }
+    .dev-log-lvl.lvl-ERROR { color: #f87171; }
+    .dev-log-mod {
+      color: #a78bfa;
+      font-weight: 700;
+      font-size: 0.72rem;
+      flex-shrink: 0;
+    }
+    .dev-log-msg {
+      color: #e2e8f0;
+      word-break: break-word;
+      flex: 1;
     }
   </style>
 </head>
@@ -2799,6 +3179,54 @@ const INDEX_HTML = `<!DOCTYPE html>
 
       <div style="display: flex; justify-content: flex-end; margin-top: 20px;">
         <button class="btn-primary" onclick="closeChangelogModal()">Got it</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Dev Activity Log Modal -->
+  <div id="devLogModal" class="modal-overlay">
+    <div class="modal-content" style="max-width: 880px; width: 95vw; max-height: 88vh; display: flex; flex-direction: column; padding: 0; overflow: hidden; background: #080a10; border: 1px solid rgba(56, 189, 248, 0.45); border-radius: 14px; box-shadow: 0 16px 48px rgba(0,0,0,0.85);">
+      <!-- Modal Header -->
+      <div style="display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--border); background: rgba(15, 18, 28, 0.95);">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <div style="width: 34px; height: 34px; border-radius: 9px; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.35); display: flex; align-items: center; justify-content: center; font-size: 1.15rem; color: #38bdf8;">🛠️</div>
+          <div>
+            <h3 style="font-size: 1.05rem; font-weight: 800; color: #fff; margin: 0;">Dev Activity &amp; Error Logs</h3>
+            <div style="font-size: 0.72rem; color: #94a3b8; margin-top: 1px;">Tail of last 100 client-cached diagnostic events</div>
+          </div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 6px;">
+          <button class="btn-outline" style="padding: 3px 8px; font-size: 0.75rem;" onclick="renderDevLogTail()">🔄 Refresh</button>
+          <button class="btn-outline" style="padding: 3px 8px; font-size: 0.75rem;" onclick="copyDevLogs()">📋 Copy</button>
+          <button class="btn-outline" style="padding: 3px 8px; font-size: 0.75rem;" onclick="exportDevLogs()">💾 Export</button>
+          <button class="btn-outline" style="padding: 3px 8px; font-size: 0.75rem; color: #ef4444; border-color: rgba(239,68,68,0.35);" onclick="clearDevLogs()">🗑️ Clear</button>
+          <button class="btn-outline" style="padding: 3px 8px; font-size: 0.8rem;" onclick="closeDevLogModal()">✖</button>
+        </div>
+      </div>
+      
+      <!-- Filter bar -->
+      <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 16px; background: rgba(10, 12, 18, 0.95); border-bottom: 1px solid var(--border); font-size: 0.78rem; flex-wrap: wrap; gap: 8px;">
+        <div style="display: flex; gap: 6px; align-items: center; flex-wrap: wrap;">
+          <span style="color: var(--text-muted); font-weight: 700; margin-right: 4px;">FILTER:</span>
+          <button class="dev-log-filter-btn active" data-filter="ALL" onclick="setDevLogFilter('ALL', this)">ALL</button>
+          <button class="dev-log-filter-btn" data-filter="ERROR" onclick="setDevLogFilter('ERROR', this)" style="color: #f87171;">ERRORS</button>
+          <button class="dev-log-filter-btn" data-filter="WARN" onclick="setDevLogFilter('WARN', this)" style="color: #fbbf24;">WARNS</button>
+          <button class="dev-log-filter-btn" data-filter="API" onclick="setDevLogFilter('API', this)" style="color: #38bdf8;">API</button>
+          <button class="dev-log-filter-btn" data-filter="REFETCH" onclick="setDevLogFilter('REFETCH', this)" style="color: #a78bfa;">REFETCH</button>
+          <button class="dev-log-filter-btn" data-filter="TRACE" onclick="setDevLogFilter('TRACE', this)" style="color: #34d399;">TRACE</button>
+        </div>
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <label style="display: flex; align-items: center; gap: 5px; color: #34d399; font-weight: 600; cursor: pointer; user-select: none;">
+            <input type="checkbox" id="devLogVerboseTrace" onchange="toggleDevLogVerboseTrace(this.checked)" style="accent-color: #10b981;"> 🔬 Verbose Tracing
+          </label>
+          <label style="display: flex; align-items: center; gap: 6px; color: var(--text-muted); cursor: pointer; user-select: none;">
+            <input type="checkbox" id="devLogAutoScroll" checked style="accent-color: var(--accent);"> Auto-scroll
+          </label>
+        </div>
+      </div>
+
+      <!-- Terminal Console Log Box -->
+      <div id="devLogConsoleContainer" style="flex: 1; min-height: 360px; max-height: 520px; overflow-y: auto; background: #040508; padding: 12px 16px; font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size: 0.78rem; line-height: 1.5; color: #e2e8f0; white-space: pre-wrap; word-break: break-all; scrollbar-width: thin;">
       </div>
     </div>
   </div>
@@ -3140,22 +3568,22 @@ const INDEX_HTML = `<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- Mobile Topbar Header (Row 1: Logo + 2 Equal Search Bars) -->
-  <header class="mobile-topbar" style="gap: 8px; padding: 0 10px; display: flex; align-items: center;">
-    <a href="#/library" class="logo-area" style="margin-bottom: 0; padding: 0; text-decoration: none; color: inherit; flex-shrink: 0; gap: 4px;" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); switchView('library'); }">
+  <!-- App Topbar Header (Universal Header: Responsive on Mobile & Desktop) -->
+  <header class="mobile-topbar app-topbar">
+    <a href="#/library" class="logo-area topbar-logo" style="margin-bottom: 0; padding: 0; text-decoration: none; color: inherit; flex-shrink: 0; gap: 4px;" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); switchView('library'); }">
       <div class="logo-icon" style="width: 32px; height: 32px; font-size: 1.1rem; border-radius: 8px;">🐧</div>
       <div class="logo-title" style="font-size: 1rem; display: none;">aStreamer</div>
     </a>
-    <div style="display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0;">
+    <div style="display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0;">
       <!-- Title / RJ Search Bar -->
-      <div class="mobile-search-bar">
+      <div class="mobile-search-bar" style="flex: 1; max-width: 480px;">
         <span>🔍</span>
-        <input type="text" id="mobileSearchInput" placeholder="Title / RJ..." oninput="handleTitleSearch(this.value)" autocomplete="off">
+        <input type="text" id="mobileSearchInput" placeholder="Search title, RJ, circle, CV..." oninput="handleTitleSearch(this.value)" autocomplete="off">
       </div>
       <!-- Tags / CV Search Bar -->
-      <div class="mobile-search-bar tags-bar" onclick="openZenTagSearch()" title="Open Tag & CV Search">
+      <div class="mobile-search-bar tags-bar" style="flex: 1; max-width: 480px;" onclick="openZenTagSearch()" title="Open Tag & CV Search">
         <span>🏷️</span>
-        <input type="text" id="mobileTagSearchInput" placeholder="Tags / CV..." onfocus="openZenTagSearch(this.value)" onclick="openZenTagSearch(this.value)" readonly>
+        <input type="text" id="mobileTagSearchInput" placeholder="Search tags + CV..." onfocus="openZenTagSearch(this.value)" onclick="openZenTagSearch(this.value)" readonly>
       </div>
     </div>
   </header>
@@ -3172,6 +3600,7 @@ const INDEX_HTML = `<!DOCTYPE html>
     <button class="mobile-pill" onclick="quickAddRj()">➕ Add RJ</button>
     <button class="mobile-pill" onclick="openImportModal()">📥 Import</button>
     <button class="mobile-pill" onclick="openPageImportModal()">📑 Page Import</button>
+    <button class="mobile-pill" onclick="openDevLogModal()">🛠️ Logs</button>
     <button class="mobile-pill" onclick="openChangelogModal()">📜 Notes</button>
     <a href="#/settings" class="mobile-pill" data-view="settings" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); switchView('settings'); }">⚙️ Settings</a>
     <button class="mobile-pill" id="mobileAdminBtn" onclick="toggleAdminModal()">🔓 Admin</button>
@@ -3205,17 +3634,6 @@ const INDEX_HTML = `<!DOCTYPE html>
         <span id="appVersionTag" style="font-size: 0.65rem; color: var(--accent); font-weight: 700; background: var(--accent-glow); padding: 1px 6px; border-radius: 4px; border: 1px solid var(--accent);">v2.0 Official</span>
       </div>
     </a>
-
-    <!-- Sidebar Dual Search Bars -->
-    <div class="search-box" style="margin-bottom: 8px; width: 100%; max-width: 100%;">
-      <span>🔍</span>
-      <input type="text" id="globalSearch" placeholder="Search title, RJ, circle..." oninput="handleTitleSearch(this.value)">
-    </div>
-    <div class="search-box" style="margin-bottom: 14px; width: 100%; max-width: 100%;" onclick="openZenTagSearch()" title="Open Tag Search">
-      <span>🏷️</span>
-      <input type="text" id="globalTagSearch" placeholder="Search tags + CV..." onfocus="openZenTagSearch(this.value)" onclick="openZenTagSearch(this.value)" readonly style="cursor: pointer;">
-      <div id="tagSuggestionsDropdown" class="tag-suggestions-dropdown"></div>
-    </div>
 
     <!-- Sidebar Quick Add -->
     <button class="btn-primary" style="width: 100%; justify-content: center; margin-bottom: 12px; padding: 10px;" onclick="quickAddRj()">+ Add RJ Code</button>
@@ -3255,6 +3673,7 @@ const INDEX_HTML = `<!DOCTYPE html>
       <div class="nav-title">Manage</div>
       <button class="nav-item" onclick="openImportModal()">📥 Batch Import</button>
       <button class="nav-item" onclick="openPageImportModal()">📑 Page Import</button>
+      <button class="nav-item" onclick="openDevLogModal()">🛠️ Dev Activity Logs</button>
       <button class="nav-item" onclick="openChangelogModal()">📜 Release Notes</button>
       <a href="#/settings" class="nav-item" data-view="settings" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); switchView('settings'); }">⚙️ Settings</a>
       <button class="nav-item" id="sidebarAdminBtn" onclick="toggleAdminModal()">🔓 Unlock Admin</button>
@@ -4562,13 +4981,30 @@ const INDEX_HTML = `<!DOCTYPE html>
         const sfwRj = SFW_DISGUISE_LIST[hash % SFW_DISGUISE_LIST.length];
         return { coverUrl: '/image-proxy?url=' + encodeURIComponent('https://pic.weeabo0.xyz/' + sfwRj + '_img_main.jpg'), isDisguised: true };
       }
-      if (!rawCover && work.rjCode) {
-        return { coverUrl: '/image-proxy?rj=' + encodeURIComponent(work.rjCode), isDisguised: false };
+      while (rawCover && (rawCover.startsWith('/image-proxy?url=') || (rawCover.startsWith('http') && rawCover.includes('/image-proxy?url=')))) {
+        const match = rawCover.match(/[?&]url=([^&]+)/);
+        if (match) {
+          try {
+            const dec = decodeURIComponent(match[1]);
+            if (dec === rawCover) break;
+            rawCover = dec;
+          } catch (e) {
+            break;
+          }
+        } else {
+          break;
+        }
       }
-      if (rawCover && rawCover.startsWith('http') && !rawCover.includes('/image-proxy')) {
+      if (!rawCover || rawCover.includes('placeholder') || rawCover.includes('no-image')) {
+        if (work.rjCode) return { coverUrl: '/image-proxy?rj=' + encodeURIComponent(work.rjCode), isDisguised: false };
+      }
+      if (rawCover && rawCover.startsWith('http')) {
         return { coverUrl: '/image-proxy?url=' + encodeURIComponent(rawCover) + (work.rjCode ? '&rj=' + encodeURIComponent(work.rjCode) : ''), isDisguised: false };
       }
-      return { coverUrl: rawCover, isDisguised: false };
+      if (rawCover && rawCover.startsWith('/image-proxy')) {
+        return { coverUrl: rawCover, isDisguised: false };
+      }
+      return { coverUrl: work.rjCode ? ('/image-proxy?rj=' + encodeURIComponent(work.rjCode)) : rawCover, isDisguised: false };
     }
 
     function renderLockedState(title, desc) {
@@ -4751,7 +5187,10 @@ const INDEX_HTML = `<!DOCTYPE html>
         const data = await res.json().catch(() => ({}));
         isAdmin = Boolean(data.authenticated);
         updateAdminUI(isAdmin);
-        if (isAdmin) updateWishlistBadge();
+        if (isAdmin) {
+          updateWishlistBadge();
+          syncHistoryInBackground();
+        }
       } catch(e) {
         isAdmin = false;
         updateAdminUI(false);
@@ -4822,6 +5261,7 @@ const INDEX_HTML = `<!DOCTYPE html>
           closeAdminModal();
           updateAdminUI(true);
           updateWishlistBadge();
+          syncHistoryInBackground();
           handleHashRoute();
         } else {
           const errEl = document.getElementById('loginError');
@@ -4835,7 +5275,166 @@ const INDEX_HTML = `<!DOCTYPE html>
       }
     }
 
+    // =========================================================================
+    // 🛠️ Developer Diagnostics & Activity Log Subsystem
+    // =========================================================================
+    function isDevModeEnabled() {
+      const stored = localStorage.getItem('astreamer_dev_mode');
+      return stored === null ? true : stored === 'true';
+    }
+    function setDevMode(val) {
+      localStorage.setItem('astreamer_dev_mode', String(val));
+      showToast(val ? '🛠️ Dev Mode enabled' : '🛠️ Dev Mode disabled');
+      devLog('INFO', 'CONFIG', 'Dev Diagnostics Mode set to ' + val);
+    }
+
+    window.devLogs = [];
+    let devLogVerboseTraceEnabled = localStorage.getItem('astreamer_dev_verbose_trace') === 'true';
+    try {
+      const saved = localStorage.getItem('astreamer_dev_logs');
+      if (saved) window.devLogs = JSON.parse(saved) || [];
+    } catch(e) {
+      window.devLogs = [];
+    }
+
+    let devLogFilter = 'ALL';
+
+    function toggleDevLogVerboseTrace(enabled) {
+      devLogVerboseTraceEnabled = Boolean(enabled);
+      localStorage.setItem('astreamer_dev_verbose_trace', devLogVerboseTraceEnabled ? 'true' : 'false');
+      devLog('INFO', 'CONFIG', 'Verbose Tracing ' + (devLogVerboseTraceEnabled ? 'ENABLED' : 'DISABLED'));
+      renderDevLogTail();
+    }
+
+    function isVerboseTraceEnabled() {
+      return devLogVerboseTraceEnabled;
+    }
+
+    function devLog(level, module, message, data = null) {
+      const lvl = (level || 'INFO').toUpperCase();
+      if (lvl === 'TRACE' && !devLogVerboseTraceEnabled) return;
+      if (!isDevModeEnabled() && lvl !== 'ERROR' && lvl !== 'WARN') return;
+      const ts = new Date().toTimeString().split(' ')[0] + '.' + String(Date.now() % 1000).padStart(3, '0');
+      const entry = {
+        time: ts,
+        level: lvl,
+        module: (module || 'APP').toUpperCase(),
+        message: String(message || ''),
+        data: data ? (typeof data === 'object' ? JSON.stringify(data) : String(data)) : null
+      };
+      window.devLogs.push(entry);
+      if (window.devLogs.length > 500) {
+        window.devLogs = window.devLogs.slice(-350);
+      }
+      try {
+        localStorage.setItem('astreamer_dev_logs', JSON.stringify(window.devLogs.slice(-150)));
+      } catch(e) {}
+
+      const modal = document.getElementById('devLogModal');
+      if (modal && (modal.style.display === 'flex' || modal.style.display === 'block')) {
+        renderDevLogTail();
+      }
+    }
+
+    function openDevLogModal() {
+      const modal = document.getElementById('devLogModal');
+      if (modal) {
+        modal.style.display = 'flex';
+        const vCheckbox = document.getElementById('devLogVerboseTrace');
+        if (vCheckbox) vCheckbox.checked = devLogVerboseTraceEnabled;
+        renderDevLogTail();
+      }
+    }
+
+    function closeDevLogModal() {
+      const modal = document.getElementById('devLogModal');
+      if (modal) modal.style.display = 'none';
+    }
+
+    function setDevLogFilter(filterName, btn) {
+      devLogFilter = filterName;
+      document.querySelectorAll('.dev-log-filter-btn').forEach(b => b.classList.remove('active'));
+      if (btn) btn.classList.add('active');
+      renderDevLogTail();
+    }
+
+    function renderDevLogTail() {
+      const container = document.getElementById('devLogConsoleContainer');
+      if (!container) return;
+      
+      const allLogs = window.devLogs || [];
+      const filtered = allLogs.filter(entry => {
+        if (devLogFilter === 'ALL') return true;
+        if (devLogFilter === 'ERROR') return entry.level === 'ERROR';
+        if (devLogFilter === 'WARN') return entry.level === 'WARN' || entry.level === 'ERROR';
+        if (devLogFilter === 'API') return entry.module === 'API';
+        if (devLogFilter === 'REFETCH') return entry.module === 'REFETCH' || entry.module === 'SCRAPER' || entry.module === 'CLIENT_PROBE';
+        if (devLogFilter === 'TRACE') return entry.level === 'TRACE' || entry.module === 'PROBE' || entry.module === 'CLIENT_PROBE';
+        return true;
+      });
+
+      const tail = filtered.slice(-150);
+
+      if (tail.length === 0) {
+        container.innerHTML = '<div style="color: #64748b; text-align: center; padding: 40px 0;">[No diagnostic log entries recorded yet]</div>';
+        return;
+      }
+
+      let html = '';
+      tail.forEach(item => {
+        const lvlClass = 'lvl-' + (item.level || 'INFO');
+        const dataStr = item.data ? (' <span style="color: #6ee7b7;">' + escapeHtml(item.data) + '</span>') : '';
+        html += '<div class="dev-log-entry">' +
+          '<span class="dev-log-ts">[' + item.time + ']</span>' +
+          '<span class="dev-log-lvl ' + lvlClass + '">[' + item.level + ']</span>' +
+          '<span class="dev-log-mod">[' + item.module + ']</span>' +
+          '<span class="dev-log-msg">' + escapeHtml(item.message) + dataStr + '</span>' +
+        '</div>';
+      });
+
+      container.innerHTML = html;
+
+      const autoScroll = document.getElementById('devLogAutoScroll');
+      if (autoScroll && autoScroll.checked) {
+        container.scrollTop = container.scrollHeight;
+      }
+    }
+
+    function copyDevLogs() {
+      const allLogs = window.devLogs || [];
+      const text = allLogs.map(l => '[' + l.time + '] [' + l.level + '] [' + l.module + '] ' + l.message + (l.data ? ' ' + l.data : '')).join('\\n');
+      navigator.clipboard.writeText(text).then(() => {
+        showToast('📋 Copied ' + allLogs.length + ' log entries to clipboard');
+      }).catch(e => {
+        showToast('❌ Copy failed: ' + e.message);
+      });
+    }
+
+    function exportDevLogs() {
+      const allLogs = window.devLogs || [];
+      const text = '# aStreamer Diagnostic Dev Log\\n# Exported: ' + new Date().toISOString() + '\\n============================================================\\n' +
+        allLogs.map(l => '[' + l.time + '] [' + l.level + '] [' + l.module + '] ' + l.message + (l.data ? ' ' + l.data : '')).join('\\n');
+      const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'astreamer_dev_logs_' + new Date().toISOString().slice(0, 10) + '.txt';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { if (a.parentNode) a.parentNode.removeChild(a); URL.revokeObjectURL(url); }, 1000);
+      showToast('💾 Exported diagnostic log file');
+    }
+
+    function clearDevLogs() {
+      window.devLogs = [];
+      try { localStorage.removeItem('astreamer_dev_logs'); } catch(e) {}
+      renderDevLogTail();
+      showToast('🗑️ Cleared diagnostic activity logs');
+    }
+
     async function apiFetch(url, options = {}) {
+      const method = (options.method || 'GET').toUpperCase();
+      devLog('INFO', 'API', method + ' ' + url);
       options.headers = options.headers || { 'Content-Type': 'application/json' };
       const savedPass = localStorage.getItem('astreamer_admin_passcode') || '';
       if (savedPass) {
@@ -4845,13 +5444,36 @@ const INDEX_HTML = `<!DOCTYPE html>
           options.headers['x-admin-passcode'] = savedPass;
         }
       }
-      const res = await fetch(url, options);
-      if (res.status === 401) {
-        isAdmin = false;
-        updateAdminUI(false);
-        openAdminModal('Admin authorization required to perform this action.');
+      try {
+        const res = await fetch(url, options);
+        if (!res.ok) {
+          let errDetail = res.statusText || 'Error';
+          try {
+            const clone = res.clone();
+            const errJson = await clone.json();
+            if (errJson && errJson.error) errDetail = errJson.error;
+            else if (errJson && errJson.message) errDetail = errJson.message;
+          } catch(e) {
+            try {
+              const clone = res.clone();
+              const errTxt = await clone.text();
+              if (errTxt && errTxt.length < 120) errDetail = errTxt;
+            } catch(e2) {}
+          }
+          devLog(res.status >= 500 ? 'ERROR' : 'WARN', 'API', method + ' ' + url + ' -> HTTP ' + res.status + ' (' + errDetail + ')');
+        } else {
+          devLog('INFO', 'API', method + ' ' + url + ' -> HTTP ' + res.status);
+        }
+        if (res.status === 401) {
+          isAdmin = false;
+          updateAdminUI(false);
+          openAdminModal('Admin authorization required to perform this action.');
+        }
+        return res;
+      } catch (err) {
+        devLog('ERROR', 'API', method + ' ' + url + ' -> Network Error: ' + err.message);
+        throw err;
       }
-      return res;
     }
 
     async function apiFetchJson(url, options = {}) {
@@ -5604,10 +6226,12 @@ const INDEX_HTML = `<!DOCTYPE html>
       }
       currentWorkChapters = chaptersList;
 
-      const galleryCount = (Array.isArray(work.gallery) ? work.gallery.length : 0);
+      const cleanGallery = getCleanWorkGallery(work.gallery);
+      work.gallery = cleanGallery;
+      const galleryCount = cleanGallery.length;
       const cleanRjKey = normRj(work.rjCode);
       const currentWorkStage = (typeof singleWorkRefreshStages !== 'undefined') ? (singleWorkRefreshStages.get(cleanRjKey) || '') : '';
-      const refreshBtnContent = currentWorkStage ? ('<span class="spin">🔄</span> <span id="refreshStageText">' + currentWorkStage + '</span>') : '🔄 Refresh';
+      const refreshBtnContent = currentWorkStage ? ('<span class="spin">🔄</span> <span id="refreshStageText">' + currentWorkStage + '</span>') : '🔄 Refetch';
       const refreshBtnDisabled = currentWorkStage ? ' disabled' : '';
 
       const sampleTracks = (Array.isArray(work.sampleTracks) ? work.sampleTracks : []).filter(function(t) { return t && (t.rawUrl || t.streamUrl); });
@@ -5625,7 +6249,9 @@ const INDEX_HTML = `<!DOCTYPE html>
 
       // 1. Physical Audio Tracklist Section
       if (hasFullCommunityTracks) {
-        html += '<h3 style="font-size:1.2rem; font-weight:700; margin-top:24px; margin-bottom:12px; display:flex; align-items:center; gap:8px;"><span>🎵 Full Audio Tracks (' + fullCommunityTracks.length + ')</span></h3>';
+        const audioSource = getWorkAudioSource(work, fullCommunityTracks);
+        const audioSourceBadge = audioSource ? ('<span style="font-size:0.75rem; background:rgba(255,122,0,0.15); color:var(--accent); border:1px solid var(--accent-glow); padding:2px 8px; border-radius:4px; font-weight:700;">' + audioSource + '</span>') : '';
+        html += '<h3 style="font-size:1.2rem; font-weight:700; margin-top:24px; margin-bottom:12px; display:flex; align-items:center; gap:8px;"><span>🎵 Full Audio Tracks (' + fullCommunityTracks.length + ')</span>' + audioSourceBadge + '</h3>';
         html += '<table class="tracks-table audio-tracks-table"><thead><tr><th style="width: 40px;">#</th><th>Track Title</th><th style="width: 120px;">Stream Format</th><th style="width: 160px; text-align:right;">Action</th></tr></thead><tbody>';
 
         fullCommunityTracks.forEach(function(t, i) {
@@ -5638,8 +6264,7 @@ const INDEX_HTML = `<!DOCTYPE html>
             catBadge = '<span style="font-size:0.75rem; background:rgba(59,130,246,0.15); color:#60a5fa; border:1px solid rgba(96,165,250,0.3); padding:2px 8px; border-radius:4px; font-weight:700; margin-right:6px;">🎵 Main</span>';
           }
           const formatBadge = t.isHls ? '<span style="font-size:0.75rem; background:rgba(14,116,144,0.2); color:#38bdf8; border:1px solid rgba(56,189,248,0.3); padding:2px 8px; border-radius:4px; font-weight:700;">HLS Master</span>' : '<span style="font-size:0.75rem; background:rgba(255,255,255,0.06); color:#d1d5db; border:1px solid var(--border); padding:2px 8px; border-radius:4px; font-weight:700;">Direct MP3</span>';
-          const durStr = t.duration ? (' <span style="color:var(--text-muted); font-size:0.8rem; font-weight:normal; margin-left:6px;">(' + formatTime(t.duration) + ')</span>') : '';
-          html += '<tr class="track-row" id="track-row-' + i + '" data-idx="' + i + '" onclick="playTrack(parseInt(this.dataset.idx), true, currentWork)"><td>' + (t.id || (i + 1)) + '</td><td><div style="display:flex; align-items:center; flex-wrap:wrap; gap:4px;">' + catBadge + '<strong>' + t.title + '</strong>' + durStr + '</div></td><td>' + formatBadge + '</td><td style="text-align:right;"><div style="display:inline-flex; gap:6px;"><button class="btn-primary" style="padding: 4px 10px; font-size: 0.75rem;" data-idx="' + i + '" onclick="event.stopPropagation(); playTrack(parseInt(this.dataset.idx), true, currentWork)">▶ Play</button><button class="btn-outline" style="padding: 4px 10px; font-size: 0.75rem;" data-idx="' + i + '" onclick="event.stopPropagation(); addTrackToPlaylistAction(parseInt(this.dataset.idx))">➕ Playlist</button></div></td></tr>';
+          html += '<tr class="track-row" id="track-row-' + i + '" data-idx="' + i + '" onclick="playTrack(parseInt(this.dataset.idx), true, currentWork)"><td>' + (t.id || (i + 1)) + '</td><td><div style="display:flex; align-items:center; flex-wrap:wrap; gap:4px;">' + catBadge + '<strong>' + t.title + '</strong></div></td><td>' + formatBadge + '</td><td style="text-align:right;"><div style="display:inline-flex; gap:6px;"><button class="btn-primary" style="padding: 4px 10px; font-size: 0.75rem;" data-idx="' + i + '" onclick="event.stopPropagation(); playTrack(parseInt(this.dataset.idx), true, currentWork)">▶ Play</button><button class="btn-outline" style="padding: 4px 10px; font-size: 0.75rem;" data-idx="' + i + '" onclick="event.stopPropagation(); addTrackToPlaylistAction(parseInt(this.dataset.idx))">➕ Playlist</button></div></td></tr>';
         });
         html += '</tbody></table>';
       } else {
@@ -5649,11 +6274,10 @@ const INDEX_HTML = `<!DOCTYPE html>
       // 1.5. Official DLsite Preview Audio Section (DLsite Chobit)
       if (sampleTracks.length > 0 && previewAudioMode !== 'disabled') {
         html += '<h3 style="font-size:1.2rem; font-weight:700; margin-top:28px; margin-bottom:12px; display:flex; align-items:center; gap:8px;"><span>🎧 Official DLsite Preview Audio (' + sampleTracks.length + ')</span><span style="font-size:0.75rem; background:rgba(255,122,0,0.15); color:var(--accent); border:1px solid var(--accent-glow); padding:2px 8px; border-radius:4px; font-weight:700;">DLsite Chobit</span></h3>';
-        html += '<table class="tracks-table sample-tracks-table"><thead><tr><th style="width: 40px;">#</th><th>Sample Track Title</th><th style="width: 120px;">Playtime</th><th style="width: 160px; text-align:right;">Action</th></tr></thead><tbody>';
+        html += '<table class="tracks-table sample-tracks-table"><thead><tr><th style="width: 40px;">#</th><th>Sample Track Title</th><th style="width: 160px; text-align:right;">Action</th></tr></thead><tbody>';
         sampleTracks.forEach(function(st, sIdx) {
-          const sDurStr = st.formattedTime || formatTime(st.duration || 0);
           const stJson = JSON.stringify(st).replace(/"/g, '&quot;');
-          html += '<tr class="track-row" id="sample-track-row-' + sIdx + '" onclick="playDirectAudioTrack(' + stJson + ', ' + sIdx + ', currentWork)"><td>' + (sIdx + 1) + '</td><td><div style="display:flex; align-items:center; flex-wrap:wrap; gap:4px;"><strong>' + st.title + '</strong></div></td><td><span style="font-variant-numeric:tabular-nums; color:var(--text-muted); font-size:0.85rem;">⏱️ ' + sDurStr + '</span></td><td style="text-align:right;"><div style="display:inline-flex; gap:6px;"><button class="btn-primary" style="padding: 4px 10px; font-size: 0.75rem;" onclick="event.stopPropagation(); playDirectAudioTrack(' + stJson + ', ' + sIdx + ', currentWork)">▶ Play Sample</button><button class="btn-outline" style="padding: 4px 10px; font-size: 0.75rem;" onclick="event.stopPropagation(); addSampleTrackToPlaylistAction(' + stJson + ')">➕ Playlist</button></div></td></tr>';
+          html += '<tr class="track-row" id="sample-track-row-' + sIdx + '" onclick="playDirectAudioTrack(' + stJson + ', ' + sIdx + ', currentWork)"><td>' + (sIdx + 1) + '</td><td><div style="display:flex; align-items:center; flex-wrap:wrap; gap:4px;"><strong>' + st.title + '</strong></div></td><td style="text-align:right;"><div style="display:inline-flex; gap:6px;"><button class="btn-primary" style="padding: 4px 10px; font-size: 0.75rem;" onclick="event.stopPropagation(); playDirectAudioTrack(' + stJson + ', ' + sIdx + ', currentWork)">▶ Play Sample</button><button class="btn-outline" style="padding: 4px 10px; font-size: 0.75rem;" onclick="event.stopPropagation(); addSampleTrackToPlaylistAction(' + stJson + ')">➕ Playlist</button></div></td></tr>';
         });
         html += '</tbody></table>';
       }
@@ -5773,13 +6397,16 @@ const INDEX_HTML = `<!DOCTYPE html>
       // Track user visit for behavioral analytics
       recordWorkVisit(work);
 
-      // Retain existing chapters/gallery if currentWork already had them
+      // Retain existing chapters/gallery/sampleTracks if currentWork already had them
       if (currentWork && normRj(currentWork.rjCode) === normRj(work.rjCode)) {
         if (Array.isArray(currentWork.chapters) && currentWork.chapters.length > 0 && (!work.chapters || work.chapters.length <= 1)) {
           work.chapters = currentWork.chapters;
         }
         if (Array.isArray(currentWork.gallery) && currentWork.gallery.length > 0 && (!work.gallery || work.gallery.length === 0)) {
           work.gallery = currentWork.gallery;
+        }
+        if (Array.isArray(currentWork.sampleTracks) && currentWork.sampleTracks.length > 0 && (!work.sampleTracks || work.sampleTracks.length === 0)) {
+          work.sampleTracks = currentWork.sampleTracks;
         }
       }
 
@@ -5843,13 +6470,189 @@ const INDEX_HTML = `<!DOCTYPE html>
       grid.scrollBy({ left: direction * scrollAmount, behavior: 'smooth' });
     }
 
+    function getCanonicalDlsiteRj(rjCode) {
+      const clean = (rjCode || '').toUpperCase().trim();
+      const match = clean.match(/^(?:RJ|VJ|BJ)?(\d+)$/i);
+      if (!match) return clean;
+      const pref = (clean.match(/^(RJ|VJ|BJ)/i) || [])[1] || 'RJ';
+      const num = parseInt(match[1], 10);
+      if (isNaN(num) || num <= 0) return clean;
+      const targetLen = num >= 1000000 ? 8 : 6;
+      return pref.toUpperCase() + String(num).padStart(targetLen, '0');
+    }
+
+    function getDlsiteCoverBucket(rjCode) {
+      const clean = (rjCode || '').toUpperCase().trim();
+      const match = clean.match(/^(?:RJ|VJ|BJ)?(\d+)$/i);
+      if (!match) return clean;
+      const pref = (clean.match(/^(RJ|VJ|BJ)/i) || [])[1] || 'RJ';
+      const num = parseInt(match[1], 10);
+      if (isNaN(num) || num <= 0) return clean;
+      const bucketNum = Math.ceil(num / 1000) * 1000;
+      const targetLen = num >= 1000000 ? 8 : 6;
+      return pref.toUpperCase() + String(bucketNum).padStart(targetLen, '0');
+    }
+
+    function getSourceBadgeStyle(source) {
+      const s = (source || '').toLowerCase();
+      if (s.includes('dlsite')) {
+        return 'color:#38bdf8; background:rgba(56,189,248,0.15); border:1px solid rgba(56,189,248,0.35);'; // Sapphire Blue / Cyan
+      } else if (s.includes('asmr.one') || s.includes('asmr')) {
+        return 'color:#34d399; background:rgba(16,185,129,0.15); border:1px solid rgba(16,185,129,0.35);'; // Emerald Mint
+      } else if (s.includes('weeab') || s.includes('japaneseasmr')) {
+        return 'color:#c084fc; background:rgba(192,132,252,0.15); border:1px solid rgba(192,132,252,0.35);'; // Violet / Purple
+      } else if (s.includes('hentai')) {
+        return 'color:#f472b6; background:rgba(244,114,182,0.15); border:1px solid rgba(244,114,182,0.35);'; // Rose Pink
+      }
+      return 'color:#fb923c; background:rgba(251,146,60,0.15); border:1px solid rgba(251,146,60,0.35);'; // Amber Accent
+    }
+
+    function getWorkAudioSource(work, fullCommunityTracks) {
+      const tracks = (Array.isArray(fullCommunityTracks) && fullCommunityTracks.length > 0) ? fullCommunityTracks : (work && Array.isArray(work.tracks) ? work.tracks : []);
+      if (tracks.length === 0) return null;
+      
+      if (work && work.audioSource && typeof work.audioSource === 'string') {
+        const as = work.audioSource.toLowerCase();
+        if (as.includes('hentai')) return 'HentaiASMR';
+        if (as.includes('japaneseasmr') || as.includes('weeab')) return 'JapaneseASMR';
+      }
+      if (work && work.source && typeof work.source === 'string') {
+        const s = work.source.toLowerCase();
+        if (s.includes('hentai')) return 'HentaiASMR';
+        if (s.includes('japaneseasmr') || s.includes('weeab')) return 'JapaneseASMR';
+      }
+
+      for (const t of tracks) {
+        if (!t) continue;
+        if (t.source && typeof t.source === 'string') {
+          const s = t.source.toLowerCase();
+          if (s.includes('hentai')) return 'HentaiASMR';
+          if (s.includes('japaneseasmr') || s.includes('weeab')) return 'JapaneseASMR';
+        }
+        const checkStr = (String(t.rawUrl || '') + ' ' + String(t.streamUrl || '') + ' ' + String(t.referer || '') + ' ' + String(t.url || '')).toLowerCase();
+        if (checkStr.includes('hentaiasmr') || checkStr.includes('hentaiasmr.moe') || checkStr.includes('mp3.hentaiasmr.moe')) {
+          return 'HentaiASMR';
+        }
+        if (checkStr.includes('japaneseasmr') || checkStr.includes('weeab0o') || checkStr.includes('v.weeab0o.xyz')) {
+          return 'JapaneseASMR';
+        }
+      }
+      return 'JapaneseASMR';
+    }
+
+    function normalizeGalleryItem(g, idx = 0) {
+      if (!g) return null;
+      let url = '';
+      let title = '';
+      let source = '';
+      let role = '';
+
+      if (Array.isArray(g)) {
+        title = g[0] || '';
+        url = g[1] || '';
+        source = g[2] || '';
+        role = g[3] || '';
+      } else {
+        url = g.url || g.proxyUrl || '';
+        title = g.title || '';
+        source = g.source || '';
+        role = g.role || '';
+      }
+
+      if (url.startsWith('/image-proxy?url=')) {
+        try {
+          const rawParam = url.replace('/image-proxy?url=', '');
+          url = decodeURIComponent(rawParam);
+        } catch (e) {}
+      }
+
+      const sLower = (source || '').toLowerCase().trim();
+      if (!source || sLower === 'gallery' || sLower === 'artwork gallery' || sLower === 'artwork' || sLower === 'illustration preview' || sLower === 'sample') {
+        const u = (url || '').toLowerCase();
+        if (u.includes('dlsite') || u.includes('chobit')) source = 'DLsite Doujin';
+        else if (u.includes('weeabo0') || u.includes('weeab') || u.includes('japaneseasmr')) source = 'Weeab0o';
+        else if (u.includes('asmr')) source = 'ASMR.one';
+        else if (u.includes('hentai')) source = 'HentaiASMR';
+        else source = 'DLsite Doujin';
+      }
+
+      const smpMatch = url.match(/_img_smp(\d+)\./i) || url.match(/_smp(\d+)\./i);
+      const isMain = url.includes('_img_main.') || url.includes('_main.') || (!smpMatch && idx === 0);
+
+      if (isMain) {
+        role = role || 'main_cover';
+        if (!title || /^Illustration\s*#\d+$/i.test(title) || title === 'Artwork Gallery') {
+          title = 'Main Package Artwork';
+        }
+      } else if (smpMatch) {
+        const sNum = parseInt(smpMatch[1], 10);
+        role = role || ('sample_' + sNum);
+        if (!title || /^Illustration\s*#\d+$/i.test(title) || title === 'Artwork Gallery') {
+          title = (source.includes('DLsite') ? 'Sample Illustration #' : 'Sample Artwork #') + sNum;
+        }
+      } else {
+        role = role || ('sample_' + (idx + 1));
+        if (!title || /^Illustration\s*#\d+$/i.test(title) || title === 'Artwork Gallery') {
+          title = 'Sample Illustration #' + (idx + 1);
+        }
+      }
+
+      return {
+        id: idx + 1,
+        title: title,
+        url: url,
+        proxyUrl: '/image-proxy?url=' + encodeURIComponent(url),
+        source: source || 'DLsite Doujin',
+        role: role
+      };
+    }
+
+    function getCleanWorkGallery(rawGallery, rjCode = '') {
+      if (!rawGallery) return [];
+      let list = rawGallery;
+      if (!Array.isArray(rawGallery) && rawGallery && rawGallery._tpl === 'dlsite_seq') {
+        const cleanUpper = (rjCode || (currentWork && currentWork.rjCode) || '').toUpperCase().trim();
+        const canonicalRj = getCanonicalDlsiteRj(cleanUpper);
+        const bucket = rawGallery.bucket || getDlsiteCoverBucket(canonicalRj);
+        list = [];
+        if (rawGallery.hasMain) {
+          list.push({ title: 'Main Package Artwork', role: 'main_cover', source: 'DLsite Doujin', url: 'https://img.dlsite.jp/modpub/images2/work/doujin/' + bucket + '/' + canonicalRj + '_img_main.jpg' });
+        }
+        for (let i = 1; i <= (rawGallery.count || 0); i++) {
+          list.push({ title: 'Sample Illustration #' + i, role: 'sample_' + i, source: 'DLsite Doujin', url: 'https://img.dlsite.jp/modpub/images2/work/doujin/' + bucket + '/' + canonicalRj + '_img_smp' + i + '.jpg' });
+        }
+      }
+      if (!Array.isArray(list) || list.length === 0) return [];
+      const normalized = list.map((g, idx) => normalizeGalleryItem(g, idx)).filter(Boolean);
+      const hasDlsite = normalized.some(item => (item.source || '').includes('DLsite'));
+      const seenUrls = new Set();
+      const seenRoles = new Set();
+      const gallery = [];
+      for (const item of normalized) {
+        if (!item || !item.url) continue;
+        if (hasDlsite && (item.source === 'Weeab0o' || item.url.includes('weeabo0'))) continue;
+        const cleanUrl = item.url.toLowerCase();
+        if (seenUrls.has(cleanUrl)) continue;
+        if (item.role && seenRoles.has(item.role)) continue;
+        seenUrls.add(cleanUrl);
+        if (item.role) seenRoles.add(item.role);
+        gallery.push({ ...item, id: gallery.length + 1 });
+      }
+      return gallery;
+    }
+
     function openWorkGalleryModal() {
       const modal = document.getElementById('workGalleryModal');
       const grid = document.getElementById('workGalleryModalGrid');
       const title = document.getElementById('workGalleryModalTitle');
       if (!modal || !grid) return;
       
-      const gallery = (currentWork && Array.isArray(currentWork.gallery)) ? currentWork.gallery : [];
+      const rawGallery = (currentWork && currentWork.gallery) ? currentWork.gallery : [];
+      const gallery = getCleanWorkGallery(rawGallery, currentWork && currentWork.rjCode);
+
+      if (currentWork) {
+        currentWork.gallery = gallery;
+      }
       if (title && currentWork) {
         title.innerHTML = '🖼️ Gallery: ' + currentWork.title + ' (' + gallery.length + ')';
       }
@@ -5858,32 +6661,19 @@ const INDEX_HTML = `<!DOCTYPE html>
         galleryViewMode = 'strip';
       }
       updateGalleryViewModeUI();
-      
-      function getSourceBadgeStyle(source) {
-        const s = (source || '').toLowerCase();
-        if (s.includes('dlsite')) {
-          return 'color:#38bdf8; background:rgba(56,189,248,0.15); border:1px solid rgba(56,189,248,0.35);'; // Sapphire Blue / Cyan
-        } else if (s.includes('asmr.one') || s.includes('asmr')) {
-          return 'color:#34d399; background:rgba(16,185,129,0.15); border:1px solid rgba(16,185,129,0.35);'; // Emerald Mint
-        } else if (s.includes('weeab') || s.includes('japaneseasmr')) {
-          return 'color:#c084fc; background:rgba(192,132,252,0.15); border:1px solid rgba(192,132,252,0.35);'; // Violet / Purple
-        }
-        return 'color:#fb923c; background:rgba(251,146,60,0.15); border:1px solid rgba(251,146,60,0.35);'; // Amber Accent
-      }
 
       if (gallery.length === 0) {
         grid.innerHTML = '<div style="color:var(--text-muted); text-align:center; padding:30px; width:100%;">No illustrations or bonus artwork found for this work.</div>';
       } else {
         let html = '';
         gallery.forEach(function(g, gi) {
-          const cap = (g.title || ('Artwork #' + (gi + 1))).replace(/'/g, "\\'");
           const pUrl = g.proxyUrl || g.url;
-          const src = g.source || (g.url && g.url.includes('dlsite') ? 'DLsite' : (g.url && g.url.includes('weeabo0') ? 'Weeab0o' : 'ASMR.one'));
-          const label = g.title ? g.title : ('Page #' + (gi + 1));
+          const src = g.source || 'DLsite Doujin';
+          const label = g.title || ('Page #' + (gi + 1));
           const srcStyle = getSourceBadgeStyle(src);
           html += '<div class="gallery-card" data-idx="' + gi + '" onclick="openLightboxModal(null, null, null, parseInt(this.dataset.idx))">';
           html += '<div class="gallery-thumb-wrap"><img class="gallery-thumb" src="' + pUrl + '" loading="lazy" onerror="handleImgError(this)"></div>';
-          html += '<div class="gallery-card-title" title="' + (g.title || '') + '">' + label + '</div>';
+          html += '<div class="gallery-card-title" title="' + label + '">' + label + '</div>';
           html += '<div class="gallery-card-source" style="font-size:0.72rem; color:var(--text-muted); margin-top:3px; display:flex; justify-content:space-between; align-items:center; width:100%;"><span>#' + (gi + 1) + '</span><span style="font-weight:700; padding:1px 6px; border-radius:4px; font-size:0.68rem; ' + srcStyle + '">' + src + '</span></div>';
           html += '</div>';
         });
@@ -5910,6 +6700,9 @@ const INDEX_HTML = `<!DOCTYPE html>
     let initialPanY = 0;
     let touchInitialDist = 0;
     let touchStartZoom = 1.0;
+    let lightboxTouchStartX = 0;
+    let lightboxTouchStartY = 0;
+    let lightboxLastTapTime = 0;
 
     function updateLightboxTransform(animate = true) {
       const img = document.getElementById('lightboxImg');
@@ -5953,17 +6746,19 @@ const INDEX_HTML = `<!DOCTYPE html>
 
     function onLightboxMouseDown(e) {
       if (e.button !== 0) return; // Left mouse button only
-      isDraggingLightbox = true;
-      startDragX = e.clientX;
-      startDragY = e.clientY;
-      initialPanX = lightboxPanX;
-      initialPanY = lightboxPanY;
-      updateLightboxTransform(false);
-      e.preventDefault();
+      if (lightboxZoomLevel > 1.05) {
+        isDraggingLightbox = true;
+        startDragX = e.clientX;
+        startDragY = e.clientY;
+        initialPanX = lightboxPanX;
+        initialPanY = lightboxPanY;
+        updateLightboxTransform(false);
+        e.preventDefault();
+      }
     }
 
     function onLightboxMouseMove(e) {
-      if (!isDraggingLightbox) return;
+      if (!isDraggingLightbox || lightboxZoomLevel <= 1.05) return;
       const dx = e.clientX - startDragX;
       const dy = e.clientY - startDragY;
       lightboxPanX = initialPanX + dx;
@@ -5983,12 +6778,34 @@ const INDEX_HTML = `<!DOCTYPE html>
 
     function onLightboxTouchStart(e) {
       if (e.touches.length === 1) {
-        isDraggingLightbox = true;
-        startDragX = e.touches[0].clientX;
-        startDragY = e.touches[0].clientY;
-        initialPanX = lightboxPanX;
-        initialPanY = lightboxPanY;
-        updateLightboxTransform(false);
+        const now = Date.now();
+        const touch = e.touches[0];
+        lightboxTouchStartX = touch.clientX;
+        lightboxTouchStartY = touch.clientY;
+
+        // Double-tap to toggle zoom (300ms)
+        if (now - lightboxLastTapTime < 300) {
+          if (lightboxZoomLevel > 1.05) {
+            resetLightboxZoom();
+          } else {
+            lightboxZoomLevel = 2.2;
+            lightboxPanX = 0;
+            lightboxPanY = 0;
+            updateLightboxTransform(true);
+          }
+          lightboxLastTapTime = 0;
+          return;
+        }
+        lightboxLastTapTime = now;
+
+        if (lightboxZoomLevel > 1.05) {
+          isDraggingLightbox = true;
+          startDragX = touch.clientX;
+          startDragY = touch.clientY;
+          initialPanX = lightboxPanX;
+          initialPanY = lightboxPanY;
+          updateLightboxTransform(false);
+        }
       } else if (e.touches.length === 2) {
         isDraggingLightbox = false;
         const dx = e.touches[0].clientX - e.touches[1].clientX;
@@ -5999,7 +6816,7 @@ const INDEX_HTML = `<!DOCTYPE html>
     }
 
     function onLightboxTouchMove(e) {
-      if (e.touches.length === 1 && isDraggingLightbox) {
+      if (e.touches.length === 1 && isDraggingLightbox && lightboxZoomLevel > 1.05) {
         const dx = e.touches[0].clientX - startDragX;
         const dy = e.touches[0].clientY - startDragY;
         lightboxPanX = initialPanX + dx;
@@ -6019,10 +6836,23 @@ const INDEX_HTML = `<!DOCTYPE html>
 
     function onLightboxTouchEnd(e) {
       if (e.touches.length === 0) {
+        if (lightboxZoomLevel <= 1.05 && e.changedTouches && e.changedTouches.length > 0) {
+          const endX = e.changedTouches[0].clientX;
+          const endY = e.changedTouches[0].clientY;
+          const deltaX = endX - lightboxTouchStartX;
+          const deltaY = endY - lightboxTouchStartY;
+          if (Math.abs(deltaX) > 45 && Math.abs(deltaY) < 60) {
+            if (deltaX < 0) {
+              navLightbox(1); // Swipe left -> Next
+            } else {
+              navLightbox(-1); // Swipe right -> Prev
+            }
+          }
+        }
         isDraggingLightbox = false;
         touchInitialDist = 0;
         updateLightboxTransform(false);
-      } else if (e.touches.length === 1) {
+      } else if (e.touches.length === 1 && lightboxZoomLevel > 1.05) {
         startDragX = e.touches[0].clientX;
         startDragY = e.touches[0].clientY;
         initialPanX = lightboxPanX;
@@ -6035,19 +6865,23 @@ const INDEX_HTML = `<!DOCTYPE html>
       const modal = document.getElementById('imageLightboxModal');
       if (!modal) return;
 
+      let sourceList = null;
       if (Array.isArray(galleryList) && galleryList.length > 0) {
-        currentLightboxGallery = galleryList;
-        currentLightboxIndex = (index >= 0 && index < galleryList.length) ? index : 0;
+        sourceList = galleryList;
       } else if (currentWork && Array.isArray(currentWork.gallery) && currentWork.gallery.length > 0) {
-        currentLightboxGallery = currentWork.gallery;
+        sourceList = currentWork.gallery;
+      }
+
+      if (sourceList && sourceList.length > 0) {
+        currentLightboxGallery = getCleanWorkGallery(sourceList);
         if (imgUrl) {
           const foundIdx = currentLightboxGallery.findIndex(g => (g.proxyUrl === imgUrl || g.url === imgUrl));
-          currentLightboxIndex = foundIdx !== -1 ? foundIdx : 0;
+          currentLightboxIndex = foundIdx !== -1 ? foundIdx : (index >= 0 && index < currentLightboxGallery.length ? index : 0);
         } else {
           currentLightboxIndex = (index >= 0 && index < currentLightboxGallery.length) ? index : 0;
         }
       } else if (imgUrl) {
-        currentLightboxGallery = [{ url: imgUrl, proxyUrl: imgUrl, title: caption || '' }];
+        currentLightboxGallery = [normalizeGalleryItem({ url: imgUrl, proxyUrl: imgUrl, title: caption || 'Illustration Preview' }, 0)];
         currentLightboxIndex = 0;
       } else {
         return;
@@ -6055,6 +6889,7 @@ const INDEX_HTML = `<!DOCTYPE html>
 
       resetLightboxZoom();
       renderLightboxCurrent();
+      modal.style.zIndex = '10010';
       modal.style.display = 'flex';
       updateScrollWidgetVisibility();
     }
@@ -6073,8 +6908,8 @@ const INDEX_HTML = `<!DOCTYPE html>
       img.src = item.proxyUrl || item.url || '';
       const total = currentLightboxGallery.length;
       const titleText = item.title || ('Artwork #' + (currentLightboxIndex + 1));
-      const src = item.source || (item.url && item.url.includes('dlsite') ? 'DLsite' : (item.url && item.url.includes('weeabo0') ? 'Weeab0o' : 'ASMR.one'));
-      const srcStyle = (typeof getSourceBadgeStyle === 'function') ? getSourceBadgeStyle(src) : 'color:var(--accent); background:rgba(255,255,255,0.15); border:1px solid rgba(255,255,255,0.25);';
+      const src = item.source || (item.url && item.url.includes('dlsite') ? 'DLsite Doujin' : (item.url && item.url.includes('weeabo0') ? 'Weeab0o' : 'ASMR.one'));
+      const srcStyle = getSourceBadgeStyle(src);
       if (cap) {
         cap.innerHTML = (total > 1 ? '[' + (currentLightboxIndex + 1) + ' / ' + total + '] ' : '') + titleText + ' <span style="font-weight:700; margin-left:8px; font-size:0.78rem; padding:2px 8px; border-radius:4px; ' + srcStyle + '">' + src + '</span>';
       }
@@ -6748,7 +7583,7 @@ const INDEX_HTML = `<!DOCTYPE html>
         } else {
           const t1 = new Date(existing.playedAt || 0).getTime();
           const t2 = new Date(item.playedAt || 0).getTime();
-          if (t2 > t1) {
+          if (t2 >= t1) {
             map.set(key, { ...existing, ...item });
           } else {
             map.set(key, { ...item, ...existing });
@@ -6758,6 +7593,31 @@ const INDEX_HTML = `<!DOCTYPE html>
       const merged = Array.from(map.values());
       merged.sort((a, b) => new Date(b.playedAt || 0) - new Date(a.playedAt || 0));
       return merged.slice(0, 20);
+    }
+
+    async function syncHistoryInBackground() {
+      if (!isAdmin) return;
+      try {
+        let localHistory = [];
+        try {
+          localHistory = JSON.parse(localStorage.getItem('astreamer_play_history') || '[]');
+        } catch(e) { localHistory = []; }
+
+        const res = await apiFetch('/api/history');
+        if (!res.ok) return;
+        const remoteHistory = await res.json();
+        const merged = mergeHistoryLists(remoteHistory, localHistory);
+        try {
+          localStorage.setItem('astreamer_play_history', JSON.stringify(merged));
+        } catch(e) {}
+
+        if (merged.length > 0 && JSON.stringify(merged) !== JSON.stringify(remoteHistory)) {
+          apiFetch('/api/history', {
+            method: 'POST',
+            body: JSON.stringify({ history: merged })
+          }).catch(() => {});
+        }
+      } catch(e) {}
     }
 
     async function loadHistory() {
@@ -6786,11 +7646,11 @@ const INDEX_HTML = `<!DOCTYPE html>
         localStorage.setItem('astreamer_play_history', JSON.stringify(history));
       } catch(e) {}
 
-      // If local had newer items not in remote, sync top item to remote KV
-      if (history.length > 0 && remoteHistory.length > 0 && normRj(history[0].rjCode) !== normRj(remoteHistory[0].rjCode)) {
+      // If local had items not yet in remote, or if merged list differs from remote, push full merged list to KV
+      if (history.length > 0 && JSON.stringify(history) !== JSON.stringify(remoteHistory)) {
         apiFetch('/api/history', {
           method: 'POST',
-          body: JSON.stringify(history[0])
+          body: JSON.stringify({ history: history })
         }).catch(() => {});
       }
 
@@ -6842,7 +7702,7 @@ const INDEX_HTML = `<!DOCTYPE html>
         html += '<td class="w-col-cover"><a href="#/work/' + item.rjCode + '" data-rj="' + item.rjCode + '" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); navWork(this.dataset.rj); }"><img class="list-thumb" src="' + displayCover.coverUrl + '" data-rj="' + item.rjCode + '" onerror="handleImgError(this)"></a></td>';
         html += '<td class="w-col-rj"><a href="#/work/' + item.rjCode + '" data-rj="' + item.rjCode + '" class="card-rj" style="text-decoration:none; display:inline-block;" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); navWork(this.dataset.rj); }">' + item.rjCode + '</a></td>';
         html += '<td class="w-col-title"><a href="#/work/' + item.rjCode + '" data-rj="' + item.rjCode + '" style="color:inherit; text-decoration:none;" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); navWork(this.dataset.rj); }"><strong>' + item.title + '</strong>' + (item.trackTitle ? '<div style="font-size:0.75rem; color:var(--text-muted); margin-top:2px;">Track: ' + item.trackTitle + '</div>' : '') + '</a></td>';
-        html += '<td class="w-col-meta"><div class="w-meta-inner">' + metaLine + '<span style="color:var(--text-muted); font-size:0.72rem; margin-left:4px;" title="' + fullDate + '">🕒 ' + relTime + '</span></div></td>';
+        html += '<td class="w-col-meta"><div class="w-meta-inner">' + metaLine + '<span class="history-mobile-date" style="color:var(--text-muted); font-size:0.72rem; margin-left:4px;" title="' + fullDate + '"> • 🕒 ' + relTime + '</span></div></td>';
         html += '<td class="w-col-date" style="color:var(--text-muted); font-size:0.8rem;" title="' + fullDate + '">🕒 ' + relTime + '</td>';
         html += '<td class="w-col-actions" style="text-align:right;"><button class="btn-outline" style="padding:3px 8px; font-size:0.75rem;" data-rj="' + item.rjCode + '" onclick="event.stopPropagation(); playWorkDirectly(this.dataset.rj)">▶ Play</button></td>';
         html += '</tr>';
@@ -6907,6 +7767,14 @@ const INDEX_HTML = `<!DOCTYPE html>
 
       html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🔑 Admin Authentication Session</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Lock your session or switch admin credentials.</p>';
       html += '<button class="btn-outline" style="border-color: rgba(255,51,102,0.4); color: #ff3366;" onclick="toggleAdminModal()">🚪 Lock / Log Out Admin</button></div>';
+
+      // 🛠️ Developer Mode & Activity Diagnostics Log
+      const devModeActive = isDevModeEnabled();
+      html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🛠️ Developer Diagnostics &amp; Activity Log</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Log background scraper events, network requests, audio resolutions, and playback errors into a lightweight rolling local cache buffer.</p>';
+      html += '<div style="display:flex; flex-direction:column; gap:12px;">';
+      html += '<label style="display: flex; align-items: center; gap: 12px; cursor: pointer; user-select: none; background: rgba(255,255,255,0.04); padding: 12px 16px; border-radius: 10px; border: 1px solid var(--border);"><input type="checkbox" id="toggleDevMode" ' + (devModeActive ? 'checked' : '') + ' onchange="setDevMode(this.checked)" style="width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer;"><div><div style="font-weight: 700; font-size: 0.95rem; color: #fff;">Enable Dev Diagnostics Mode (Default On)</div><div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 2px;">Records rolling logs for the last 100 activities and errors without consuming server KV storage.</div></div></label>';
+      html += '<div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center;"><button class="btn-primary" onclick="openDevLogModal()">📋 Open Activity Log Viewer</button><button class="btn-outline" onclick="clearDevLogs()">🗑️ Clear Log Cache</button><button class="btn-outline" onclick="exportDevLogs()">💾 Download .log File</button></div>';
+      html += '</div></div>';
 
       html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🚀 aStreamer v2.0 Milestone Release</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Instant Batch Ingestion with Parallel Fast-Probing, On-Demand Lazy Audio Stream Extraction, Custom Accent Color Themes (Orange Default), and Streamlined Audio Controls.</p>';
       html += '<button class="btn-outline" onclick="openChangelogModal()">📜 View Version 2.0 Release Notes & Architecture</button></div>';
@@ -7127,9 +7995,10 @@ const INDEX_HTML = `<!DOCTYPE html>
             reqDur = Math.round(workItem.tracks[0].duration);
           }
         }
-        if (reqDur > 0) {
-          apiUrl += '?duration=' + reqDur;
-        }
+        const qParams = [];
+        if (force) qParams.push('force=true');
+        if (reqDur > 0) qParams.push('duration=' + reqDur);
+        if (qParams.length > 0) apiUrl += '?' + qParams.join('&');
         const res = await apiFetch(apiUrl);
         const data = await res.json();
         if (data && data.success) {
@@ -7185,6 +8054,25 @@ const INDEX_HTML = `<!DOCTYPE html>
                   playTrack(0, true, currentPlayingWork);
                 }
               }
+            } else {
+              const alignDurations = (workObj) => {
+                if (!workObj || !Array.isArray(workObj.tracks)) return;
+                data.audioTracks.forEach((gt, idx) => {
+                  if (gt.duration > 0 && workObj.tracks[idx]) {
+                    workObj.tracks[idx].duration = gt.duration;
+                    workObj.tracks[idx].formattedTime = formatTime(gt.duration);
+                  }
+                });
+              };
+              if (target) alignDurations(target);
+              if (currentWork && normRj(currentWork.rjCode) === normRj(rjCode)) {
+                alignDurations(currentWork);
+                updatedUI = true;
+              }
+              if (currentPlayingWork && normRj(currentPlayingWork.rjCode) === normRj(rjCode)) {
+                alignDurations(currentPlayingWork);
+                updatedUI = true;
+              }
             }
           } else {
             if (target && target.tracks && target.tracks.some(t => t.isLazy && !t.rawUrl)) {
@@ -7215,14 +8103,15 @@ const INDEX_HTML = `<!DOCTYPE html>
           }
 
           if (Array.isArray(data.gallery)) {
-            if (target) target.gallery = data.gallery;
+            const cleanGal = getCleanWorkGallery(data.gallery);
+            if (target) target.gallery = cleanGal;
             if (currentWork && normRj(currentWork.rjCode) === normRj(rjCode)) {
-              currentWork.gallery = data.gallery;
+              currentWork.gallery = cleanGal;
               const gBtn = document.getElementById('btnWorkGallery');
               const gCount = document.getElementById('btnWorkGalleryCount');
               if (gBtn && gCount) {
-                gCount.innerText = data.gallery.length;
-                gBtn.style.display = data.gallery.length > 0 ? 'inline-flex' : 'none';
+                gCount.innerText = cleanGal.length;
+                gBtn.style.display = cleanGal.length > 0 ? 'inline-flex' : 'none';
               }
               updatedUI = true;
             }
@@ -7493,7 +8382,7 @@ const INDEX_HTML = `<!DOCTYPE html>
     async function refreshSingleWork(rjCode, btnEl, isAuto = false) {
       const cleanRjKey = normRj(rjCode);
       workAutoRefreshedInSession.add(cleanRjKey);
-      const origHtml = '🔄 Refresh';
+      const origHtml = '🔄 Refetch';
 
       const updateStageText = (txt) => {
         singleWorkRefreshStages.set(cleanRjKey, txt);
@@ -7510,66 +8399,178 @@ const INDEX_HTML = `<!DOCTYPE html>
         chapterFetchCache.delete(rjCode);
         chapterFetchCache.delete(cleanRjKey);
 
+        const idx = allWorks.findIndex(w => normRj(w.rjCode) === cleanRjKey);
+        const existingWorkObj = idx !== -1 ? allWorks[idx] : currentWork;
+
         // -------------------------------------------------------------
-        // PHASE 1: 🎵 Fast Tracks Stream Fetch
+        // PHASE 1: 🎵 Fast Tracks & Chapters Stream Fetch (Always force fresh fetch on refetch)
         // -------------------------------------------------------------
         updateStageText('[1/4] 🎵 Tracks...');
-        showToast('🎵 [1/4] Resolving tracks for ' + rjCode + '...', 3000);
+        showToast('🎵 [1/4] Resolving tracks for ' + rjCode + '...', 2500);
+        devLog('INFO', 'REFETCH', '[Phase 1] Probing chapters & audio streams for ' + rjCode);
         const chapData = await fetchChaptersLazy(rjCode, true);
-        await new Promise(r => setTimeout(r, 220));
+        devLog('INFO', 'REFETCH', '[Phase 1] Probed tracks result for ' + rjCode, { audioTracks: chapData?.audioTracks?.length || 0, sampleTracks: chapData?.sampleTracks?.length || 0 });
 
         // -------------------------------------------------------------
         // PHASE 2: 🏷️ Tags, CV, Circle & Metadata Refresh
         // -------------------------------------------------------------
         updateStageText('[2/4] 🏷️ CV & Tags...');
-        showToast('🏷️ [2/4] Updating CV, Circle & Tags for ' + rjCode + '...', 3000);
-        const metaRes = await apiFetch('/api/library/refresh/' + encodeURIComponent(rjCode), { method: 'POST' });
-        const metaData = await metaRes.json();
+        showToast('🏷️ [2/4] Updating CV, Circle & Tags for ' + rjCode + '...', 2500);
+
+        // Assist backend with direct client-side probe (bypasses Cloudflare Worker datacenter IP block)
+        let clientMoeInfo = null;
+        try {
+          const rawLower = String(rjCode || '').toLowerCase().trim();
+          const cleanLower = cleanRjKey.toLowerCase();
+          const cleanUpper = cleanRjKey.toUpperCase();
+          const cleanNum = cleanRjKey.replace(/^(?:RJ|VJ|BJ)/i, '');
+          const strippedNum = cleanNum.replace(/^0+/, '');
+          
+          const slugCandidates = Array.from(new Set([
+            rawLower,
+            cleanLower,
+            'rj' + cleanNum,
+            'rj' + strippedNum,
+            cleanNum,
+            strippedNum
+          ])).filter(Boolean);
+
+          for (const s of slugCandidates) {
+            if (clientMoeInfo) break;
+            const clientWpUrl = 'https://hentaiasmr.moe/wp-json/wp/v2/posts?slug=' + encodeURIComponent(s) + '&_embed=1';
+            devLog('TRACE', 'CLIENT_PROBE', 'Client probing WP REST slug: ' + clientWpUrl);
+            try {
+              const cRes = await fetch(clientWpUrl, { headers: { 'Accept': 'application/json' } });
+              if (cRes.ok) {
+                const cPosts = await cRes.json();
+                if (Array.isArray(cPosts) && cPosts.length > 0 && cPosts[0].id) {
+                  const p = cPosts[0];
+                  clientMoeInfo = {
+                    postId: p.id,
+                    title: p.title?.rendered ? p.title.rendered.replace(/&#8211;|&#8212;/g, '-').replace(/&amp;/g, '&') : '',
+                    url: 'https://cdn.hentaiasmr.moe/mf/' + p.id + '/merge/' + cleanUpper + '.mp3',
+                    link: p.link || ('https://hentaiasmr.moe/' + rawLower + '.html')
+                  };
+                  devLog('INFO', 'CLIENT_PROBE', '✅ Client discovered Moe Post ID: ' + p.id + ' via slug (' + s + ') -> ' + clientMoeInfo.url);
+                  break;
+                }
+              }
+            } catch (e) {}
+          }
+
+          if (!clientMoeInfo) {
+            const searchUrl = 'https://hentaiasmr.moe/wp-json/wp/v2/posts?search=' + encodeURIComponent(cleanUpper) + '&per_page=5&_embed=1';
+            devLog('TRACE', 'CLIENT_PROBE', 'Client searching WP REST: ' + searchUrl);
+            try {
+              const sRes = await fetch(searchUrl, { headers: { 'Accept': 'application/json' } });
+              if (sRes.ok) {
+                const sPosts = await sRes.json();
+                if (Array.isArray(sPosts) && sPosts.length > 0) {
+                  const validSlugs = [rawLower, cleanLower, 'rj' + cleanNum, 'rj' + strippedNum, cleanNum, strippedNum];
+                  const p = sPosts.find(item => {
+                    const postSlug = (item.slug || '').toLowerCase();
+                    const postTitle = (item.title?.rendered || '').toLowerCase();
+                    const postLink = (item.link || '').toLowerCase();
+                    return validSlugs.some(v => postSlug === v || postSlug.includes(v) || postLink.includes(v) || postTitle.includes(v));
+                  }) || sPosts[0];
+                  if (p && p.id) {
+                    clientMoeInfo = {
+                      postId: p.id,
+                      title: p.title?.rendered ? p.title.rendered.replace(/&#8211;|&#8212;/g, '-').replace(/&amp;/g, '&') : '',
+                      url: 'https://cdn.hentaiasmr.moe/mf/' + p.id + '/merge/' + cleanUpper + '.mp3',
+                      link: p.link || ('https://hentaiasmr.moe/' + rawLower + '.html')
+                    };
+                    devLog('INFO', 'CLIENT_PROBE', '✅ Client discovered Moe Post ID: ' + p.id + ' via search -> ' + clientMoeInfo.url);
+                  }
+                }
+              }
+            } catch (e) {}
+          }
+        } catch (cpErr) {
+          devLog('TRACE', 'CLIENT_PROBE', 'Client WP REST probe error: ' + cpErr.message);
+        }
+
+        devLog('INFO', 'REFETCH', '[Phase 2] Requesting backend reprobe & metadata refresh for ' + rjCode);
+        let metaData = null;
+        try {
+          const refreshUrl = '/api/library/refresh/' + encodeURIComponent(rjCode) + '?force=true&reprobeAudio=true';
+          const metaRes = await apiFetch(refreshUrl, {
+            method: 'POST',
+            body: clientMoeInfo ? JSON.stringify({ clientMoe: clientMoeInfo }) : undefined
+          });
+          if (metaRes.ok) {
+            metaData = await metaRes.json();
+            devLog('INFO', 'REFETCH', '[Phase 2] Backend reprobe succeeded for ' + rjCode, { success: metaData.success, trackCount: metaData.work?.tracks?.length || 0 });
+          } else {
+            devLog('WARN', 'REFETCH', '[Phase 2] Backend refresh returned status ' + metaRes.status + ' for ' + rjCode);
+          }
+        } catch (mErr) {
+          devLog('ERROR', 'REFETCH', '[Phase 2] Backend refresh error for ' + rjCode + ': ' + mErr.message);
+        }
+
+        const freshWork = (metaData && metaData.work) || {};
+        const freshTracks = (freshWork.tracks && Array.isArray(freshWork.tracks) && freshWork.tracks.length > 0 && !freshWork.tracks[0].isLazy)
+          ? freshWork.tracks
+          : ((chapData && Array.isArray(chapData.audioTracks) && chapData.audioTracks.length > 0) ? chapData.audioTracks : (freshWork.tracks || existingWorkObj?.tracks || []));
+        const freshGallery = (chapData && Array.isArray(chapData.gallery) && chapData.gallery.length > 0) ? chapData.gallery : (freshWork.gallery || existingWorkObj?.gallery || []);
+        const freshChapters = (chapData && Array.isArray(chapData.chapters) && chapData.chapters.length > 0) ? chapData.chapters : (freshWork.chapters || existingWorkObj?.chapters || []);
+        const freshSamples = (chapData && Array.isArray(chapData.sampleTracks) && chapData.sampleTracks.length > 0) ? chapData.sampleTracks : (freshWork.sampleTracks || existingWorkObj?.sampleTracks || []);
+
+        const existingCover = (idx !== -1 && allWorks[idx].coverUrl) || (currentWork && currentWork.coverUrl) || '';
 
         if (metaData && metaData.success && metaData.work) {
-          const idx = allWorks.findIndex(w => normRj(w.rjCode) === cleanRjKey);
-          const existingCover = (idx !== -1 && allWorks[idx].coverUrl) || (currentWork && currentWork.coverUrl) || '';
           if (idx !== -1) {
             allWorks[idx] = Object.assign({}, allWorks[idx], metaData.work);
-            if ((!allWorks[idx].coverUrl || allWorks[idx].coverUrl.includes('placeholder')) && existingCover && !existingCover.includes('placeholder')) {
-              allWorks[idx].coverUrl = existingCover;
-            }
+          } else {
+            allWorks.unshift(metaData.work);
           }
           if (currentWork && normRj(currentWork.rjCode) === cleanRjKey) {
-            const curTracks = currentWork.tracks;
-            const curGallery = currentWork.gallery;
-            const curChapters = currentWork.chapters;
-            const curCover = currentWork.coverUrl || existingCover;
             currentWork = Object.assign({}, currentWork, metaData.work);
-            if (curTracks && curTracks.length > 1) currentWork.tracks = curTracks;
-            if (curGallery && curGallery.length > 0) currentWork.gallery = curGallery;
-            if (curChapters && curChapters.length > 0) currentWork.chapters = curChapters;
-            if ((!currentWork.coverUrl || currentWork.coverUrl.includes('placeholder')) && curCover && !curCover.includes('placeholder')) {
-              currentWork.coverUrl = curCover;
-            }
+          }
+          // Remove from wishlist if it was wishlisted
+          if (window.wishlist && Array.isArray(window.wishlist)) {
+            window.wishlist = window.wishlist.filter(w => normRj(w.rjCode) !== cleanRjKey);
+            updateWishlistBadge();
           }
         }
-        await new Promise(r => setTimeout(r, 220));
+
+        const targetIdx = allWorks.findIndex(w => normRj(w.rjCode) === cleanRjKey);
+        if (targetIdx !== -1) {
+          if (freshTracks && freshTracks.length > 0) allWorks[targetIdx].tracks = freshTracks;
+          if (freshGallery && freshGallery.length > 0) allWorks[targetIdx].gallery = freshGallery;
+          if (freshChapters && freshChapters.length > 0) allWorks[targetIdx].chapters = freshChapters;
+          if (freshSamples && freshSamples.length > 0) allWorks[targetIdx].sampleTracks = freshSamples;
+          if ((!allWorks[targetIdx].coverUrl || allWorks[targetIdx].coverUrl.includes('placeholder')) && existingCover && !existingCover.includes('placeholder')) {
+            allWorks[targetIdx].coverUrl = existingCover;
+          }
+        }
+        if (currentWork && normRj(currentWork.rjCode) === cleanRjKey) {
+          if (freshTracks && freshTracks.length > 0) currentWork.tracks = freshTracks;
+          if (freshGallery && freshGallery.length > 0) currentWork.gallery = freshGallery;
+          if (freshChapters && freshChapters.length > 0) currentWork.chapters = freshChapters;
+          if (freshSamples && freshSamples.length > 0) currentWork.sampleTracks = freshSamples;
+          if ((!currentWork.coverUrl || currentWork.coverUrl.includes('placeholder')) && existingCover && !existingCover.includes('placeholder')) {
+            currentWork.coverUrl = existingCover;
+          }
+        }
 
         // -------------------------------------------------------------
-        // PHASE 3: 📑 Chapters & Cue Alignment
+        // PHASE 3: 📑 Chapters & Cue Alignment (Skip if already scraped in this refetch pass)
         // -------------------------------------------------------------
-        updateStageText('[3/4] 📑 Chapters...');
-        showToast('📑 [3/4] Aligning chapters & timestamps...', 3000);
-        const chapsCount = (chapData && Array.isArray(chapData.chapters)) ? chapData.chapters.length : ((currentWork && Array.isArray(currentWork.chapters)) ? currentWork.chapters.length : 0);
-        await new Promise(r => setTimeout(r, 220));
+        const chapsCount = (freshChapters && Array.isArray(freshChapters)) ? freshChapters.length : 0;
+        if (chapsCount === 0) {
+          updateStageText('[3/4] 📑 Chapters...');
+        }
 
         // -------------------------------------------------------------
-        // PHASE 4: 🖼️ Artwork & Gallery Finalization
+        // PHASE 4: 🖼️ Artwork & Gallery Finalization (Skip if already scraped in this refetch pass)
         // -------------------------------------------------------------
-        updateStageText('[4/4] 🖼️ Artwork...');
-        showToast('🖼️ [4/4] Finalizing illustrations & artwork...', 3000);
-        const galleryCount = (chapData && Array.isArray(chapData.gallery)) ? chapData.gallery.length : ((currentWork && Array.isArray(currentWork.gallery)) ? currentWork.gallery.length : 0);
-        const tracksCount = (currentWork && Array.isArray(currentWork.tracks)) ? currentWork.tracks.length : 0;
+        const galleryCount = (freshGallery && Array.isArray(freshGallery)) ? freshGallery.length : 0;
+        const tracksCount = (freshTracks && Array.isArray(freshTracks)) ? freshTracks.length : 0;
         const tagsCount = (currentWork && Array.isArray(currentWork.tags)) ? currentWork.tags.length : 0;
-        await new Promise(r => setTimeout(r, 220));
 
         singleWorkRefreshStages.delete(cleanRjKey);
+        devLog('INFO', 'REFETCH', 'Refetch completed successfully for ' + rjCode, { tracks: tracksCount, chapters: chapsCount, gallery: galleryCount, tags: tagsCount });
 
         // Synchronize and render UI cleanly when all phases have completed
         if (currentView === 'work-detail' && currentWork && normRj(currentWork.rjCode) === cleanRjKey) {
@@ -7583,7 +8584,7 @@ const INDEX_HTML = `<!DOCTYPE html>
                 const b = document.getElementById('btnWorkRefresh');
                 if (b && b.dataset.rj && normRj(b.dataset.rj) === cleanRjKey) {
                   b.disabled = false;
-                  b.innerHTML = '🔄 Refresh';
+                  b.innerHTML = '🔄 Refetch';
                 }
               }
             }, 2000);
@@ -8283,14 +9284,20 @@ const INDEX_HTML = `<!DOCTYPE html>
     }
 
     function normalizeStreamUrl(url, cleanRj = '', referer = '') {
-      if (!url && cleanRj) return '/stream?url=' + encodeURIComponent('https://v.weeab0o.xyz/' + cleanRj + '.m3u8') + '&referer=' + encodeURIComponent('https://japaneseasmr.com/');
+      if (!url && cleanRj) return '/stream?url=' + encodeURIComponent('https://v.weeab0o.xyz/' + cleanRj + '.m3u8') + '&referer=' + encodeURIComponent('https://japaneseasmr.com/') + '&rj=' + encodeURIComponent(cleanRj);
       if (!url) return '';
       let u = url.trim();
       if (u.startsWith('//')) u = 'https:' + u;
-      if (u.startsWith('/stream?url=') || u.startsWith('/stream-proxy?url=')) return u;
+      if (u.startsWith('/stream?url=') || u.startsWith('/stream-proxy?url=')) {
+        if (cleanRj && !u.includes('&rj=')) {
+          u += '&rj=' + encodeURIComponent(cleanRj);
+        }
+        return u;
+      }
       if (u.startsWith('http://') || u.startsWith('https://')) {
         let res = '/stream?url=' + encodeURIComponent(u);
         if (referer) res += '&referer=' + encodeURIComponent(referer);
+        if (cleanRj && !res.includes('&rj=')) res += '&rj=' + encodeURIComponent(cleanRj);
         return res;
       }
       return u;
@@ -8607,9 +9614,23 @@ const INDEX_HTML = `<!DOCTYPE html>
     audio.addEventListener('loadedmetadata', () => {
       const dur = audio.duration;
       if (dur && !isNaN(dur) && dur > 0 && currentPlayingWork) {
+        const roundedDur = Math.round(dur);
         if (currentPlayingWork.tracks && currentPlayingWork.tracks[currentTrackIndex]) {
-          currentPlayingWork.tracks[currentTrackIndex].duration = Math.round(dur);
-          currentPlayingWork.tracks[currentTrackIndex].formattedTime = formatTime(Math.round(dur));
+          currentPlayingWork.tracks[currentTrackIndex].duration = roundedDur;
+          currentPlayingWork.tracks[currentTrackIndex].formattedTime = formatTime(roundedDur);
+        }
+        if (currentWork && normRj(currentWork.rjCode) === normRj(currentPlayingWork.rjCode)) {
+          if (currentWork.tracks && currentWork.tracks[currentTrackIndex]) {
+            currentWork.tracks[currentTrackIndex].duration = roundedDur;
+            currentWork.tracks[currentTrackIndex].formattedTime = formatTime(roundedDur);
+          }
+          const rowEl = document.getElementById('track-row-' + currentTrackIndex);
+          if (rowEl) {
+            const badge = rowEl.querySelector('.track-dur-badge');
+            if (badge) {
+              badge.innerText = '(' + formatTime(roundedDur) + ')';
+            }
+          }
         }
         const numTracks = (currentPlayingWork.tracks) ? currentPlayingWork.tracks.length : 1;
         if (numTracks <= 1 && Array.isArray(currentPlayingWork.chapters) && currentPlayingWork.chapters.length > 0) {

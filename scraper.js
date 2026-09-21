@@ -37,15 +37,27 @@ function formatServerTime(secs) {
   return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
 }
 
+function getCanonicalDlsiteRj(rjCode) {
+  const clean = (rjCode || '').toUpperCase().trim();
+  const match = clean.match(/^(?:RJ|VJ|BJ)?(\d+)$/i);
+  if (!match) return clean;
+  const pref = (clean.match(/^(RJ|VJ|BJ)/i) || [])[1] || 'RJ';
+  const num = parseInt(match[1], 10);
+  if (isNaN(num) || num <= 0) return clean;
+  const targetLen = num >= 1000000 ? 8 : 6;
+  return pref.toUpperCase() + String(num).padStart(targetLen, '0');
+}
+
 function getDlsiteCoverBucket(rjCode) {
   const clean = (rjCode || '').toUpperCase().trim();
   const match = clean.match(/^(?:RJ|VJ|BJ)?(\d+)$/i);
   if (!match) return clean;
   const pref = (clean.match(/^(RJ|VJ|BJ)/i) || [])[1] || 'RJ';
-  const digits = match[1];
-  const num = parseInt(digits, 10);
+  const num = parseInt(match[1], 10);
+  if (isNaN(num) || num <= 0) return clean;
   const bucketNum = Math.ceil(num / 1000) * 1000;
-  return pref.toUpperCase() + String(bucketNum).padStart(digits.length, '0');
+  const targetLen = num >= 1000000 ? 8 : 6;
+  return pref.toUpperCase() + String(bucketNum).padStart(targetLen, '0');
 }
 
 function parseIsoDuration(str) {
@@ -88,10 +100,19 @@ async function fetchHentaiAsmrMetadata(cleanRj, options = {}) {
   if (!cleanUpper) return null;
   const skipAudioProbe = Boolean(options && options.skipAudioProbe);
 
-  // 1. Query WordPress REST API by slug then search
+  const cleanNum = cleanUpper.replace(/^(?:RJ|VJ|BJ)/i, '');
+  const strippedNum = cleanNum.replace(/^0+/, '');
+  const strippedLower = `rj${strippedNum}`;
+  const strippedUpper = `RJ${strippedNum}`;
+
+  // 1. Query WordPress REST API by slug & search (both 8-digit, stripped, and numeric)
   const apiUrls = [
     `https://hentaiasmr.moe/wp-json/wp/v2/posts?slug=${encodeURIComponent(cleanLower)}&_embed=1`,
-    `https://hentaiasmr.moe/wp-json/wp/v2/posts?search=${encodeURIComponent(cleanUpper)}&_embed=1`
+    `https://hentaiasmr.moe/wp-json/wp/v2/posts?slug=${encodeURIComponent(strippedLower)}&_embed=1`,
+    `https://hentaiasmr.moe/wp-json/wp/v2/posts?search=${encodeURIComponent(cleanUpper)}&per_page=10&_embed=1`,
+    `https://hentaiasmr.moe/wp-json/wp/v2/posts?search=${encodeURIComponent(strippedUpper)}&per_page=10&_embed=1`,
+    `https://hentaiasmr.moe/wp-json/wp/v2/posts?search=${encodeURIComponent(cleanNum)}&per_page=10&_embed=1`,
+    `https://hentaiasmr.moe/wp-json/wp/v2/posts?search=${encodeURIComponent(strippedNum)}&per_page=10&_embed=1`
   ];
 
   let post = null;
@@ -108,13 +129,16 @@ async function fetchHentaiAsmrMetadata(cleanRj, options = {}) {
       if (res.status === 200 && Array.isArray(res.data) && res.data.length > 0) {
         const posts = res.data;
         const match = posts.find(p => {
-          const pSlug = (p.slug || '').toLowerCase();
+          const pSlug = decodeURIComponent(p.slug || '').toLowerCase();
           const pTitle = (p.title?.rendered || '').toUpperCase();
-          if (pSlug === cleanLower || pSlug.startsWith(cleanLower + '-') || pSlug.endsWith('-' + cleanLower)) return true;
-          if (pTitle.includes(`[${cleanUpper}]`) || pTitle.includes(`(${cleanUpper})`) || pTitle.includes(` ${cleanUpper} `) || pTitle.startsWith(cleanUpper) || pTitle.endsWith(cleanUpper)) return true;
-          const wordRegex = new RegExp(`\\b${cleanUpper}\\b`, 'i');
-          return wordRegex.test(pTitle);
-        });
+          const pContent = (p.content?.rendered || '').toUpperCase();
+          const pLink = decodeURIComponent(p.link || '').toLowerCase();
+          const validSlugs = [cleanLower, strippedLower, cleanNum, strippedNum];
+          const validCodes = [cleanUpper, strippedUpper, cleanNum, strippedNum];
+          if (validSlugs.some(s => pSlug === s || pSlug.includes(s) || pLink.includes(s))) return true;
+          if (validCodes.some(c => pTitle.includes(c) || pContent.includes(c))) return true;
+          return false;
+        }) || (url.includes('search=') ? posts[0] : null);
         if (match) {
           post = match;
           break;
@@ -123,16 +147,126 @@ async function fetchHentaiAsmrMetadata(cleanRj, options = {}) {
     } catch (e) {}
   }
 
+  // Direct HTML page fallback if WP REST API did not return post
+  if (!post) {
+    const candidatePages = [
+      `https://hentaiasmr.moe/${cleanLower}.html`,
+      `https://hentaiasmr.moe/${strippedLower}.html`,
+      `https://hentaiasmr.moe/${cleanUpper}.html`,
+      `https://hentaiasmr.moe/${strippedUpper}.html`,
+      `https://hentaiasmr.moe/?s=${encodeURIComponent(cleanUpper)}`,
+      `https://hentaiasmr.moe/?s=${encodeURIComponent(strippedUpper)}`
+    ];
+    for (const pUrl of candidatePages) {
+      try {
+        const pRes = await axios.get(pUrl, {
+          headers: {
+            'User-Agent': BROWSER_HEADERS['User-Agent'],
+            'Referer': 'https://hentaiasmr.moe/'
+          },
+          httpsAgent,
+          timeout: 6000,
+          validateStatus: s => s >= 200 && s < 400
+        });
+        if (pRes.status === 200 && pRes.data && typeof pRes.data === 'string') {
+          const htmlText = pRes.data;
+          // If search results page, find first matching post link and fetch it
+          if (pUrl.includes('?s=')) {
+            const postLinkMatch = htmlText.match(/href="(https:\/\/hentaiasmr\.moe\/[^"]*rj[^"]*\.html)"/i) || htmlText.match(/href="(https:\/\/hentaiasmr\.moe\/\?p=\d+)"/i) || htmlText.match(/href="(https:\/\/hentaiasmr\.moe\/[a-zA-Z0-9_-]+\.html)"/i);
+            if (postLinkMatch) {
+              const targetPostUrl = postLinkMatch[1];
+              try {
+                const subRes = await axios.get(targetPostUrl, {
+                  headers: { 'User-Agent': BROWSER_HEADERS['User-Agent'], 'Referer': 'https://hentaiasmr.moe/' },
+                  httpsAgent,
+                  timeout: 6000
+                });
+                if (subRes.status === 200 && subRes.data) {
+                  const subHtml = subRes.data;
+                  const idMatch = subHtml.match(/\/posts\/(\d+)/) || subHtml.match(/postid-(\d+)/i) || subHtml.match(/post-(\d+)/i) || subHtml.match(/\?p=(\d+)/) || subHtml.match(/cdn(?:16|-otome)?\.hentaiasmr\.moe\/mf\/(\d+)\//);
+                  const pId = idMatch ? parseInt(idMatch[1], 10) : 0;
+                  const titleMatch = subHtml.match(/<h1[^>]*class="[^"]*entry-title[^"]*"[^>]*>([\s\S]*?)<\/h1>/i) || subHtml.match(/<title>([\s\S]*?)<\/title>/i);
+                  const pTitle = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, '').replace(/ - .*$/, '').trim() : `Work ${cleanUpper}`;
+                  const imgMatch = subHtml.match(/<meta\s+property="og:image"\s+content="([^"]+)"/i) || subHtml.match(/<img[^>]+class="[^"]*(?:wp-post-image|featured-image)[^"]*"[^>]+src="([^"]+)"/i);
+                  const pImg = imgMatch ? imgMatch[1] : '';
+                  post = {
+                    id: pId || 1,
+                    slug: cleanLower,
+                    link: targetPostUrl,
+                    title: { rendered: pTitle },
+                    content: { rendered: subHtml },
+                    yoast_head: subHtml.slice(0, 3000),
+                    _embedded: {
+                      'wp:featuredmedia': pImg ? [{ source_url: pImg }] : []
+                    }
+                  };
+                  break;
+                }
+              } catch (se) {}
+            }
+          } else {
+            const idMatch = htmlText.match(/\/posts\/(\d+)/) || htmlText.match(/postid-(\d+)/i) || htmlText.match(/post-(\d+)/i) || htmlText.match(/\?p=(\d+)/) || htmlText.match(/cdn(?:16|-otome)?\.hentaiasmr\.moe\/mf\/(\d+)\//);
+            const pId = idMatch ? parseInt(idMatch[1], 10) : 0;
+            const titleMatch = htmlText.match(/<h1[^>]*class="[^"]*entry-title[^"]*"[^>]*>([\s\S]*?)<\/h1>/i) || htmlText.match(/<title>([\s\S]*?)<\/title>/i);
+            const pTitle = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, '').replace(/ - .*$/, '').trim() : `Work ${cleanUpper}`;
+            const imgMatch = htmlText.match(/<meta\s+property="og:image"\s+content="([^"]+)"/i) || htmlText.match(/<img[^>]+class="[^"]*(?:wp-post-image|featured-image)[^"]*"[^>]+src="([^"]+)"/i);
+            const pImg = imgMatch ? imgMatch[1] : '';
+
+            post = {
+              id: pId || 1,
+              slug: cleanLower,
+              link: pUrl,
+              title: { rendered: pTitle },
+              content: { rendered: htmlText },
+              yoast_head: htmlText.slice(0, 3000),
+              _embedded: {
+                'wp:featuredmedia': pImg ? [{ source_url: pImg }] : []
+              }
+            };
+            break;
+          }
+        }
+      } catch (e) {}
+    }
+  }
+
   if (!post || !post.id) return null;
 
   const postId = post.id;
-  const rawTitle = (post.title?.rendered || '')
+  let cleanTitle = (post.title?.rendered || '')
     .replace(/<[^>]+>/g, '')
     .replace(/&#8217;/g, "'")
     .replace(/&amp;/g, '&')
     .replace(/&#038;/g, '&')
+    .replace(/&quot;/g, '"')
     .replace(/^\[(?:RJ|VJ|BJ)\d+\]\s*/i, '')
+    .replace(/\((?:RJ|VJ|BJ)\d+\)\s*/i, '')
     .trim();
+
+  let extractedCircle = '';
+  // Check if title has circle in brackets: e.g. [Circle Name] Title or (Circle Name) Title or 【Circle Name】 Title
+  const bracketCircleMatch = cleanTitle.match(/^(?:\[([^\]]+)\]|\(([^\)]+)\)|【([^】]+)】)\s*(.+)$/);
+  if (bracketCircleMatch) {
+    const candidateCircle = (bracketCircleMatch[1] || bracketCircleMatch[2] || bracketCircleMatch[3] || '').trim();
+    const restTitle = (bracketCircleMatch[4] || '').trim();
+    if (candidateCircle && !/^(?:cv|mp3|wav|flac|hls|rj\d+|vj\d+|bj\d+|dl版|特典)/i.test(candidateCircle) && restTitle.length > 2) {
+      extractedCircle = candidateCircle;
+      cleanTitle = restTitle;
+    }
+  }
+
+  // Also check if circle is at the end: Title 【Circle Name】 or Title [Circle Name]
+  if (!extractedCircle) {
+    const endCircleMatch = cleanTitle.match(/^(.+?)\s*(?:\[([^\]]+)\]|【([^】]+)】)$/);
+    if (endCircleMatch) {
+      const restTitle = (endCircleMatch[1] || '').trim();
+      const candidateCircle = (endCircleMatch[2] || endCircleMatch[3] || '').trim();
+      if (candidateCircle && !/^(?:cv|mp3|wav|flac|hls|rj\d+|vj\d+|bj\d+|dl版|特典)/i.test(candidateCircle) && restTitle.length > 2) {
+        extractedCircle = candidateCircle;
+        cleanTitle = restTitle;
+      }
+    }
+  }
 
   // Cover image
   let coverUrl = '';
@@ -141,7 +275,7 @@ async function fetchHentaiAsmrMetadata(cleanRj, options = {}) {
     coverUrl = media.source_url || media.media_details?.sizes?.full?.source_url || '';
   }
 
-  // Terms: tags, actors, categories
+  // Terms: tags, actors, categories, circles
   const tags = [];
   const tagTranslations = {};
   const cvList = [];
@@ -154,12 +288,16 @@ async function fetchHentaiAsmrMetadata(cleanRj, options = {}) {
       for (const term of group) {
         if (!term || !term.name) continue;
         const tName = term.name.trim();
-        const taxonomy = term.taxonomy || '';
+        const taxonomy = (term.taxonomy || '').toLowerCase();
         
         let rawSlug = term.slug || '';
         try { rawSlug = decodeURIComponent(rawSlug); } catch (e) {}
 
-        if (taxonomy === 'actors' || taxonomy === 'cv') {
+        if (taxonomy === 'circle' || taxonomy === 'maker' || taxonomy === 'developer' || taxonomy === 'brand' || taxonomy === 'publisher' || taxonomy === 'group') {
+          if (tName && !extractedCircle) {
+            extractedCircle = tName;
+          }
+        } else if (taxonomy === 'actors' || taxonomy === 'cv') {
           tName.split(/[,、/&＋+;・]/).forEach(c => {
             const cleanC = c.replace(/様|さん|氏|他|'/g, '').trim();
             if (cleanC && cleanC.length >= 2 && !cvList.includes(cleanC)) {
@@ -189,12 +327,63 @@ async function fetchHentaiAsmrMetadata(cleanRj, options = {}) {
   // 2. Direct Media CDN Probe for Audio Files
   const singleTrackCandidates = [];
 
-  // Unescape content HTML and extract embedded audio URLs
+  // Unescape content HTML and extract embedded audio URLs & ground-truth duration
   const unescapedContent = (post.content?.rendered || '')
     .replace(/\\\//g, '/')
     .replace(/&#8217;/g, "'")
     .replace(/&quot;/g, '"')
     .replace(/&amp;/g, '&');
+  const excerptText = (post.excerpt?.rendered || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&amp;/g, '&');
+  const combinedPostText = unescapedContent + ' ' + excerptText + ' ' + (post.yoast_head || '');
+
+  if (!extractedCircle) {
+    const circleTextMatch = combinedPostText.match(/(?:Circle|サークル|Maker|ブランド|メーカー|Developer|Brand)[\s:：]+([^\n<,]+)/i);
+    if (circleTextMatch && circleTextMatch[1]) {
+      const cStr = circleTextMatch[1].trim();
+      if (cStr && cStr.length >= 2 && cStr.length < 50 && !/^(?:https?:|none|n\/a)/i.test(cStr)) {
+        extractedCircle = cStr;
+      }
+    }
+  }
+
+  let parsedDuration = 0;
+  // Match ISO 8601 duration format (e.g. PT02H21M44S, PT2H3M, PT45M12S)
+  const isoDurMatch = combinedPostText.match(/itemprop=["']duration["']\s+content=["']PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?["']/i) ||
+                      combinedPostText.match(/"duration"\s*:\s*["']PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?["']/i) ||
+                      combinedPostText.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/i);
+  if (isoDurMatch && (isoDurMatch[1] || isoDurMatch[2] || isoDurMatch[3])) {
+    const h = parseInt(isoDurMatch[1] || '0', 10);
+    const m = parseInt(isoDurMatch[2] || '0', 10);
+    const s = parseInt(isoDurMatch[3] || '0', 10);
+    parsedDuration = h * 3600 + m * 60 + s;
+  }
+  if (!parsedDuration) {
+    const durMatch = combinedPostText.match(/(?:Duration|収録時間|再生時間|時間|長さ|length)[\s:：]+([0-9a-zA-Z\s分時間秒hms:]+)/i);
+    if (durMatch && durMatch[1]) {
+      const dStr = durMatch[1].trim();
+      // Match "2h 3m", "2h3m", "2h 30min", "120m", "90分", "01:25:30", "45:12"
+      const hmsMatch = dStr.match(/(?:(\d+)\s*(?:h|hours?|時間|hr))?\s*(?:(\d+)\s*(?:m|mins?|minutes?|分))?\s*(?:(\d+)\s*(?:s|secs?|seconds?|秒))?/i);
+      if (hmsMatch && (hmsMatch[1] || hmsMatch[2])) {
+        const h = parseInt(hmsMatch[1] || '0', 10);
+        const m = parseInt(hmsMatch[2] || '0', 10);
+        const s = parseInt(hmsMatch[3] || '0', 10);
+        if (h > 0 || m > 0 || s > 0) parsedDuration = h * 3600 + m * 60 + s;
+      }
+      if (!parsedDuration) {
+        const colonMatch = dStr.match(/\b(?:(\d{1,2}):)?(\d{1,2}):(\d{2})\b/);
+        if (colonMatch) {
+          if (colonMatch[1]) {
+            parsedDuration = parseInt(colonMatch[1], 10) * 3600 + parseInt(colonMatch[2], 10) * 60 + parseInt(colonMatch[3], 10);
+          } else {
+            parsedDuration = parseInt(colonMatch[2], 10) * 60 + parseInt(colonMatch[3], 10);
+          }
+        }
+      }
+    }
+  }
+
   const contentUrls = unescapedContent.match(/https?:\/\/[^\s"'<>]+\.(?:mp3|m4a|wav|ogg|flac|m3u8)/gi) || [];
   contentUrls.forEach(u => {
     if (u && !singleTrackCandidates.includes(u)) singleTrackCandidates.push(u);
@@ -202,68 +391,99 @@ async function fetchHentaiAsmrMetadata(cleanRj, options = {}) {
 
   // Discovered Single-Track Patterns across CDN endpoints
   const singlePatterns = [
+    `https://cdn.hentaiasmr.moe/mf/${postId}/merge/${cleanUpper}.mp3`,
+    `https://cdn16.hentaiasmr.moe/mf/${postId}/merge/${cleanUpper}.mp3`,
+    `https://cdn-otome.hentaiasmr.moe/mf/${postId}/merge/${cleanUpper}.mp3`,
+    `https://cdn.hentaiasmr.moe/mf/${postId}/merge/${strippedUpper}.mp3`,
+    `https://cdn.hentaiasmr.moe/mf/${postId}/merge/${cleanLower}.mp3`,
+    `https://cdn.hentaiasmr.moe/mf/${postId}/merge/${strippedLower}.mp3`,
+    `https://cdn.hentaiasmr.moe/mf/${postId}/${cleanUpper}.mp3`,
+    `https://cdn.hentaiasmr.moe/mf/${postId}/${strippedUpper}.mp3`,
+    `https://cdn.hentaiasmr.moe/mf/${postId}/1.mp3`,
     `https://cdn16.hentaiasmr.moe/audio/${postId}.mp3`,
     `https://cdn.hentaiasmr.moe/audio/${postId}.mp3`,
     `https://cdn-otome.hentaiasmr.moe/audio/${postId}.mp3`,
     `https://cdn.hentaiasmr.moe/mp4/${postId}.mp3`,
     `https://cdn16.hentaiasmr.moe/mp4/${postId}.mp3`,
     `https://cdn-otome.hentaiasmr.moe/mp4/${postId}.mp3`,
-    `https://cdn.hentaiasmr.moe/mf/${postId}/merge/${cleanUpper}.mp3`,
-    `https://cdn16.hentaiasmr.moe/mf/${postId}/merge/${cleanUpper}.mp3`,
-    `https://cdn-otome.hentaiasmr.moe/mf/${postId}/merge/${cleanUpper}.mp3`,
     `https://cdn.hentaiasmr.moe/audio/${cleanUpper}.mp3`,
-    `https://cdn16.hentaiasmr.moe/audio/${cleanUpper}.mp3`
+    `https://cdn16.hentaiasmr.moe/audio/${cleanUpper}.mp3`,
+    `https://cdn.hentaiasmr.moe/audio/${strippedUpper}.mp3`
   ];
   singlePatterns.forEach(u => {
     if (!singleTrackCandidates.includes(u)) singleTrackCandidates.push(u);
   });
 
-  const probeReferer = post.link || `https://hentaiasmr.moe/${cleanLower}.html`;
-  const probeHeaders = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    'Referer': probeReferer,
-    'Origin': 'https://hentaiasmr.moe',
-    'Accept': '*/*'
-  };
+  const probeReferers = [
+    post.link,
+    `https://hentaiasmr.moe/${cleanLower}.html`,
+    `https://hentaiasmr.moe/${strippedLower}.html`,
+    'https://hentaiasmr.moe/'
+  ].filter(Boolean);
 
   async function probeMediaCandidate(targetUrl) {
     if (!targetUrl) return null;
-    try {
-      let res = await axios.get(encodeURI(targetUrl), {
-        headers: {
-          ...probeHeaders,
-          'Range': 'bytes=0-0'
-        },
-        httpsAgent,
-        httpAgent,
-        timeout: 5000,
-        validateStatus: s => (s >= 200 && s < 400) || s === 206
-      });
-      if (!res || (res.status >= 400 && res.status !== 206)) {
-        try {
-          const headRes = await axios.head(encodeURI(targetUrl), {
-            headers: probeHeaders,
-            httpsAgent,
-            httpAgent,
-            timeout: 5000,
-            validateStatus: s => (s >= 200 && s < 400)
-          });
-          if (headRes && headRes.status >= 200 && headRes.status < 400) {
-            res = headRes;
+    for (const ref of probeReferers) {
+      const probeHeaders = {
+        'User-Agent': BROWSER_HEADERS['User-Agent'],
+        'Referer': ref,
+        'Origin': 'https://hentaiasmr.moe',
+        'Accept': '*/*'
+      };
+      // Try HEAD first (fastest and cleanest)
+      try {
+        const headRes = await axios.head(encodeURI(targetUrl), {
+          headers: probeHeaders,
+          httpsAgent,
+          httpAgent,
+          timeout: 4000,
+          maxRedirects: 5,
+          validateStatus: s => (s >= 200 && s < 400)
+        });
+        if (headRes && headRes.status >= 200 && headRes.status < 400) {
+          const cType = String(headRes.headers && headRes.headers['content-type'] || '').toLowerCase();
+          if (!cType.includes('text/html') && !cType.includes('text/plain') && !cType.includes('application/json')) {
+            let size = parseInt(headRes.headers && headRes.headers['content-length'] || '0', 10);
+            return { ok: true, size };
           }
-        } catch (he) {}
-      }
-      if (res && ((res.status >= 200 && res.status < 400) || res.status === 206)) {
-        let size = 0;
-        const cr = res.headers && res.headers['content-range'];
-        if (cr) {
-          const m = cr.match(/\/(\d+)/);
-          if (m) size = parseInt(m[1], 10);
         }
-        if (!size && res.headers) size = parseInt(res.headers['content-length'] || '0', 10);
-        return { ok: true, size };
-      }
-    } catch (e) {}
+      } catch (he) {}
+
+      // Fallback to GET with Range: bytes=0-0 and responseType: 'stream'
+      try {
+        const getRes = await axios.get(encodeURI(targetUrl), {
+          headers: {
+            ...probeHeaders,
+            'Range': 'bytes=0-0'
+          },
+          httpsAgent,
+          httpAgent,
+          responseType: 'stream',
+          timeout: 5000,
+          maxRedirects: 5,
+          validateStatus: s => (s >= 200 && s < 400) || s === 206
+        });
+        if (getRes && ((getRes.status >= 200 && getRes.status < 400) || getRes.status === 206)) {
+          const cType = String(getRes.headers && getRes.headers['content-type'] || '').toLowerCase();
+          if (!cType.includes('text/html') && !cType.includes('text/plain') && !cType.includes('application/json')) {
+            let size = 0;
+            const cr = getRes.headers && getRes.headers['content-range'];
+            if (cr) {
+              const m = cr.match(/\/(\d+)/);
+              if (m) size = parseInt(m[1], 10);
+            }
+            if (!size && getRes.headers) size = parseInt(getRes.headers['content-length'] || '0', 10);
+            if (getRes.data && typeof getRes.data.destroy === 'function') {
+              getRes.data.destroy();
+            }
+            return { ok: true, size };
+          }
+          if (getRes.data && typeof getRes.data.destroy === 'function') {
+            getRes.data.destroy();
+          }
+        }
+      } catch (ge) {}
+    }
     return null;
   }
 
@@ -286,29 +506,19 @@ async function fetchHentaiAsmrMetadata(cleanRj, options = {}) {
         validateStatus: s => s >= 200 && s < 400
       });
       if (pageRes && pageRes.data && typeof pageRes.data === 'string') {
-        const html = pageRes.data;
-        const playlistRegex = /playlist\.push\(\s*\{\s*file:\s*["']([^"']+)["'](?:[\s\S]*?title:\s*["']([^"']+)["'])?/gi;
-        let pMatch;
-        let htmlTracks = [];
-        let trkIdx = 1;
-        while ((pMatch = playlistRegex.exec(html)) !== null) {
-          const fileUrl = pMatch[1];
-          const trkTitle = pMatch[2] || `Track ${trkIdx}`;
-          if (fileUrl && !htmlTracks.some(t => t.streamUrl === fileUrl)) {
-            htmlTracks.push({
-              index: trkIdx,
-              title: trkTitle,
-              rawTitle: `${trkIdx}.mp3`,
-              streamUrl: fileUrl,
-              category: trkIdx === 1 ? 'main' : (trkIdx === 2 ? 'freetalk' : 'bonus'),
-              _size: 0,
-              isHls: false
+        const htmlTracks = extractMoeHtmlTracks(pageRes.data, pageUrl, coverUrl, cleanTitle, cleanUpper);
+        if (htmlTracks && htmlTracks.length > 0) {
+          htmlTracks.forEach((t, i) => {
+            audioTracks.push({
+              index: i + 1,
+              title: t.title || `Track ${i + 1}`,
+              rawTitle: `${i + 1}.mp3`,
+              streamUrl: t.rawUrl || t.streamUrl,
+              category: t.category || (i === 0 ? 'main' : (i === 1 ? 'freetalk' : 'bonus')),
+              _size: t.size || 0,
+              isHls: Boolean(t.isHls)
             });
-            trkIdx++;
-          }
-        }
-        if (htmlTracks.length > 0) {
-          audioTracks.push(...htmlTracks);
+          });
           foundPattern = 'html_jwplayer_playlist';
         }
       }
@@ -322,7 +532,7 @@ async function fetchHentaiAsmrMetadata(cleanRj, options = {}) {
         if (probe && probe.ok) {
           audioTracks.push({
             index: 1,
-            title: `${rawTitle || cleanUpper} (Full)`,
+            title: `${cleanTitle || cleanUpper} (Full)`,
             rawTitle: `${cleanUpper}.mp3`,
             streamUrl: mergeUrl,
             category: 'main',
@@ -371,26 +581,41 @@ async function fetchHentaiAsmrMetadata(cleanRj, options = {}) {
     }
   }
 
+  // If work exists on Moe (valid postId) but CDN probe was blocked by Cloudflare/WAF, synthesize default single-track merge URL
+  if (postId && audioTracks.length === 0) {
+    const defaultMergeUrl = `https://cdn.hentaiasmr.moe/mf/${postId}/merge/${cleanUpper}.mp3`;
+    audioTracks.push({
+      index: 1,
+      title: cleanTitle ? `${cleanTitle} (Full)` : `${cleanUpper} (Full)`,
+      rawTitle: `${cleanUpper}.mp3`,
+      streamUrl: defaultMergeUrl,
+      category: 'main',
+      _size: 0,
+      isHls: false
+    });
+    foundPattern = 'inferred_merge_postid';
+  }
+
   const isAudioFound = audioTracks.length > 0;
   const diagnostic = (!isAudioFound && postId) ? {
     rjCode: cleanUpper,
     postId,
     slug: post.slug,
     postLink: post.link || `https://hentaiasmr.moe/${cleanLower}.html`,
-    title: rawTitle,
+    title: cleanTitle || `Work ${cleanUpper}`,
     triedUrls
   } : null;
 
   return {
     postId,
-    title: rawTitle,
-    circle: 'ASMR Circle',
+    title: cleanTitle || `Work ${cleanUpper}`,
+    circle: extractedCircle || 'ASMR Circle',
     cv: cvJa ? (cvRomaji ? `${cvJa} (${cvRomaji})` : cvJa) : (cv || 'N/A'),
     cvJa,
     cvRomaji,
     releaseDate: '',
     series: '',
-    duration: 0,
+    duration: parsedDuration || 0,
     totalBytes: audioTracks.reduce((sum, t) => sum + (t._size || 0), 0),
     tags,
     tagTranslations,
@@ -405,91 +630,109 @@ async function fetchHentaiAsmrMetadata(cleanRj, options = {}) {
 
 // 1. Fetch Official DLsite Metadata (Universal Multi-Layer Extractor)
 async function fetchDlsiteMetadata(rjCode) {
-  const cleanRj = rjCode.toUpperCase();
+  const cleanRj = (rjCode || '').toUpperCase().trim();
+  const canonicalRj = getCanonicalDlsiteRj(cleanRj);
   const cleanNum = cleanRj.replace(/^(?:RJ|VJ|BJ)/i, '');
-  const divisions = ['maniax', 'home', 'girls', 'pro', 'books'];
+  const strippedNum = cleanNum.replace(/^0+/, '');
+  const divisions = ['maniax', 'home', 'girls', 'pro', 'books', 'comic', 'soft', 'bl', 'touch', 'gay', 'eng'];
   let dlsiteMeta = null;
 
-  // Strategy 0: ASMR.one Public API
-  try {
-    const asmrRes = await axios.get(`https://api.asmr-200.com/api/work/${cleanNum}`, {
-      headers: { 'User-Agent': BROWSER_HEADERS['User-Agent'] },
-      timeout: 5000
-    });
-    if (asmrRes.data) {
-      const data = asmrRes.data;
-      const cv = Array.isArray(data.vas) && data.vas.length > 0 ? data.vas.map(v => v.name).join(', ') : '';
-      const tags = [];
-      const tagTranslations = {};
-      if (Array.isArray(data.tags)) {
-        data.tags.forEach(t => {
-          const name = t.name || (typeof t === 'string' ? t : '');
-          if (name && !tags.includes(name)) tags.push(name);
-          const en = t.i18n?.['en-us']?.name || t.i18n?.['en']?.name || (db.BASE_TAG_DICT && db.BASE_TAG_DICT[name]) || '';
-          if (name && en && name !== en) {
-            tagTranslations[name] = en;
-          }
+  // Strategy 0: ASMR.one Public API across multiple hosts
+  const asmrHosts = ['https://api.asmr-200.com', 'https://api.asmr-300.com', 'https://api.asmr.one', 'https://api.asmr-100.com'];
+  const idsToTry = Array.from(new Set([strippedNum, cleanNum, cleanRj, canonicalRj])).filter(Boolean);
+  for (const tid of idsToTry) {
+    for (const host of asmrHosts) {
+      try {
+        const asmrRes = await axios.get(`${host}/api/work/${tid}`, {
+          headers: { 'User-Agent': BROWSER_HEADERS['User-Agent'] },
+          timeout: 2500
         });
-      }
-      let imgUrl = data.mainCoverUrl || data.thumbnailCoverUrl || data.samCoverUrl || '';
-      if (imgUrl.startsWith('//')) imgUrl = 'https:' + imgUrl;
-
-      const isAdult = (data.age_category === 1 || data.age_category_string === 'general' || data.rating === 'general') ? false : true;
-
-      if (data.title) {
-        dlsiteMeta = {
-          title: data.title,
-          circle: data.circle?.name || '',
-          cv: cv || 'N/A',
-          rawCoverUrl: imgUrl,
-          tags: tags,
-          tagTranslations: tagTranslations,
-          isNsfw: isAdult ?? true
-        };
-      }
-    }
-  } catch (err) {}
-
-  // Strategy A: JSON APIs across divisions
-  for (const div of divisions) {
-    try {
-      const url = `https://www.dlsite.com/${div}/api/=/product.json?workno=${cleanRj}`;
-      const res = await axios.get(url, {
-        headers: {
-          'User-Agent': BROWSER_HEADERS['User-Agent'],
-          'Accept-Language': 'ja,en;q=0.9'
-        },
-        timeout: 5000
-      });
-
-      if (res.data && res.data.length > 0) {
-        const item = res.data[0];
-        let cv = dlsiteMeta?.cv || '';
-        if (!cv || cv === 'N/A') {
-          if (Array.isArray(item.voice_actor)) {
-            const names = item.voice_actor.map(v => typeof v === 'string' ? v : (v?.name || '')).filter(Boolean);
-            if (names.length > 0) cv = names.join(', ');
-          } else if (typeof item.voice_actor === 'string' && item.voice_actor.trim()) {
-            cv = item.voice_actor.trim();
-          }
-          if ((!cv || cv === 'N/A') && item.creators && typeof item.creators === 'object') {
-            const creatorKeys = ['voice_actor', 'actor', 'cv', 'cast', 'voice', '声優', '出演'];
-            for (const key of creatorKeys) {
-              const val = item.creators[key];
-              if (Array.isArray(val)) {
-                const names = val.map(v => typeof v === 'string' ? v : (v?.name || '')).filter(Boolean);
-                if (names.length > 0) { cv = names.join(', '); break; }
-              } else if (typeof val === 'string' && val.trim()) {
-                cv = val.trim(); break;
+        if (asmrRes.data && asmrRes.data.title) {
+          const data = asmrRes.data;
+          const cv = Array.isArray(data.vas) && data.vas.length > 0 ? data.vas.map(v => v.name).join(', ') : '';
+          const tags = [];
+          const tagTranslations = {};
+          if (Array.isArray(data.tags)) {
+            data.tags.forEach(t => {
+              const name = t.name || (typeof t === 'string' ? t : '');
+              if (name && !tags.includes(name)) tags.push(name);
+              const en = t.i18n?.['en-us']?.name || t.i18n?.['en']?.name || (db.BASE_TAG_DICT && db.BASE_TAG_DICT[name]) || '';
+              if (name && en && name !== en) {
+                tagTranslations[name] = en;
               }
+            });
+          }
+          let imgUrl = data.mainCoverUrl || data.thumbnailCoverUrl || data.samCoverUrl || '';
+          if (imgUrl.startsWith('//')) imgUrl = 'https:' + imgUrl;
+
+          const isAdult = (data.age_category === 1 || data.age_category_string === 'general' || data.rating === 'general') ? false : true;
+
+          dlsiteMeta = {
+            title: data.title,
+            circle: data.circle?.name || '',
+            cv: cv || 'N/A',
+            rawCoverUrl: imgUrl,
+            tags: tags,
+            tagTranslations: tagTranslations,
+            isNsfw: isAdult ?? true
+          };
+          break;
+        }
+      } catch (err) {}
+    }
+    if (dlsiteMeta && dlsiteMeta.title) break;
+  }
+
+  // Strategy A: JSON APIs across divisions in parallel
+  try {
+    const divResults = await Promise.all(
+      divisions.map(async (div) => {
+        try {
+          const url = `https://www.dlsite.com/${div}/api/=/product.json?workno=${cleanRj}`;
+          const res = await axios.get(url, {
+            headers: {
+              'User-Agent': BROWSER_HEADERS['User-Agent'],
+              'Accept-Language': 'ja,en;q=0.9'
+            },
+            timeout: 2500
+          });
+          if (res.data && Array.isArray(res.data) && res.data.length > 0) {
+            return { div, item: res.data[0] };
+          }
+        } catch (e) {}
+        return null;
+      })
+    );
+
+    const validDiv = divResults.find(r => r && r.item);
+    if (validDiv) {
+      const item = validDiv.item;
+      const div = validDiv.div;
+      let cv = dlsiteMeta?.cv || '';
+      if (!cv || cv === 'N/A') {
+        if (Array.isArray(item.voice_actor)) {
+          const names = item.voice_actor.map(v => typeof v === 'string' ? v : (v?.name || '')).filter(Boolean);
+          if (names.length > 0) cv = names.join(', ');
+        } else if (typeof item.voice_actor === 'string' && item.voice_actor.trim()) {
+          cv = item.voice_actor.trim();
+        }
+        if ((!cv || cv === 'N/A') && item.creators && typeof item.creators === 'object') {
+          const creatorKeys = ['voice_actor', 'actor', 'cv', 'cast', 'voice', '声優', '出演'];
+          for (const key of creatorKeys) {
+            const val = item.creators[key];
+            if (Array.isArray(val)) {
+              const names = val.map(v => typeof v === 'string' ? v : (v?.name || '')).filter(Boolean);
+              if (names.length > 0) { cv = names.join(', '); break; }
+            } else if (typeof val === 'string' && val.trim()) {
+              cv = val.trim(); break;
             }
           }
-          if ((!cv || cv === 'N/A') && Array.isArray(item.creators)) {
-            const vas = item.creators.filter(c => c && (c.type === 'voice_actor' || c.role === 'voice_actor' || c.type === 'cv' || c.role === 'cv' || c.type === 'actor'));
-            if (vas.length > 0) {
-              const names = vas.map(v => v.name || v.val || '').filter(Boolean);
-              if (names.length > 0) cv = names.join(', ');
-            }
+        }
+        if ((!cv || cv === 'N/A') && Array.isArray(item.creators)) {
+          const vas = item.creators.filter(c => c && (c.type === 'voice_actor' || c.role === 'voice_actor' || c.type === 'cv' || c.role === 'cv' || c.type === 'actor'));
+          if (vas.length > 0) {
+            const names = vas.map(v => v.name || v.val || '').filter(Boolean);
+            if (names.length > 0) cv = names.join(', ');
           }
         }
 
@@ -520,27 +763,26 @@ async function fetchDlsiteMetadata(rjCode) {
             }
           } catch (e) {}
         }
-
-        let imgUrl = dlsiteMeta?.rawCoverUrl || (typeof item.image_main === 'string' ? item.image_main : (item.image_main?.url || item.work_image || ''));
-        if (imgUrl.startsWith('//')) imgUrl = 'https:' + imgUrl;
-
-        const isAdult = (item.age_category === 1 || item.age_category_string === 'general') ? false : true;
-
-        const genres = (item.genres || []).map(g => g.name || g);
-        const tags = Array.from(new Set([...(dlsiteMeta?.tags || []), ...genres]));
-
-        dlsiteMeta = {
-          title: item.work_name || dlsiteMeta?.title || '',
-          circle: item.maker_name || dlsiteMeta?.circle || '',
-          cv: cv || 'N/A',
-          rawCoverUrl: imgUrl,
-          tags: tags,
-          isNsfw: isAdult
-        };
-        break;
       }
-    } catch (err) {}
-  }
+
+      let imgUrl = dlsiteMeta?.rawCoverUrl || (typeof item.image_main === 'string' ? item.image_main : (item.image_main?.url || item.work_image || ''));
+      if (imgUrl.startsWith('//')) imgUrl = 'https:' + imgUrl;
+
+      const isAdult = (item.age_category === 1 || item.age_category_string === 'general') ? false : true;
+
+      const genres = (item.genres || []).map(g => g.name || g);
+      const tags = Array.from(new Set([...(dlsiteMeta?.tags || []), ...genres]));
+
+      dlsiteMeta = {
+        title: item.work_name || dlsiteMeta?.title || '',
+        circle: item.maker_name || dlsiteMeta?.circle || '',
+        cv: cv || 'N/A',
+        rawCoverUrl: imgUrl,
+        tags: tags,
+        isNsfw: isAdult
+      };
+    }
+  } catch (err) {}
 
   // Strategy B: HentaiASMR REST API Fallback (Rich Japanese & English Romaji CVs, Series, Release Dates)
   if (!dlsiteMeta || !dlsiteMeta.cv || dlsiteMeta.cv === 'N/A' || !dlsiteMeta.circle || (dlsiteMeta.tags && dlsiteMeta.tags.length < 3) || !dlsiteMeta.title) {
@@ -621,188 +863,211 @@ async function fetchDlsiteMetadata(rjCode) {
 // 2. Probe CDN Directly (M3U8 HLS vs MP3 Multi-track)
 // 2. Probe CDN Directly (M3U8 HLS vs MP3 Multi-track + HentaiASMR Moe comparator)
 async function probeMediaCdn(rjCode, dlsiteMeta) {
-  const cleanRj = rjCode.toUpperCase();
+  const cleanRj = (rjCode || '').toUpperCase().trim();
+  const cleanNum = cleanRj.replace(/^(?:RJ|VJ|BJ)/i, '');
+  const strippedNum = cleanNum.replace(/^0+/, '');
   const m3u8Url = `https://v.weeab0o.xyz/${cleanRj}.m3u8`;
   const bucket = getDlsiteCoverBucket(cleanRj);
   const coverUrl = dlsiteMeta?.rawCoverUrl || `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${cleanRj}_img_main.jpg`;
 
-  // 1. Probe JapaneseASMR (weeab0o.xyz): First check primary MP3 & M3U8 in parallel
-  const mainMp3Url = `https://v.weeab0o.xyz/${cleanRj}.mp3`;
+  // 1. Probe JapaneseASMR (weeab0o.xyz): First check primary MP3 & M3U8 in parallel (both 8-digit and stripped)
+  const weeabCandidates = [
+    { mp3: `https://v.weeab0o.xyz/${cleanRj}.mp3`, m3u8: `https://v.weeab0o.xyz/${cleanRj}.m3u8`, code: cleanRj },
+    { mp3: `https://v.weeab0o.xyz/RJ${strippedNum}.mp3`, m3u8: `https://v.weeab0o.xyz/RJ${strippedNum}.m3u8`, code: `RJ${strippedNum}` }
+  ];
   let hasM3u8 = false;
   const japTracks = [];
 
-  const [mainMp3Res, m3u8Res] = await Promise.all([
-    axios.head(encodeURI(mainMp3Url), {
-      httpAgent,
-      httpsAgent,
-      headers: { 'Referer': 'https://japaneseasmr.com/', 'User-Agent': BROWSER_HEADERS['User-Agent'] },
-      timeout: 3000,
-      validateStatus: s => s >= 200 && s < 400
-    }).catch(() => null),
-    axios.get(m3u8Url, {
-      httpAgent,
-      httpsAgent,
-      headers: { 'Referer': 'https://japaneseasmr.com/', 'User-Agent': BROWSER_HEADERS['User-Agent'] },
-      timeout: 3000,
-      validateStatus: s => s >= 200 && s < 400
-    }).catch(() => null)
-  ]);
+  const isWeeabValid = (res) => {
+    if (!res || !res.status || res.status < 200 || res.status >= 400) return false;
+    const ct = (res.headers['content-type'] || '').toLowerCase();
+    if (ct.includes('text/html') || ct.includes('text/plain') || ct.includes('application/json')) return false;
+    const sz = parseInt(res.headers['content-length'] || '0', 10);
+    return sz > 50 * 1024 || ct.includes('audio') || ct.includes('video') || ct.includes('octet-stream');
+  };
 
-  if (mainMp3Res && mainMp3Res.status >= 200 && mainMp3Res.status < 400) {
-    const sz = parseInt(mainMp3Res.headers['content-length'] || '0', 10);
-    japTracks.push({
-      id: 1,
-      title: 'Track 1 (トラック1)',
-      size: sz,
-      formattedTime: '00:00:00',
-      startTime: 0,
-      isHls: false,
-      category: 'main',
-      rawUrl: mainMp3Url,
-      referer: 'https://japaneseasmr.com/',
-      streamUrl: `/stream?url=${encodeURIComponent(mainMp3Url)}&referer=${encodeURIComponent('https://japaneseasmr.com/')}`,
-      poster: `/image-proxy?url=${encodeURIComponent(coverUrl)}`
-    });
+  for (const cand of weeabCandidates) {
+    if (japTracks.length > 0) break;
+    const [mainMp3Res, m3u8Res] = await Promise.all([
+      axios.head(encodeURI(cand.mp3), {
+        httpAgent,
+        httpsAgent,
+        headers: { 'Referer': 'https://japaneseasmr.com/', 'User-Agent': BROWSER_HEADERS['User-Agent'] },
+        timeout: 3000,
+        validateStatus: s => s >= 200 && s < 400
+      }).catch(() => null),
+      axios.get(cand.m3u8, {
+        httpAgent,
+        httpsAgent,
+        headers: { 'Referer': 'https://japaneseasmr.com/', 'User-Agent': BROWSER_HEADERS['User-Agent'] },
+        timeout: 3000,
+        validateStatus: s => s >= 200 && s < 400
+      }).catch(() => null)
+    ]);
 
-    // Only probe bonus & extra tracks if the primary MP3 actually exists
-    const bonusCandidates = [
-      { type: 'freetalk', title: 'Free Talk (フリートーク)', url: `https://v.weeab0o.xyz/${cleanRj} freetalk.mp3` },
-      { type: 'freetalk', title: 'Free Talk (フリートーク)', url: `https://v.weeab0o.xyz/${cleanRj}_freetalk.mp3` },
-      { type: 'freetalk', title: 'Free Talk (フリートーク)', url: `https://v.weeab0o.xyz/${cleanRj}-freetalk.mp3` },
-      { type: 'freetalk', title: 'Free Talk (フリートーク)', url: `https://v.weeab0o.xyz/${cleanRj}freetalk.mp3` },
-      { type: 'bonus', title: 'Omake (おまけ)', url: `https://v.weeab0o.xyz/${cleanRj}omake.mp3` },
-      { type: 'bonus', title: 'Omake (おまけ)', url: `https://v.weeab0o.xyz/${cleanRj} omake.mp3` },
-      { type: 'bonus', title: 'Omake (おまけ)', url: `https://v.weeab0o.xyz/${cleanRj}_omake.mp3` },
-      { type: 'bonus', title: 'Omake (おまけ)', url: `https://v.weeab0o.xyz/${cleanRj}-omake.mp3` },
-      { type: 'bonus', title: 'Bonus (特典)', url: `https://v.weeab0o.xyz/${cleanRj} bonus.mp3` },
-      { type: 'bonus', title: 'Bonus (特典)', url: `https://v.weeab0o.xyz/${cleanRj}bonus.mp3` },
-      { type: 'bonus', title: 'Bonus (特典)', url: `https://v.weeab0o.xyz/${cleanRj}_bonus.mp3` },
-      { type: 'main', title: 'Track 2 (トラック2)', url: `https://v.weeab0o.xyz/${cleanRj} 2.mp3` },
-      { type: 'main', title: 'Track 3 (トラック3)', url: `https://v.weeab0o.xyz/${cleanRj} 3.mp3` },
-      { type: 'main', title: 'Track 4 (トラック4)', url: `https://v.weeab0o.xyz/${cleanRj} 4.mp3` },
-      { type: 'main', title: 'Track 5 (トラック5)', url: `https://v.weeab0o.xyz/${cleanRj} 5.mp3` },
-      { type: 'main', title: 'Track 6 (トラック6)', url: `https://v.weeab0o.xyz/${cleanRj} 6.mp3` },
-      { type: 'main', title: 'Track 7 (トラック7)', url: `https://v.weeab0o.xyz/${cleanRj} 7.mp3` },
-      { type: 'main', title: 'Track 8 (トラック8)', url: `https://v.weeab0o.xyz/${cleanRj} 8.mp3` },
-      { type: 'main', title: 'Track 2 (トラック2)', url: `https://v.weeab0o.xyz/${cleanRj}_2.mp3` },
-      { type: 'main', title: 'Track 3 (トラック3)', url: `https://v.weeab0o.xyz/${cleanRj}_3.mp3` },
-      { type: 'main', title: 'Track 2 (トラック2)', url: `https://v.weeab0o.xyz/${cleanRj}-2.mp3` },
-      { type: 'main', title: 'Track 3 (トラック3)', url: `https://v.weeab0o.xyz/${cleanRj}-3.mp3` }
-    ];
+    if (isWeeabValid(mainMp3Res)) {
+      const sz = parseInt(mainMp3Res.headers['content-length'] || '0', 10);
+      japTracks.push({
+        id: 1,
+        title: 'Track 1 (トラック1)',
+        size: sz,
+        formattedTime: '00:00:00',
+        startTime: 0,
+        isHls: false,
+        category: 'main',
+        rawUrl: cand.mp3,
+        referer: 'https://japaneseasmr.com/',
+        streamUrl: `/stream?url=${encodeURIComponent(cand.mp3)}&referer=${encodeURIComponent('https://japaneseasmr.com/')}&rj=${encodeURIComponent(cleanRj)}`,
+        poster: `/image-proxy?url=${encodeURIComponent(coverUrl)}`
+      });
 
-    const bonusChecks = await Promise.all(
-      bonusCandidates.map(async (c) => {
-        try {
-          const res = await axios.head(encodeURI(c.url), {
-            httpAgent,
-            httpsAgent,
-            headers: { 'Referer': 'https://japaneseasmr.com/', 'User-Agent': BROWSER_HEADERS['User-Agent'] },
-            timeout: 3000,
-            validateStatus: s => s >= 200 && s < 400
+      // Only probe bonus & extra tracks if the primary MP3 actually exists
+      const bonusCandidates = [
+        { type: 'freetalk', title: 'Free Talk (フリートーク)', url: `https://v.weeab0o.xyz/${cand.code} freetalk.mp3` },
+        { type: 'freetalk', title: 'Free Talk (フリートーク)', url: `https://v.weeab0o.xyz/${cand.code}_freetalk.mp3` },
+        { type: 'freetalk', title: 'Free Talk (フリートーク)', url: `https://v.weeab0o.xyz/${cand.code}-freetalk.mp3` },
+        { type: 'freetalk', title: 'Free Talk (フリートーク)', url: `https://v.weeab0o.xyz/${cand.code}freetalk.mp3` },
+        { type: 'bonus', title: 'Omake (おまけ)', url: `https://v.weeab0o.xyz/${cand.code}omake.mp3` },
+        { type: 'bonus', title: 'Omake (おまけ)', url: `https://v.weeab0o.xyz/${cand.code} omake.mp3` },
+        { type: 'bonus', title: 'Omake (おまけ)', url: `https://v.weeab0o.xyz/${cand.code}_omake.mp3` },
+        { type: 'bonus', title: 'Omake (おまけ)', url: `https://v.weeab0o.xyz/${cand.code}-omake.mp3` },
+        { type: 'bonus', title: 'Bonus (特典)', url: `https://v.weeab0o.xyz/${cand.code} bonus.mp3` },
+        { type: 'bonus', title: 'Bonus (特典)', url: `https://v.weeab0o.xyz/${cand.code}bonus.mp3` },
+        { type: 'bonus', title: 'Bonus (特典)', url: `https://v.weeab0o.xyz/${cand.code}_bonus.mp3` },
+        { type: 'main', title: 'Track 2 (トラック2)', url: `https://v.weeab0o.xyz/${cand.code} 2.mp3` },
+        { type: 'main', title: 'Track 3 (トラック3)', url: `https://v.weeab0o.xyz/${cand.code} 3.mp3` },
+        { type: 'main', title: 'Track 4 (トラック4)', url: `https://v.weeab0o.xyz/${cand.code} 4.mp3` },
+        { type: 'main', title: 'Track 5 (トラック5)', url: `https://v.weeab0o.xyz/${cand.code} 5.mp3` },
+        { type: 'main', title: 'Track 6 (トラック6)', url: `https://v.weeab0o.xyz/${cand.code} 6.mp3` },
+        { type: 'main', title: 'Track 7 (トラック7)', url: `https://v.weeab0o.xyz/${cand.code} 7.mp3` },
+        { type: 'main', title: 'Track 8 (トラック8)', url: `https://v.weeab0o.xyz/${cand.code} 8.mp3` },
+        { type: 'main', title: 'Track 2 (トラック2)', url: `https://v.weeab0o.xyz/${cand.code}_2.mp3` },
+        { type: 'main', title: 'Track 3 (トラック3)', url: `https://v.weeab0o.xyz/${cand.code}_3.mp3` },
+        { type: 'main', title: 'Track 2 (トラック2)', url: `https://v.weeab0o.xyz/${cand.code}-2.mp3` },
+        { type: 'main', title: 'Track 3 (トラック3)', url: `https://v.weeab0o.xyz/${cand.code}-3.mp3` }
+      ];
+
+      const bonusChecks = await Promise.all(
+        bonusCandidates.map(async (c) => {
+          try {
+            const res = await axios.head(encodeURI(c.url), {
+              httpAgent,
+              httpsAgent,
+              headers: { 'Referer': 'https://japaneseasmr.com/', 'User-Agent': BROWSER_HEADERS['User-Agent'] },
+              timeout: 3000,
+              validateStatus: s => s >= 200 && s < 400
+            });
+            if (res && res.status >= 200 && res.status < 400) {
+              const sz = parseInt(res.headers['content-length'] || '0', 10);
+              return { ...c, size: sz };
+            }
+          } catch (e) {}
+          return null;
+        })
+      );
+
+      let trkIndex = 2;
+      for (const b of bonusChecks) {
+        if (b) {
+          japTracks.push({
+            id: trkIndex++,
+            title: b.title,
+            size: b.size,
+            formattedTime: '00:00:00',
+            startTime: 0,
+            isHls: false,
+            category: b.type,
+            rawUrl: b.url,
+            referer: 'https://japaneseasmr.com/',
+            streamUrl: `/stream?url=${encodeURIComponent(b.url)}&referer=${encodeURIComponent('https://japaneseasmr.com/')}&rj=${encodeURIComponent(cleanRj)}`,
+            poster: `/image-proxy?url=${encodeURIComponent(coverUrl)}`
           });
-          if (res && res.status >= 200 && res.status < 400) {
-            const sz = parseInt(res.headers['content-length'] || '0', 10);
-            return { ...c, size: sz };
-          }
-        } catch (e) {}
-        return null;
-      })
-    );
-
-    let trkIndex = 2;
-    for (const b of bonusChecks) {
-      if (b) {
-        japTracks.push({
-          id: trkIndex++,
-          title: b.title,
-          size: b.size,
-          formattedTime: '00:00:00',
-          startTime: 0,
-          isHls: false,
-          category: b.type,
-          rawUrl: b.url,
-          referer: 'https://japaneseasmr.com/',
-          streamUrl: `/stream?url=${encodeURIComponent(b.url)}&referer=${encodeURIComponent('https://japaneseasmr.com/')}`,
-          poster: `/image-proxy?url=${encodeURIComponent(coverUrl)}`
-        });
+        }
       }
+    } else if (m3u8Res && m3u8Res.status === 200 && m3u8Res.data && m3u8Res.data.includes('#EXTM3U')) {
+      hasM3u8 = true;
+      let m3u8Secs = 0;
+      const extinfMatches = m3u8Res.data.match(/#EXTINF:([0-9.]+)/g) || [];
+      extinfMatches.forEach(m => {
+        const s = parseFloat(m.replace('#EXTINF:', ''));
+        if (!isNaN(s)) m3u8Secs += s;
+      });
+      const estBytes = Math.round(m3u8Secs * 16000); // ~128kbps audio estimation
+      japTracks.push({
+        id: 1,
+        title: dlsiteMeta?.title ? `01. ${dlsiteMeta.title}` : '01. Audio Track',
+        duration: Math.round(m3u8Secs),
+        size: estBytes,
+        formattedTime: m3u8Secs > 0 ? formatServerTime(Math.round(m3u8Secs)) : '00:00:00',
+        startTime: 0,
+        isHls: true,
+        category: 'main',
+        rawUrl: cand.m3u8,
+        referer: 'https://japaneseasmr.com/',
+        streamUrl: `/stream?url=${encodeURIComponent(cand.m3u8)}&referer=${encodeURIComponent('https://japaneseasmr.com/')}&rj=${encodeURIComponent(cleanRj)}`,
+        poster: `/image-proxy?url=${encodeURIComponent(coverUrl)}`
+      });
     }
-  } else if (m3u8Res && m3u8Res.status === 200 && m3u8Res.data && m3u8Res.data.includes('#EXTM3U')) {
-    hasM3u8 = true;
-    let m3u8Secs = 0;
-    const extinfMatches = m3u8Res.data.match(/#EXTINF:([0-9.]+)/g) || [];
-    extinfMatches.forEach(m => {
-      const s = parseFloat(m.replace('#EXTINF:', ''));
-      if (!isNaN(s)) m3u8Secs += s;
-    });
-    const estBytes = Math.round(m3u8Secs * 16000); // ~128kbps audio estimation
-    japTracks.push({
-      id: 1,
-      title: dlsiteMeta?.title ? `01. ${dlsiteMeta.title}` : '01. Audio Track',
-      duration: Math.round(m3u8Secs),
-      size: estBytes,
-      formattedTime: m3u8Secs > 0 ? formatServerTime(Math.round(m3u8Secs)) : '00:00:00',
-      startTime: 0,
-      isHls: true,
-      category: 'main',
-      rawUrl: m3u8Url,
-      referer: 'https://japaneseasmr.com/',
-      streamUrl: `/stream?url=${encodeURIComponent(m3u8Url)}&referer=${encodeURIComponent('https://japaneseasmr.com/')}`,
-      poster: `/image-proxy?url=${encodeURIComponent(coverUrl)}`
-    });
   }
 
-  // 2. Fetch Ground-Truth Reference Tracks from ASMR.one only if JapaneseASMR audio was NOT found
+  // 2. Fetch Ground-Truth Reference Tracks from ASMR.one
   let gtTracks = [];
   if (japTracks.length === 0) {
     try {
       const cleanNum = cleanRj.replace(/^(?:RJ|VJ|BJ)/i, '');
-      const apiHosts = ['https://api.asmr.one', 'https://api.asmr-200.com'];
-      for (const host of apiHosts) {
-        try {
-          const asmrRes = await axios.get(`${host}/api/tracks/${cleanNum}`, {
-            httpAgent,
-            httpsAgent,
-            headers: { 'User-Agent': BROWSER_HEADERS['User-Agent'], 'Accept': 'application/json' },
-            timeout: 5000
-          });
-          if (asmrRes.status === 200 && Array.isArray(asmrRes.data) && asmrRes.data.length > 0) {
-            const audioList = [];
-            const isBonus = (t) => /(特典|おまけ|bonus|extra|ex_|sp_|後日談|アフター|ショートストーリー|ss)/i.test(t || '');
-            const isTalk = (t) => /(フリートーク|free[\s_-]?talk|talk|座談会|キャストコメント)/i.test(t || '');
-            const isSamp = (t) => /(サンプル|sample|体験版|予告|試聴|pv|ダイジェスト|digest|\.mp4|\.mkv)/i.test(t || '');
+      const strippedNum = cleanNum.replace(/^0+/, '');
+      const trackIdsToTry = Array.from(new Set([strippedNum, cleanNum])).filter(Boolean);
+      const apiHosts = ['https://api.asmr-200.com', 'https://api.asmr-300.com', 'https://api.asmr.one'];
+      for (const tid of trackIdsToTry) {
+        for (const host of apiHosts) {
+          try {
+            const asmrRes = await axios.get(`${host}/api/tracks/${tid}`, {
+              httpAgent,
+              httpsAgent,
+              headers: { 'User-Agent': BROWSER_HEADERS['User-Agent'], 'Accept': 'application/json' },
+              timeout: 3000
+            });
+            if (asmrRes.status === 200 && Array.isArray(asmrRes.data) && asmrRes.data.length > 0) {
+              const audioList = [];
+              const isBonus = (t) => /(特典|おまけ|bonus|extra|ex_|sp_|後日談|アフター|ショートストーリー|ss)/i.test(t || '');
+              const isTalk = (t) => /(フリートーク|free[\s_-]?talk|talk|座談会|キャストコメント)/i.test(t || '');
+              const isSamp = (t) => /(サンプル|sample|体験版|予告|試聴|pv|ダイジェスト|digest|\.mp4|\.mkv)/i.test(t || '');
 
-            const trav = (items, folder = '') => {
-              if (!Array.isArray(items)) return;
-              for (const item of items) {
-                if (!item) continue;
-                const title = (item.title || '').trim();
-                const type = (item.type || '').toLowerCase();
-                const dur = Math.max(0, Math.round(Number(item.duration) || 0));
-                if ((type === 'audio' || /\.(mp3|wav|flac|m4a|aac|ogg|opus)$/i.test(title)) && dur > 0 && !isSamp(title)) {
-                  let cat = 'main';
-                  if (isTalk(title) || isTalk(folder)) cat = 'freetalk';
-                  else if (isBonus(title) || isBonus(folder)) cat = 'bonus';
-                  audioList.push({
-                    title: title.replace(/\.[a-zA-Z0-9]+$/, '').trim(),
-                    duration: dur,
-                    formattedTime: formatServerTime(dur),
-                    category: cat,
-                    folder: folder
-                  });
+              const trav = (items, folder = '') => {
+                if (!Array.isArray(items)) return;
+                for (const item of items) {
+                  if (!item) continue;
+                  const title = (item.title || '').trim();
+                  const type = (item.type || '').toLowerCase();
+                  const dur = Math.max(0, Math.round(Number(item.duration) || 0));
+                  const streamCandidateUrl = item.mediaStreamUrl || item.streamLowQualityUrl || item.mediaDownloadUrl || item.downloadUrl || item.streamUrl || item.url || (item.hash ? `${host}/api/media/stream/${item.hash}` : '');
+                  if ((type === 'audio' || /\.(mp3|wav|flac|m4a|aac|ogg|opus)$/i.test(title)) && dur > 0 && !isSamp(title)) {
+                    let cat = 'main';
+                    if (isTalk(title) || isTalk(folder)) cat = 'freetalk';
+                    else if (isBonus(title) || isBonus(folder)) cat = 'bonus';
+                    audioList.push({
+                      title: title.replace(/\.[a-zA-Z0-9]+$/, '').trim(),
+                      duration: dur,
+                      formattedTime: formatServerTime(dur),
+                      category: cat,
+                      folder: folder,
+                      url: streamCandidateUrl
+                    });
+                  }
+                  if (Array.isArray(item.children) && item.children.length > 0) {
+                    trav(item.children, folder ? `${folder}/${title}` : title);
+                  }
                 }
-                if (Array.isArray(item.children) && item.children.length > 0) {
-                  trav(item.children, folder ? `${folder}/${title}` : title);
-                }
+              };
+              trav(asmrRes.data);
+              if (audioList.length > 0) {
+                gtTracks = audioList;
+                break;
               }
-            };
-            trav(asmrRes.data);
-            if (audioList.length > 0) {
-              gtTracks = audioList;
-              break;
             }
-          }
-        } catch (e) {}
+          } catch (e) {}
+          if (gtTracks.length > 0) break;
+        }
         if (gtTracks.length > 0) break;
       }
     } catch (e) {}
@@ -923,7 +1188,9 @@ async function probeMediaCdn(rjCode, dlsiteMeta) {
           else if (/(?:おまけ|bonus|特典|omake)/i.test(t.title)) cat = 'bonus';
         }
 
-        if (!trackDur && t._size) {
+        if (!trackDur && moeMeta.duration > 0 && moeMeta.audioTracks.length === 1) {
+          trackDur = moeMeta.duration;
+        } else if (!trackDur && t._size) {
           trackDur = Math.round(t._size / 16000); // ~128kbps MP3
         }
 
@@ -938,8 +1205,8 @@ async function probeMediaCdn(rjCode, dlsiteMeta) {
           isCombinedAllInOne: isCombined,
           category: cat,
           rawUrl: t.streamUrl,
-          referer: 'https://hentaiasmr.moe/',
-          streamUrl: `/stream?url=${encodeURIComponent(t.streamUrl)}&referer=${encodeURIComponent('https://hentaiasmr.moe/')}`,
+          referer: moeMeta.postLink || `https://hentaiasmr.moe/${cleanRj.toLowerCase()}.html`,
+          streamUrl: `/stream?url=${encodeURIComponent(t.streamUrl)}&referer=${encodeURIComponent(moeMeta.postLink || `https://hentaiasmr.moe/${cleanRj.toLowerCase()}.html`)}&rj=${encodeURIComponent(cleanRj)}`,
           poster: `/image-proxy?url=${encodeURIComponent(coverUrl)}`
         });
       });
@@ -949,7 +1216,22 @@ async function probeMediaCdn(rjCode, dlsiteMeta) {
   // Probe DLsite Chobit official preview audio
   const chobitTracks = await fetchChobitSampleTracks(cleanRj);
 
-  // 4. Source Selection: Multi-track Moe > Multi-track JapaneseASMR > Single-track Moe > Single-track JapaneseASMR > Chobit Preview
+  // Ground-truth and ASMR.one track tree audio streams
+  const asmrTracks = gtTracks.filter(t => Boolean(t.url)).map((t, idx) => ({
+    id: idx + 1,
+    title: t.title || `Track ${idx + 1}`,
+    duration: t.duration || 0,
+    formattedTime: formatServerTime(t.duration || 0),
+    startTime: 0,
+    isHls: false,
+    category: t.category || 'main',
+    rawUrl: t.url,
+    referer: 'https://www.asmr.one/',
+    streamUrl: `/stream?url=${encodeURIComponent(t.url)}&referer=${encodeURIComponent('https://www.asmr.one/')}&rj=${encodeURIComponent(cleanRj)}`,
+    poster: `/image-proxy?url=${encodeURIComponent(coverUrl)}`
+  }));
+
+  // 4. Source Selection: Multi-track Moe > Multi-track JapaneseASMR > Multi-track ASMR.one > Single-track Moe > Single-track JapaneseASMR > Single-track ASMR.one > Chobit Preview
   let tracks = [];
   let selectedSource = '';
   let hasLazyAudio = false;
@@ -963,6 +1245,11 @@ async function probeMediaCdn(rjCode, dlsiteMeta) {
     tracks = japTracks;
     selectedSource = (tracks[0] && tracks[0].isHls) ? 'JapaneseASMR (HLS Stream)' : 'JapaneseASMR (Multi-Track MP3)';
     hasLazyAudio = false;
+  } else if (asmrTracks.length > 1) {
+    tracks = asmrTracks;
+    selectedSource = 'ASMR.one (Multi-Track Audio Stream)';
+    hasLazyAudio = false;
+    hasHls = false;
   } else if (moeTracks.length === 1) {
     tracks = moeTracks;
     selectedSource = 'HentaiASMR Moe (Discrete MP3 track)';
@@ -972,6 +1259,11 @@ async function probeMediaCdn(rjCode, dlsiteMeta) {
     tracks = japTracks;
     selectedSource = (tracks[0] && tracks[0].isHls) ? 'JapaneseASMR (HLS Stream)' : 'JapaneseASMR (Discrete MP3 track)';
     hasLazyAudio = false;
+  } else if (asmrTracks.length === 1) {
+    tracks = asmrTracks;
+    selectedSource = 'ASMR.one (Discrete Audio Stream)';
+    hasLazyAudio = false;
+    hasHls = false;
   } else if (moeMeta?.isAudioFound) {
     hasLazyAudio = true;
     tracks.push({
@@ -991,8 +1283,12 @@ async function probeMediaCdn(rjCode, dlsiteMeta) {
     tracks = [];
     selectedSource = 'DLsite Official Sample Audio (Chobit CDN)';
     hasLazyAudio = false;
+  } else if (title && !isPlaceholderTitle(title, cleanRj)) {
+    tracks = [];
+    selectedSource = 'DLsite Official Metadata (Preview / Sample Clips Only)';
+    hasLazyAudio = false;
   } else {
-    throw new Error(`Work ${cleanRj} not found on JapaneseASMR, HentaiASMR Moe, or DLsite Chobit`);
+    throw new Error(`Work ${cleanRj} not found on JapaneseASMR, HentaiASMR Moe, ASMR.one, or DLsite Chobit`);
   }
 
   const postLink = moeMeta?.postLink || `https://hentaiasmr.moe/${cleanRj.toLowerCase()}.html`;
@@ -1007,8 +1303,7 @@ async function probeMediaCdn(rjCode, dlsiteMeta) {
       found: Boolean(moeMeta?.postId),
       pattern: hasLazyAudio ? 'lazy_on_demand' : null,
       trackCount: hasLazyAudio ? 1 : 0,
-      sampleUrl: null,
-      postId: moeMeta?.postId || null
+      sampleUrl: hasLazyAudio ? null : (moeTracks.length > 0 ? moeTracks[0].rawUrl : null)
     },
     dlsiteChobit: {
       found: chobitTracks.length > 0,
@@ -1035,17 +1330,17 @@ async function probeMediaCdn(rjCode, dlsiteMeta) {
 
   return {
     rjCode: cleanRj,
-    title: dlsiteMeta?.title || `Work ${cleanRj}`,
-    circle: dlsiteMeta?.circle || 'ASMR Circle',
-    cv: dlsiteMeta?.cv || 'N/A',
-    tags: dlsiteMeta?.tags && dlsiteMeta.tags.length > 0 ? dlsiteMeta.tags : ['ASMR', 'Audio', 'Voice'],
-    coverUrl: `/image-proxy?url=${encodeURIComponent(coverUrl)}`,
+    title,
+    circle,
+    cv,
+    tags,
+    tagTranslations,
+    coverUrl,
     rawCoverUrl: coverUrl,
-    hasHls: tracks.length > 0 && tracks[0].isHls === true,
-    hasLazyAudio: Boolean(hasLazyAudio),
-    postLink: postLink,
-    isNsfw: dlsiteMeta ? (dlsiteMeta.isNsfw ?? true) : true,
+    hasHls,
+    hasLazyAudio,
     totalTracks: tracks.length,
+    selectedSource,
     tracks,
     sampleTracks: chobitTracks,
     sources: sourcesBreakdown,
@@ -1055,13 +1350,78 @@ async function probeMediaCdn(rjCode, dlsiteMeta) {
 }
 
 // Extract exact JWPlayer audio playlist from Moe post HTML
-function extractMoeHtmlTracks(html, postLink, coverUrl, title) {
+function extractMoeHtmlTracks(html, postLink, coverUrl, title, rjCode = '') {
   const tracks = [];
   if (!html) return tracks;
+  const cleanRj = (rjCode || '').toUpperCase();
+  const cleanLower = (rjCode || '').toLowerCase();
+  const pageReferer = postLink || (cleanLower ? `https://hentaiasmr.moe/${cleanLower}.html` : 'https://hentaiasmr.moe/');
 
-  // Pattern 1: JWPlayer playlist.push({ file: '...', title: '...' })
-  const itemRegex = /playlist\.push\(\s*\{([\s\S]*?)\}\s*\);/gi;
+  // Ground-truth ISO 8601 duration in page HTML (e.g. PT02H21M44S)
+  let htmlDuration = 0;
+  const isoDurMatch = html.match(/itemprop=["']duration["']\s+content=["']PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?["']/i) ||
+                      html.match(/"duration"\s*:\s*["']PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?["']/i) ||
+                      html.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/i);
+  if (isoDurMatch && (isoDurMatch[1] || isoDurMatch[2] || isoDurMatch[3])) {
+    const h = parseInt(isoDurMatch[1] || '0', 10);
+    const m = parseInt(isoDurMatch[2] || '0', 10);
+    const s = parseInt(isoDurMatch[3] || '0', 10);
+    htmlDuration = h * 3600 + m * 60 + s;
+  }
+
+  // Pattern 1: JWPlayer setup direct file or playlist
+  const jwSetupRegex = /jwplayer\([^)]*\)\.setup\(\s*\{[\s\S]*?file\s*:\s*["']([^"']+)["']/gi;
   let match;
+  while ((match = jwSetupRegex.exec(html)) !== null) {
+    let fUrl = match[1].replace(/\\\//g, '/').replace(/&amp;/g, '&').trim();
+    if (fUrl.startsWith('//')) fUrl = 'https:' + fUrl;
+    if (/\.(?:mp3|m4a|wav|ogg|flac|m3u8)(?:\?.*)?$/i.test(fUrl)) {
+      if (!tracks.some(t => t.rawUrl === fUrl)) {
+        const trkNum = tracks.length + 1;
+        const trkTitle = title ? `${cleanRj || title} (Full)` : `Track ${trkNum}`;
+        tracks.push({
+          id: trkNum,
+          title: trkTitle,
+          rawUrl: fUrl,
+          streamUrl: `/stream?url=${encodeURIComponent(fUrl)}&referer=${encodeURIComponent(pageReferer)}&rj=${encodeURIComponent(cleanRj)}`,
+          category: 'main',
+          formattedTime: htmlDuration > 0 ? formatServerTime(htmlDuration) : '00:00:00',
+          duration: htmlDuration,
+          size: 0,
+          isHls: fUrl.toLowerCase().includes('.m3u8'),
+          poster: coverUrl ? `/image-proxy?url=${encodeURIComponent(coverUrl)}` : ''
+        });
+      }
+    }
+  }
+
+  // Pattern 2: Any JWPlayer file object { file: "...", title: "..." }
+  const fileObjRegex = /\{\s*(?:file|src)\s*:\s*["']([^"']+)["'](?:[^{}]*?title\s*:\s*["']([^"']+)["'])?[^}]*\}/gi;
+  while ((match = fileObjRegex.exec(html)) !== null) {
+    let fUrl = match[1].replace(/\\\//g, '/').replace(/&amp;/g, '&').trim();
+    if (fUrl.startsWith('//')) fUrl = 'https:' + fUrl;
+    if (/\.(?:mp3|m4a|wav|ogg|flac|m3u8)(?:\?.*)?$/i.test(fUrl)) {
+      if (!tracks.some(t => t.rawUrl === fUrl)) {
+        const trkNum = tracks.length + 1;
+        const trkTitle = match[2] ? match[2].trim() : (title ? `${String(trkNum).padStart(2, '0')}. Track ${trkNum}` : `Track ${trkNum}`);
+        tracks.push({
+          id: trkNum,
+          title: trkTitle,
+          rawUrl: fUrl,
+          streamUrl: `/stream?url=${encodeURIComponent(fUrl)}&referer=${encodeURIComponent(pageReferer)}&rj=${encodeURIComponent(cleanRj)}`,
+          category: /(?:フリートーク|free[\s_-]?talk|talk)/i.test(trkTitle) ? 'freetalk' : (/(?:おまけ|bonus|特典|omake)/i.test(trkTitle) ? 'bonus' : 'main'),
+          formattedTime: htmlDuration > 0 && tracks.length === 0 ? formatServerTime(htmlDuration) : '00:00:00',
+          duration: tracks.length === 0 ? htmlDuration : 0,
+          size: 0,
+          isHls: fUrl.toLowerCase().includes('.m3u8'),
+          poster: coverUrl ? `/image-proxy?url=${encodeURIComponent(coverUrl)}` : ''
+        });
+      }
+    }
+  }
+
+  // Pattern 3: playlist.push({ file: '...', title: '...' })
+  const itemRegex = /playlist\.push\(\s*\{([\s\S]*?)\}\s*\);/gi;
   while ((match = itemRegex.exec(html)) !== null) {
     const block = match[1];
     const fileM = block.match(/file\s*:\s*["']([^"']+)["']/i);
@@ -1069,15 +1429,66 @@ function extractMoeHtmlTracks(html, postLink, coverUrl, title) {
     if (fileM) {
       let fUrl = fileM[1].replace(/\\\//g, '/').replace(/&amp;/g, '&').trim();
       if (fUrl.startsWith('//')) fUrl = 'https:' + fUrl;
-      const tTitle = titleM ? titleM[1].trim() : `Track ${tracks.length + 1}`;
+      if (!tracks.some(t => t.rawUrl === fUrl)) {
+        const trkNum = tracks.length + 1;
+        const tTitle = titleM ? titleM[1].trim() : `Track ${trkNum}`;
+        tracks.push({
+          id: trkNum,
+          title: tTitle,
+          rawUrl: fUrl,
+          streamUrl: `/stream?url=${encodeURIComponent(fUrl)}&referer=${encodeURIComponent(pageReferer)}&rj=${encodeURIComponent(cleanRj)}`,
+          category: /(?:フリートーク|free[\s_-]?talk|talk)/i.test(tTitle) ? 'freetalk' : (/(?:おまけ|bonus|特典|omake)/i.test(tTitle) ? 'bonus' : 'main'),
+          formattedTime: '00:00:00',
+          duration: 0,
+          size: 0,
+          isHls: fUrl.toLowerCase().includes('.m3u8'),
+          poster: coverUrl ? `/image-proxy?url=${encodeURIComponent(coverUrl)}` : ''
+        });
+      }
+    }
+  }
+
+  // Pattern 4: Button tracking link: <a class="button-track" ... href="...">
+  const buttonTrackRegex = /<a\b[^>]*class=["'][^"']*button-track[^"']*["'][^>]*href=["']([^"']+)["']/gi;
+  while ((match = buttonTrackRegex.exec(html)) !== null) {
+    let fUrl = match[1].replace(/\\\//g, '/').replace(/&amp;/g, '&').trim();
+    if (fUrl.startsWith('//')) fUrl = 'https:' + fUrl;
+    if (/\.(?:mp3|m4a|wav|ogg|flac|m3u8)(?:\?.*)?$/i.test(fUrl)) {
+      if (!tracks.some(t => t.rawUrl === fUrl)) {
+        const trkNum = tracks.length + 1;
+        const trkTitle = title ? `${cleanRj || title} (Full)` : `Track ${trkNum}`;
+        tracks.push({
+          id: trkNum,
+          title: trkTitle,
+          rawUrl: fUrl,
+          streamUrl: `/stream?url=${encodeURIComponent(fUrl)}&referer=${encodeURIComponent(pageReferer)}&rj=${encodeURIComponent(cleanRj)}`,
+          category: 'main',
+          formattedTime: htmlDuration > 0 ? formatServerTime(htmlDuration) : '00:00:00',
+          duration: htmlDuration,
+          size: 0,
+          isHls: fUrl.toLowerCase().includes('.m3u8'),
+          poster: coverUrl ? `/image-proxy?url=${encodeURIComponent(coverUrl)}` : ''
+        });
+      }
+    }
+  }
+
+  // Pattern 5: Direct CDN audio links in script/content (e.g. cdn.hentaiasmr.moe/mf/...)
+  const directAudioRegex = /https?:\/\/cdn(?:16|-otome)?\.hentaiasmr\.moe\/[^\s"'<>]+\.(?:mp3|m4a|wav|ogg|flac|m3u8)/gi;
+  let dMatch;
+  while ((dMatch = directAudioRegex.exec(html)) !== null) {
+    let fUrl = dMatch[0].replace(/\\\//g, '/').replace(/&amp;/g, '&').trim();
+    if (!tracks.some(t => t.rawUrl === fUrl)) {
+      const trkNum = tracks.length + 1;
+      const trkTitle = title ? `${String(trkNum).padStart(2, '0')}. Track ${trkNum}` : `Track ${trkNum}`;
       tracks.push({
-        id: tracks.length + 1,
-        title: tTitle,
+        id: trkNum,
+        title: trkTitle,
         rawUrl: fUrl,
-        streamUrl: `/stream?url=${encodeURIComponent(fUrl)}&referer=${encodeURIComponent('https://hentaiasmr.moe/')}`,
-        category: /(?:フリートーク|free[\s_-]?talk|talk)/i.test(tTitle) ? 'freetalk' : (/(?:おまけ|bonus|特典|omake)/i.test(tTitle) ? 'bonus' : 'main'),
-        formattedTime: '00:00:00',
-        duration: 0,
+        streamUrl: `/stream?url=${encodeURIComponent(fUrl)}&referer=${encodeURIComponent(pageReferer)}&rj=${encodeURIComponent(cleanRj)}`,
+        category: trkNum === 1 ? 'main' : (trkNum === 2 ? 'freetalk' : 'bonus'),
+        formattedTime: htmlDuration > 0 && tracks.length === 0 ? formatServerTime(htmlDuration) : '00:00:00',
+        duration: tracks.length === 0 ? htmlDuration : 0,
         size: 0,
         isHls: fUrl.toLowerCase().includes('.m3u8'),
         poster: coverUrl ? `/image-proxy?url=${encodeURIComponent(coverUrl)}` : ''
@@ -1085,51 +1496,30 @@ function extractMoeHtmlTracks(html, postLink, coverUrl, title) {
     }
   }
 
-  // Pattern 2: sources: [ { file: "..." } ]
-  if (tracks.length === 0) {
-    const srcRegex = /sources\s*:\s*\[\s*\{([\s\S]*?)\}\s*\]/gi;
-    while ((match = srcRegex.exec(html)) !== null) {
-      const block = match[1];
-      const fileM = block.match(/file\s*:\s*["']([^"']+)["']/i);
-      if (fileM) {
-        let fUrl = fileM[1].replace(/\\\//g, '/').replace(/&amp;/g, '&').trim();
-        if (fUrl.startsWith('//')) fUrl = 'https:' + fUrl;
-        tracks.push({
-          id: tracks.length + 1,
-          title: title ? `01. ${title}` : '01. Audio Track',
-          rawUrl: fUrl,
-          streamUrl: `/stream?url=${encodeURIComponent(fUrl)}&referer=${encodeURIComponent('https://hentaiasmr.moe/')}`,
-          category: 'main',
-          formattedTime: '00:00:00',
-          duration: 0,
-          size: 0,
-          isHls: fUrl.toLowerCase().includes('.m3u8'),
-          poster: coverUrl ? `/image-proxy?url=${encodeURIComponent(coverUrl)}` : ''
-        });
-      }
+  // Pattern 6: <audio> / <source> / schema contentURL / contentUrl
+  const audioRegex = /(?:<source[^>]+src=["']|<audio[^>]+src=["']|"(?:contentURL|contentUrl)"\s*:\s*["']|itemprop=["']contentURL["']\s+content=["'])(https?:\/\/[^\s"'<>]+\.(?:mp3|m4a|wav|ogg|flac|m3u8))/gi;
+  while ((match = audioRegex.exec(html)) !== null) {
+    let fUrl = match[1].replace(/\\\//g, '/').replace(/&amp;/g, '&').trim();
+    if (!tracks.some(t => t.rawUrl === fUrl)) {
+      const trkNum = tracks.length + 1;
+      tracks.push({
+        id: trkNum,
+        title: title ? `${String(trkNum).padStart(2, '0')}. Track ${trkNum}` : `Track ${trkNum}`,
+        rawUrl: fUrl,
+        streamUrl: `/stream?url=${encodeURIComponent(fUrl)}&referer=${encodeURIComponent(pageReferer)}&rj=${encodeURIComponent(cleanRj)}`,
+        category: 'main',
+        formattedTime: htmlDuration > 0 && tracks.length === 0 ? formatServerTime(htmlDuration) : '00:00:00',
+        duration: tracks.length === 0 ? htmlDuration : 0,
+        size: 0,
+        isHls: fUrl.toLowerCase().includes('.m3u8'),
+        poster: coverUrl ? `/image-proxy?url=${encodeURIComponent(coverUrl)}` : ''
+      });
     }
   }
 
-  // Pattern 3: <audio> / <source> / schema contentURL
-  if (tracks.length === 0) {
-    const audioRegex = /(?:<source[^>]+src=["']|<audio[^>]+src=["']|"contentURL"\s*:\s*["'])(https?:\/\/[^\s"'<>]+\.(?:mp3|m4a|wav|ogg|flac|m3u8))/gi;
-    while ((match = audioRegex.exec(html)) !== null) {
-      let fUrl = match[1].replace(/\\\//g, '/').replace(/&amp;/g, '&').trim();
-      if (!tracks.some(t => t.rawUrl === fUrl)) {
-        tracks.push({
-          id: tracks.length + 1,
-          title: title ? `01. ${title}` : `Track ${tracks.length + 1}`,
-          rawUrl: fUrl,
-          streamUrl: `/stream?url=${encodeURIComponent(fUrl)}&referer=${encodeURIComponent('https://hentaiasmr.moe/')}`,
-          category: 'main',
-          formattedTime: '00:00:00',
-          duration: 0,
-          size: 0,
-          isHls: fUrl.toLowerCase().includes('.m3u8'),
-          poster: coverUrl ? `/image-proxy?url=${encodeURIComponent(coverUrl)}` : ''
-        });
-      }
-    }
+  if (tracks.length === 1 && htmlDuration > 0 && (!tracks[0].duration || tracks[0].duration === 0)) {
+    tracks[0].duration = htmlDuration;
+    tracks[0].formattedTime = formatServerTime(htmlDuration);
   }
 
   return tracks;
@@ -1138,30 +1528,69 @@ function extractMoeHtmlTracks(html, postLink, coverUrl, title) {
 // On-demand lazy resolution: Fetches Moe post HTML and extracts exact tracks
 async function resolveLazyWorkAudio(work) {
   if (!work) return null;
+  const cleanRj = (work.rjCode || '').toUpperCase();
   const cleanLower = (work.rjCode || '').toLowerCase();
-  const pageUrl = work.postLink || `https://hentaiasmr.moe/${cleanLower}.html`;
+  const cleanNum = cleanRj.replace(/^(?:RJ|VJ|BJ)/i, '');
+  const strippedNum = cleanNum.replace(/^0+/, '');
+  const strippedLower = `rj${strippedNum}`;
 
-  try {
-    const res = await axios.get(pageUrl, {
-      httpAgent,
-      httpsAgent,
-      headers: {
-        'User-Agent': BROWSER_HEADERS['User-Agent'],
-        'Referer': 'https://hentaiasmr.moe/',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9,ja;q=0.8'
-      },
-      timeout: 8000
-    });
-    if (res.status === 200 && res.data) {
-      const extractedTracks = extractMoeHtmlTracks(res.data, pageUrl, work.rawCoverUrl || work.coverUrl, work.title);
-      if (extractedTracks && extractedTracks.length > 0) {
-        work.tracks = extractedTracks;
-        work.hasLazyAudio = false;
-        work.totalTracks = extractedTracks.length;
-        work.hasHls = extractedTracks.some(t => t.isHls);
-        return work;
+  const candidatePages = [
+    work.postLink,
+    `https://hentaiasmr.moe/${cleanLower}.html`,
+    `https://hentaiasmr.moe/${strippedLower}.html`,
+    `https://hentaiasmr.moe/${cleanRj}.html`,
+    `https://hentaiasmr.moe/RJ${strippedNum}.html`
+  ].filter(Boolean);
+
+  for (const pageUrl of candidatePages) {
+    try {
+      const res = await axios.get(pageUrl, {
+        httpAgent,
+        httpsAgent,
+        headers: {
+          'User-Agent': BROWSER_HEADERS['User-Agent'],
+          'Referer': 'https://hentaiasmr.moe/',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9,ja;q=0.8'
+        },
+        timeout: 8000
+      });
+      if (res.status === 200 && res.data) {
+        const extractedTracks = extractMoeHtmlTracks(res.data, pageUrl, work.rawCoverUrl || work.coverUrl, work.title, cleanRj);
+        if (extractedTracks && extractedTracks.length > 0) {
+          work.tracks = extractedTracks;
+          work.hasLazyAudio = false;
+          work.totalTracks = extractedTracks.length;
+          work.hasHls = extractedTracks.some(t => t.isHls);
+          return work;
+        }
       }
+    } catch (e) {}
+  }
+
+  // Fallback to ASMR.one / Chapters if Moe page didn't have tracks
+  try {
+    const chapData = await fetchChaptersAndGallery(cleanRj, false, work.totalDuration || 0);
+    if (chapData && Array.isArray(chapData.audioTracks) && chapData.audioTracks.length > 0) {
+      work.tracks = chapData.audioTracks.map((t, idx) => ({
+        id: idx + 1,
+        title: t.title || ('Track ' + (idx + 1)),
+        duration: t.duration || 0,
+        formattedTime: formatServerTime(t.duration || 0),
+        startTime: 0,
+        isHls: false,
+        rawUrl: t.url,
+        referer: 'https://www.asmr.one/',
+        streamUrl: `/stream?url=${encodeURIComponent(t.url)}&referer=${encodeURIComponent('https://www.asmr.one/')}&rj=${encodeURIComponent(cleanRj)}`,
+        poster: work.coverUrl || ''
+      }));
+      work.hasLazyAudio = false;
+      work.totalTracks = work.tracks.length;
+      work.hasHls = false;
+      if (Array.isArray(chapData.chapters) && chapData.chapters.length > 0) {
+        work.chapters = chapData.chapters;
+      }
+      return work;
     }
   } catch (e) {}
 
@@ -1237,7 +1666,7 @@ function parseAsmrTreeData(treeData, hasM3u8 = true, targetDuration = 0, hostUrl
           duration: dur,
           rawTitle: title,
           folder: currentFolder,
-          url: rawUrl
+          url: fullUrl || (item.hash ? `${defaultHost}/api/media/stream/${item.hash}` : (rawUrl || ''))
         };
         if (currentFolder) {
           if (!folderAudioMap[currentFolder]) folderAudioMap[currentFolder] = [];
@@ -1568,14 +1997,15 @@ async function fetchChobitSampleTracks(cleanRj) {
 
 async function probeDlsiteAndWeeabGallery(cleanRj) {
   const cleanUpper = (cleanRj || '').toUpperCase().trim();
+  const canonicalRj = getCanonicalDlsiteRj(cleanUpper);
   const cleanNum = cleanUpper.replace(/^(?:RJ|VJ|BJ)/i, '');
   const strippedNum = cleanNum.replace(/^0+/, '');
-  const bucket = getDlsiteCoverBucket(cleanUpper);
+  const bucket = getDlsiteCoverBucket(canonicalRj);
   const candidates = [];
 
   // 1. DLsite Doujin: High-res main illustration
   const dlsiteDoujin = { key: 'doujin', label: 'DLsite Doujin' };
-  const dlsiteMainUrl = `https://img.dlsite.jp/modpub/images2/work/${dlsiteDoujin.key}/${bucket}/${cleanUpper}_img_main.jpg`;
+  const dlsiteMainUrl = `https://img.dlsite.jp/modpub/images2/work/${dlsiteDoujin.key}/${bucket}/${canonicalRj}_img_main.jpg`;
   candidates.push({
     title: 'Main Package Artwork',
     role: 'main_cover',
@@ -1584,56 +2014,18 @@ async function probeDlsiteAndWeeabGallery(cleanRj) {
     proxyUrl: `/image-proxy?url=${encodeURIComponent(dlsiteMainUrl)}`
   });
 
-  // DLsite Doujin: sample pages 1-8
+  // DLsite Doujin: sample pages 1-8 (standard primary format: _img_smpX.jpg)
   for (let i = 1; i <= 8; i++) {
     candidates.push({
       title: `Sample Illustration #${i}`,
       role: `sample_${i}`,
       source: dlsiteDoujin.label,
-      url: `https://img.dlsite.jp/modpub/images2/work/${dlsiteDoujin.key}/${bucket}/${cleanUpper}_img_smp${i}.jpg`,
-      proxyUrl: `/image-proxy?url=${encodeURIComponent(`https://img.dlsite.jp/modpub/images2/work/${dlsiteDoujin.key}/${bucket}/${cleanUpper}_img_smp${i}.jpg`)}`
-    });
-    candidates.push({
-      title: `Sample Illustration #${i}`,
-      role: `sample_${i}`,
-      source: dlsiteDoujin.label,
-      url: `https://img.dlsite.jp/modpub/images2/work/${dlsiteDoujin.key}/${bucket}/${cleanUpper}_smp${i}.jpg`,
-      proxyUrl: `/image-proxy?url=${encodeURIComponent(`https://img.dlsite.jp/modpub/images2/work/${dlsiteDoujin.key}/${bucket}/${cleanUpper}_smp${i}.jpg`)}`
-    });
-  }
-
-  // 2. Fallback ASMR.one Official Cover
-  if (strippedNum) {
-    const asmrCoverUrl = `https://api.asmr-200.com/api/cover/${strippedNum}.jpg?type=main`;
-    candidates.push({
-      title: 'Official Cover / CD Jacket',
-      role: 'asmr_fallback_cover',
-      source: 'ASMR.one',
-      url: asmrCoverUrl,
-      proxyUrl: `/image-proxy?url=${encodeURIComponent(asmrCoverUrl)}`
-    });
-  }
-
-  // 3. Weeab0o / JapaneseASMR sample images 1-4
-  for (let i = 1; i <= 4; i++) {
-    candidates.push({
-      title: `Sample Artwork #${i}`,
-      role: `weeab_sample_${i}`,
-      source: 'Weeab0o',
-      url: `https://pic.weeabo0.xyz/${cleanUpper}_img_smp${i}.jpg`,
-      proxyUrl: `/image-proxy?url=${encodeURIComponent(`https://pic.weeabo0.xyz/${cleanUpper}_img_smp${i}.jpg`)}`
-    });
-    candidates.push({
-      title: `Sample Artwork #${i}`,
-      role: `weeab_sample_${i}`,
-      source: 'Weeab0o',
-      url: `https://pic.weeabo0.xyz/${cleanUpper}_smp${i}.jpg`,
-      proxyUrl: `/image-proxy?url=${encodeURIComponent(`https://pic.weeabo0.xyz/${cleanUpper}_smp${i}.jpg`)}`
+      url: `https://img.dlsite.jp/modpub/images2/work/${dlsiteDoujin.key}/${bucket}/${canonicalRj}_img_smp${i}.jpg`,
+      proxyUrl: `/image-proxy?url=${encodeURIComponent(`https://img.dlsite.jp/modpub/images2/work/${dlsiteDoujin.key}/${bucket}/${canonicalRj}_img_smp${i}.jpg`)}`
     });
   }
 
   try {
-    // Process candidate probes in chunks of 4 with explicit stream cancellation to prevent Worker deadlock
     let validList = [];
     const chunkSize = 4;
 
@@ -1642,23 +2034,14 @@ async function probeDlsiteAndWeeabGallery(cleanRj) {
       const results = await Promise.all(
         chunk.map(async (item) => {
           try {
-            let referer = 'https://www.dlsite.com/';
-            const isAsmr = item.url.includes('asmr.one') || item.url.includes('asmr-200.com') || item.url.includes('asmr-300.com') || item.url.includes('asmr-100.com');
-            if (item.url.includes('weeabo0') || item.url.includes('japaneseasmr')) {
-              referer = 'https://japaneseasmr.com/';
-            } else if (isAsmr) {
-              referer = 'https://www.asmr.one/';
-            }
             const headers = {
-              'Referer': referer,
+              'Referer': 'https://www.dlsite.com/',
               'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+              'Range': 'bytes=0-0',
               'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
             };
-            if (isAsmr) {
-              headers['Range'] = 'bytes=0-0';
-            }
             const res = await axios({
-              method: isAsmr ? 'get' : 'head',
+              method: 'get',
               url: item.url,
               headers,
               httpAgent,
@@ -1667,7 +2050,7 @@ async function probeDlsiteAndWeeabGallery(cleanRj) {
               validateStatus: (status) => (status >= 200 && status < 400)
             });
             if (res.status >= 200 && res.status < 400) {
-              const cl = res.headers ? (res.headers['content-length'] || '') : '';
+              const cl = res.headers ? (res.headers['content-range'] ? (res.headers['content-range'].match(/\/(\d+)/) || [])[1] : (res.headers['content-length'] || '')) : '';
               const et = res.headers ? (res.headers['etag'] || '') : '';
               return { ...item, contentLength: cl ? parseInt(cl, 10) : null, etag: et };
             }
@@ -1678,8 +2061,9 @@ async function probeDlsiteAndWeeabGallery(cleanRj) {
       results.filter(Boolean).forEach(r => validList.push(r));
     }
 
-    // Fallback: If 0 DLsite doujin images were found, try other categories (pro, books, girls, bl, ai) with small footprint
     const hasDlsite = validList.some(v => v.source && v.source.includes('DLsite'));
+
+    // If 0 DLsite doujin images were found, try other DLsite categories (pro, books, girls, bl, ai)
     if (!hasDlsite) {
       const altCats = [
         { key: 'pro', label: 'DLsite Pro' },
@@ -1694,29 +2078,31 @@ async function probeDlsiteAndWeeabGallery(cleanRj) {
           title: 'Main Package Artwork',
           role: 'main_cover',
           source: cat.label,
-          url: `https://img.dlsite.jp/modpub/images2/work/${cat.key}/${bucket}/${cleanUpper}_img_main.jpg`,
-          proxyUrl: `/image-proxy?url=${encodeURIComponent(`https://img.dlsite.jp/modpub/images2/work/${cat.key}/${bucket}/${cleanUpper}_img_main.jpg`)}`
+          url: `https://img.dlsite.jp/modpub/images2/work/${cat.key}/${bucket}/${canonicalRj}_img_main.jpg`,
+          proxyUrl: `/image-proxy?url=${encodeURIComponent(`https://img.dlsite.jp/modpub/images2/work/${cat.key}/${bucket}/${canonicalRj}_img_main.jpg`)}`
         });
         for (let i = 1; i <= 4; i++) {
           altCandidates.push({
             title: `Sample Illustration #${i}`,
             role: `sample_${i}`,
             source: cat.label,
-            url: `https://img.dlsite.jp/modpub/images2/work/${cat.key}/${bucket}/${cleanUpper}_img_smp${i}.jpg`,
-            proxyUrl: `/image-proxy?url=${encodeURIComponent(`https://img.dlsite.jp/modpub/images2/work/${cat.key}/${bucket}/${cleanUpper}_img_smp${i}.jpg`)}`
+            url: `https://img.dlsite.jp/modpub/images2/work/${cat.key}/${bucket}/${canonicalRj}_img_smp${i}.jpg`,
+            proxyUrl: `/image-proxy?url=${encodeURIComponent(`https://img.dlsite.jp/modpub/images2/work/${cat.key}/${bucket}/${canonicalRj}_img_smp${i}.jpg`)}`
           });
         }
       }
       const altChecked = await Promise.all(
         altCandidates.map(async (item) => {
           try {
-            const res = await axios.head(item.url, {
-              headers: { 'Referer': 'https://www.dlsite.com/', 'User-Agent': 'Mozilla/5.0' },
+            const res = await axios({
+              method: 'get',
+              url: item.url,
+              headers: { 'Referer': 'https://www.dlsite.com/', 'User-Agent': 'Mozilla/5.0', 'Range': 'bytes=0-0', 'Accept': 'image/*,*/*' },
               timeout: 3000,
               validateStatus: (status) => status >= 200 && status < 400
             });
             if (res.status >= 200 && res.status < 400) {
-              const cl = res.headers ? (res.headers['content-length'] || '') : '';
+              const cl = res.headers ? (res.headers['content-range'] ? (res.headers['content-range'].match(/\/(\d+)/) || [])[1] : (res.headers['content-length'] || '')) : '';
               const et = res.headers ? (res.headers['etag'] || '') : '';
               return { ...item, contentLength: cl ? parseInt(cl, 10) : null, etag: et };
             }
@@ -1727,25 +2113,52 @@ async function probeDlsiteAndWeeabGallery(cleanRj) {
       validList = validList.concat(altChecked.filter(Boolean));
     }
 
-    // --- Deduplication Logic ---
-    // 1. If we have a primary DLsite Main Cover, discard the ASMR.one fallback mirror cover
-    const hasPrimaryMain = validList.some(v => v.role === 'main_cover');
-    if (hasPrimaryMain) {
-      validList = validList.filter(v => v.role !== 'asmr_fallback_cover');
+    // Only probe Weeab0o mirrors if no DLsite samples were found
+    const hasDlsiteSamples = validList.some(v => v.role && v.role.startsWith('sample_'));
+    if (!hasDlsiteSamples) {
+      const weeabCandidates = [];
+      for (let i = 1; i <= 4; i++) {
+        weeabCandidates.push({
+          title: `Sample Artwork #${i}`,
+          role: `sample_${i}`,
+          source: 'Weeab0o',
+          url: `https://pic.weeabo0.xyz/${canonicalRj}_img_smp${i}.jpg`,
+          proxyUrl: `/image-proxy?url=${encodeURIComponent(`https://pic.weeabo0.xyz/${canonicalRj}_img_smp${i}.jpg`)}`
+        });
+      }
+      const weeabChecked = await Promise.all(
+        weeabCandidates.map(async (item) => {
+          try {
+            const res = await axios({
+              method: 'get',
+              url: item.url,
+              headers: { 'Referer': 'https://japaneseasmr.com/', 'User-Agent': 'Mozilla/5.0', 'Range': 'bytes=0-0', 'Accept': 'image/*,*/*' },
+              timeout: 3000,
+              validateStatus: (status) => status >= 200 && status < 400
+            });
+            if (res.status >= 200 && res.status < 400) {
+              const cl = res.headers ? (res.headers['content-range'] ? (res.headers['content-range'].match(/\/(\d+)/) || [])[1] : (res.headers['content-length'] || '')) : '';
+              const et = res.headers ? (res.headers['etag'] || '') : '';
+              return { ...item, contentLength: cl ? parseInt(cl, 10) : null, etag: et };
+            }
+          } catch (e) {}
+          return null;
+        })
+      );
+      validList = validList.concat(weeabChecked.filter(Boolean));
     }
 
-    // 2. Deduplicate by unique sample roles (e.g. keep one of img_smpX vs smpX)
+    // Deduplicate by role (keep 1 item per role)
     const seenRoles = new Set();
     const roleFiltered = [];
     for (const item of validList) {
-      if (item.role && item.role.startsWith('sample_')) {
+      if (item.role) {
         if (seenRoles.has(item.role)) continue;
         seenRoles.add(item.role);
       }
       roleFiltered.push(item);
     }
 
-    // 3. Deduplicate images whose byte sizes differ by <= 0.01%
     return dedupeGalleryByImageSize(roleFiltered);
   } catch (e) {
     return [];
@@ -1756,16 +2169,21 @@ function dedupeGalleryByImageSize(galleryList) {
   if (!Array.isArray(galleryList) || galleryList.length === 0) return [];
   const result = [];
   const seenUrls = new Set();
+  const seenTitles = new Set();
   const keptSizes = [];
 
   for (const item of galleryList) {
     if (!item || !item.url) continue;
     if (seenUrls.has(item.url)) continue;
 
+    const normTitle = (item.title || '').trim().toLowerCase();
+    if (normTitle && seenTitles.has(normTitle) && (item.role === 'main_cover' || item.source === 'DLsite Doujin')) {
+      continue;
+    }
+
     const size = (typeof item.contentLength === 'number' && item.contentLength > 0) ? item.contentLength : null;
 
     if (size !== null) {
-      // If two images differ by <= 0.01% (0.0001 relative tolerance), treat as duplicate
       const isDuplicate = keptSizes.some(k => {
         const diff = Math.abs(k.size - size);
         const max = Math.max(k.size, size);
@@ -1780,6 +2198,7 @@ function dedupeGalleryByImageSize(galleryList) {
     }
 
     seenUrls.add(item.url);
+    if (normTitle) seenTitles.add(normTitle);
     result.push(item);
   }
 
@@ -1867,9 +2286,6 @@ async function fetchChaptersAndGallery(cleanRj, hasM3u8 = true, targetDuration =
             }
             const res = parseAsmrTreeData(treeList, hasM3u8, targetDuration, host);
             parsed = res;
-            if (res.gallery && res.gallery.length > 0) {
-              extractedArtworks.push(...res.gallery);
-            }
             break;
           }
         }
@@ -2045,8 +2461,185 @@ function isWorkMetadataChanged(oldWork, freshWork) {
   return false;
 }
 
+function isPlaceholderTitle(t, rj) {
+  if (!t || typeof t !== 'string') return true;
+  const s = t.trim().toUpperCase();
+  const r = (rj || '').toUpperCase().trim();
+  const num = r.replace(/^(?:RJ|VJ|BJ)/, '');
+  return s === '' || s === r || s === `WORK ${r}` || s === `RJ${num}` || s === `WORK RJ${num}` || s === 'UNKNOWN TITLE' || s === 'UNKNOWN WORK' || s === 'UNTITLED' || s === 'LOADING...' || s.startsWith('WORK RJ') || s.startsWith('RJ0');
+}
+
+function isPlaceholderCircle(c) {
+  if (!c || typeof c !== 'string') return true;
+  const s = c.trim().toLowerCase();
+  return s === '' || s === 'unknown circle' || s === 'asmr circle' || s === 'unknown' || s === 'n/a' || s === 'none' || s === 'null' || s === 'undefined' || s === 'asmr';
+}
+
+function isPlaceholderCv(v) {
+  if (!v || typeof v !== 'string') return true;
+  const s = v.trim().toLowerCase();
+  return s === '' || s === 'n/a' || s === 'none' || s === 'unknown' || s === 'null' || s === 'undefined';
+}
+
+async function resolveRjMetadataOnly(cleanRj, oldWork) {
+  const cleanUpper = (cleanRj || '').toUpperCase().trim();
+  const cleanNum = cleanUpper.replace(/^(?:RJ|VJ|BJ)/i, '');
+  const canonicalRj = getCanonicalDlsiteRj(cleanUpper);
+  const bucket = getDlsiteCoverBucket(canonicalRj);
+
+  let title = (oldWork && !isPlaceholderTitle(oldWork.title, cleanUpper)) ? oldWork.title : '';
+  let circle = (oldWork && !isPlaceholderCircle(oldWork.circle)) ? oldWork.circle : '';
+  let cv = (oldWork && !isPlaceholderCv(oldWork.cv)) ? oldWork.cv : '';
+  let tags = (oldWork && Array.isArray(oldWork.tags)) ? [...oldWork.tags] : [];
+  const tagTranslations = Object.assign({}, oldWork?.tagTranslations || {});
+  let coverUrl = oldWork?.rawCoverUrl || oldWork?.coverUrl || '';
+  let isAdult = oldWork ? (oldWork.isNsfw ?? true) : true;
+  let series = oldWork?.series || '';
+  let releaseDate = oldWork?.releaseDate || '';
+
+  // 1. Step 1: DLsite API (Fastest & most authoritative)
+  if (isPlaceholderTitle(title, cleanUpper) || isPlaceholderCircle(circle) || tags.length < 3) {
+    try {
+      const dlsiteMeta = await fetchDlsiteMetadata(cleanUpper);
+      if (dlsiteMeta) {
+        if (dlsiteMeta.title && !isPlaceholderTitle(dlsiteMeta.title, cleanUpper)) title = dlsiteMeta.title;
+        if (dlsiteMeta.circle && !isPlaceholderCircle(dlsiteMeta.circle)) circle = dlsiteMeta.circle;
+        if (dlsiteMeta.cv && !isPlaceholderCv(dlsiteMeta.cv)) cv = dlsiteMeta.cv;
+        if (dlsiteMeta.series && !series) series = dlsiteMeta.series;
+        if (dlsiteMeta.releaseDate && !releaseDate) releaseDate = dlsiteMeta.releaseDate;
+        if (dlsiteMeta.rawCoverUrl && (!coverUrl || coverUrl.includes('placeholder'))) coverUrl = dlsiteMeta.rawCoverUrl;
+        if (Array.isArray(dlsiteMeta.tags)) {
+          dlsiteMeta.tags.forEach(t => { if (t && !tags.includes(t)) tags.push(t); });
+        }
+        if (dlsiteMeta.tagTranslations) Object.assign(tagTranslations, dlsiteMeta.tagTranslations);
+        if (dlsiteMeta.isNsfw !== undefined) isAdult = dlsiteMeta.isNsfw;
+      }
+    } catch (e) {}
+  }
+
+  // Early skip check after DLsite
+  if (!isPlaceholderTitle(title, cleanUpper) && !isPlaceholderCircle(circle) && tags.length >= 3) {
+    return assembleMetadataResult();
+  }
+
+  // 2. Step 2: ASMR.one Public API Mirror
+  if (isPlaceholderTitle(title, cleanUpper) || isPlaceholderCircle(circle) || tags.length < 3) {
+    const asmrHosts = ['https://api.asmr.one', 'https://api.asmr-200.com', 'https://api.asmr-300.com'];
+    for (const host of asmrHosts) {
+      try {
+        const asmrRes = await axios.get(`${host}/api/work/${cleanNum}`, {
+          headers: {
+            'User-Agent': BROWSER_HEADERS['User-Agent'],
+            'Accept': 'application/json, text/plain, */*',
+            'Referer': 'https://www.asmr.one/'
+          },
+          httpsAgent,
+          httpAgent,
+          timeout: 4000
+        });
+        if (asmrRes.status === 200 && asmrRes.data) {
+          const data = asmrRes.data;
+          if (data.title && isPlaceholderTitle(title, cleanUpper)) title = data.title;
+          if (data.circle?.name && isPlaceholderCircle(circle)) circle = data.circle.name;
+          if (data.series?.name && !series) series = data.series.name;
+          if (data.release && !releaseDate) releaseDate = data.release;
+          if (data.mainCoverUrl && (!coverUrl || coverUrl.includes('placeholder'))) coverUrl = data.mainCoverUrl;
+          if (Array.isArray(data.vas) && data.vas.length > 0 && isPlaceholderCv(cv)) {
+            cv = data.vas.map(v => (v.name || v)).filter(Boolean).join(', ');
+          }
+          if (Array.isArray(data.tags)) {
+            data.tags.forEach(t => {
+              const name = t.name || t;
+              if (name && !tags.includes(name)) tags.push(name);
+            });
+          }
+          if (data.tag_translations && typeof data.tag_translations === 'object') {
+            Object.assign(tagTranslations, data.tag_translations);
+          }
+          if (data.age_category === 1 || data.rating === 'general') isAdult = false;
+          break;
+        }
+      } catch (e) {}
+    }
+  }
+
+  // Early skip check after ASMR.one
+  if (!isPlaceholderTitle(title, cleanUpper) && !isPlaceholderCircle(circle) && tags.length >= 3) {
+    return assembleMetadataResult();
+  }
+
+  // 3. Step 3: HentaiASMR Moe REST API (Zero audio probe)
+  if (isPlaceholderTitle(title, cleanUpper) || isPlaceholderCircle(circle) || isPlaceholderCv(cv) || tags.length < 3) {
+    try {
+      const moeMeta = await fetchHentaiAsmrMetadata(cleanUpper, { skipAudioProbe: true });
+      if (moeMeta) {
+        if (moeMeta.title && isPlaceholderTitle(title, cleanUpper)) title = moeMeta.title;
+        if (moeMeta.circle && isPlaceholderCircle(circle)) circle = moeMeta.circle;
+        if (moeMeta.cv && isPlaceholderCv(cv)) cv = moeMeta.cv;
+        if (moeMeta.series && !series) series = moeMeta.series;
+        if (moeMeta.releaseDate && !releaseDate) releaseDate = moeMeta.releaseDate;
+        if (moeMeta.rawCoverUrl && (!coverUrl || coverUrl.includes('placeholder'))) coverUrl = moeMeta.rawCoverUrl;
+        if (Array.isArray(moeMeta.tags)) {
+          moeMeta.tags.forEach(t => { if (t && !tags.includes(t)) tags.push(t); });
+        }
+        if (moeMeta.tagTranslations) Object.assign(tagTranslations, moeMeta.tagTranslations);
+      }
+    } catch (e) {}
+  }
+
+  function assembleMetadataResult() {
+    if (!coverUrl || coverUrl.includes('placeholder')) {
+      coverUrl = `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${canonicalRj}_img_main.jpg`;
+    }
+
+    // Filter CV names from tags
+    const rawCvForDedupe = cv || (oldWork && oldWork.cv) || '';
+    const cvNamesList = [];
+    if (rawCvForDedupe && !isPlaceholderCv(rawCvForDedupe)) {
+      rawCvForDedupe.split(/[,、/&＋+;・\n|]/).forEach(c => {
+        const clean = (db && db.cleanCVName) ? db.cleanCVName(c) : c.trim();
+        if (clean) cvNamesList.push(clean.toLowerCase());
+      });
+    }
+    const cleanTags = tags.filter(t => {
+      const clean = String(t || '').trim();
+      if (!clean) return false;
+      if (cvNamesList.includes(clean.toLowerCase())) return false;
+      const entry = (db && db.BASE_TAG_DICT) ? db.BASE_TAG_DICT[clean] : null;
+      if (entry && entry.isCV) return false;
+      return true;
+    });
+
+    return {
+      ...(oldWork || {}),
+      rjCode: cleanUpper,
+      title: title || (oldWork && oldWork.title) || `Work ${cleanUpper}`,
+      circle: circle || (oldWork && oldWork.circle) || 'ASMR Circle',
+      cv: cv || (oldWork && oldWork.cv) || 'N/A',
+      series: series || oldWork?.series || '',
+      releaseDate: releaseDate || oldWork?.releaseDate || '',
+      tags: cleanTags.length > 0 ? cleanTags : ['ASMR', 'Audio'],
+      tagTranslations: Object.keys(tagTranslations).length > 0 ? tagTranslations : {},
+      coverUrl: coverUrl ? (coverUrl.startsWith('/image-proxy') ? coverUrl : `/image-proxy?url=${encodeURIComponent(coverUrl)}`) : (oldWork?.coverUrl || ''),
+      rawCoverUrl: coverUrl || oldWork?.rawCoverUrl || '',
+      hasHls: oldWork?.hasHls || false,
+      isNsfw: isAdult,
+      totalTracks: oldWork?.tracks?.length || oldWork?.totalTracks || 1,
+      tracks: oldWork?.tracks || [],
+      sampleTracks: oldWork?.sampleTracks || [],
+      gallery: oldWork?.gallery,
+      chapters: oldWork?.chapters || [],
+      addedAt: oldWork?.addedAt || new Date().toISOString(),
+      favorite: oldWork?.favorite || false
+    };
+  }
+
+  return assembleMetadataResult();
+}
+
 module.exports = {
   resolveAndSaveWork,
+  resolveRjMetadataOnly,
   batchImport,
   fetchDlsiteMetadata,
   fetchHentaiAsmrMetadata,
@@ -2057,3 +2650,4 @@ module.exports = {
   parseAsmrTreeData,
   isWorkMetadataChanged
 };
+

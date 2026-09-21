@@ -671,7 +671,7 @@ async function getDb(env, forceFresh = false) {
   return memoryDb;
 }
 
-const CODEBASE_BUILD_HASH = "v2026.09.2";
+const CODEBASE_BUILD_HASH = "v2026.09.20.v16";
 
 function getCodebaseVersion(env) {
   if (env && env.CODEBASE_VERSION) return String(env.CODEBASE_VERSION);
@@ -679,43 +679,168 @@ function getCodebaseVersion(env) {
   return CODEBASE_BUILD_HASH;
 }
 
+function inferImageSource(url) {
+  let u = (url || '').toLowerCase();
+  try {
+    if (u.includes('%')) u = decodeURIComponent(u);
+  } catch (e) {}
+  if (u.includes('dlsite') || u.includes('img.dlsite.jp') || u.includes('chobit')) return 'DLsite Doujin';
+  if (u.includes('asmr.one') || u.includes('asmr-200') || u.includes('asmr-300') || u.includes('asmr-100') || u.includes('asmr')) return 'ASMR.one';
+  if (u.includes('weeabo0') || u.includes('weeab') || u.includes('japaneseasmr')) return 'Weeab0o';
+  if (u.includes('hentaiasmr') || u.includes('hentai')) return 'HentaiASMR';
+  return 'DLsite Doujin';
+}
+
 function compressGalleryForStorage(gallery, rjCode) {
   if (!Array.isArray(gallery) || gallery.length === 0) return undefined;
-  const cleanUpper = (rjCode || '').toUpperCase().trim();
-  const bucket = getDlsiteCoverBucket(cleanUpper);
-  const isDlsiteSeq = gallery.every(g => (g.url || '').includes('img.dlsite.jp') || (g.url || '').includes('dlsite.com'));
-  if (isDlsiteSeq && gallery.length > 1) {
-    return {
-      _tpl: 'dlsite_seq',
-      bucket: bucket,
-      count: gallery.length - 1,
-      hasMain: true
-    };
+  
+  // If already compressed as array of tuples:
+  if (Array.isArray(gallery[0])) {
+    const validTuples = gallery.filter(item => Array.isArray(item) && item[1] && typeof item[1] === 'string' && item[1].trim() !== '');
+    return validTuples.length > 0 ? validTuples : undefined;
   }
-  return gallery.map(g => [g.title || '', g.url || '', g.source || '']);
+
+  const tuples = [];
+  for (let idx = 0; idx < gallery.length; idx++) {
+    const g = gallery[idx];
+    if (!g) continue;
+    if (Array.isArray(g)) {
+      if (g[1] && typeof g[1] === 'string' && g[1].trim() !== '') {
+        tuples.push(g);
+      }
+      continue;
+    }
+    const rawUrl = g.url || g.proxyUrl || '';
+    if (!rawUrl || typeof rawUrl !== 'string' || rawUrl.trim() === '') continue;
+    
+    let cleanUrl = rawUrl;
+    if (cleanUrl.startsWith('/image-proxy?url=')) {
+      try {
+        cleanUrl = decodeURIComponent(cleanUrl.replace('/image-proxy?url=', ''));
+      } catch (e) {}
+    }
+
+    const title = g.title || (`Illustration #${idx + 1}`);
+    const source = g.source || inferImageSource(cleanUrl);
+    const role = g.role || (idx === 0 ? 'main_cover' : `sample_${idx}`);
+
+    tuples.push([title, cleanUrl, source, role]);
+  }
+
+  return tuples.length > 0 ? tuples : undefined;
 }
 
 function decompressGalleryFromStorage(compressed, rjCode) {
   if (!compressed) return [];
+  let rawList = [];
   if (Array.isArray(compressed)) {
     if (compressed.length > 0 && Array.isArray(compressed[0])) {
-      return compressed.map((item, idx) => ({
-        id: idx + 1,
-        title: item[0] || `Illustration #${idx + 1}`,
-        url: item[1] || '',
-        proxyUrl: `/image-proxy?url=${encodeURIComponent(item[1] || '')}`,
-        source: item[2] || 'Gallery'
-      }));
+      rawList = compressed.map((item, idx) => {
+        let title = item[0] || '';
+        let url = item[1] || '';
+        let source = item[2] || '';
+        let role = item[3] || '';
+
+        if (url.startsWith('/image-proxy?url=')) {
+          try {
+            const rawParam = url.replace('/image-proxy?url=', '');
+            url = decodeURIComponent(rawParam);
+          } catch (e) {}
+        }
+
+        const sLower = (source || '').toLowerCase().trim();
+        if (!source || sLower === 'gallery' || sLower === 'artwork gallery' || sLower === 'artwork') {
+          source = inferImageSource(url);
+        }
+
+        const smpMatch = url.match(/_img_smp(\d+)\./i) || url.match(/_smp(\d+)\./i);
+        const isMain = url.includes('_img_main.') || url.includes('_main.') || (!smpMatch && idx === 0);
+
+        if (isMain) {
+          role = role || 'main_cover';
+          if (!title || /^Illustration\s*#\d+$/i.test(title) || title === 'Artwork Gallery') {
+            title = 'Main Package Artwork';
+          }
+        } else if (smpMatch) {
+          const sNum = parseInt(smpMatch[1], 10);
+          role = role || ('sample_' + sNum);
+          if (!title || /^Illustration\s*#\d+$/i.test(title) || title === 'Artwork Gallery') {
+            title = (source.includes('DLsite') ? 'Sample Illustration #' : 'Sample Artwork #') + sNum;
+          }
+        } else {
+          role = role || ('sample_' + (idx + 1));
+          if (!title || /^Illustration\s*#\d+$/i.test(title) || title === 'Artwork Gallery') {
+            title = 'Sample Illustration #' + (idx + 1);
+          }
+        }
+
+        return {
+          id: idx + 1,
+          title: title,
+          role: role,
+          url: url,
+          proxyUrl: '/image-proxy?url=' + encodeURIComponent(url),
+          source: source
+        };
+      });
+    } else {
+      rawList = compressed.map((g, idx) => {
+        let url = g.url || g.proxyUrl || '';
+        let source = g.source || '';
+        let title = g.title || '';
+        let role = g.role || '';
+
+        if (url.startsWith('/image-proxy?url=')) {
+          try {
+            const rawParam = url.replace('/image-proxy?url=', '');
+            url = decodeURIComponent(rawParam);
+          } catch (e) {}
+        }
+
+        const sLower = (source || '').toLowerCase().trim();
+        if (!source || sLower === 'gallery' || sLower === 'artwork gallery' || sLower === 'artwork') {
+          source = inferImageSource(url);
+        }
+
+        const smpMatch = url.match(/_img_smp(\d+)\./i) || url.match(/_smp(\d+)\./i);
+        const isMain = url.includes('_img_main.') || url.includes('_main.') || (!smpMatch && idx === 0);
+
+        if (isMain) {
+          role = role || 'main_cover';
+          if (!title || /^Illustration\s*#\d+$/i.test(title) || title === 'Artwork Gallery') {
+            title = 'Main Package Artwork';
+          }
+        } else if (smpMatch) {
+          const sNum = parseInt(smpMatch[1], 10);
+          role = role || ('sample_' + sNum);
+          if (!title || /^Illustration\s*#\d+$/i.test(title) || title === 'Artwork Gallery') {
+            title = (source.includes('DLsite') ? 'Sample Illustration #' : 'Sample Artwork #') + sNum;
+          }
+        } else {
+          role = role || ('sample_' + (idx + 1));
+          if (!title || /^Illustration\s*#\d+$/i.test(title) || title === 'Artwork Gallery') {
+            title = 'Sample Illustration #' + (idx + 1);
+          }
+        }
+
+        return {
+          id: idx + 1,
+          title: title,
+          role: role,
+          url: url,
+          proxyUrl: '/image-proxy?url=' + encodeURIComponent(url),
+          source: source
+        };
+      });
     }
-    return compressed;
-  }
-  if (compressed && compressed._tpl === 'dlsite_seq') {
+  } else if (compressed && compressed._tpl === 'dlsite_seq') {
     const cleanUpper = (rjCode || '').toUpperCase().trim();
     const bucket = compressed.bucket || getDlsiteCoverBucket(cleanUpper);
     const items = [];
     if (compressed.hasMain) {
       const mainUrl = `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${cleanUpper}_img_main.jpg`;
       items.push({
+        id: 1,
         title: 'Main Package Artwork',
         role: 'main_cover',
         source: 'DLsite Doujin',
@@ -726,6 +851,7 @@ function decompressGalleryFromStorage(compressed, rjCode) {
     for (let i = 1; i <= (compressed.count || 0); i++) {
       const smpUrl = `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${cleanUpper}_img_smp${i}.jpg`;
       items.push({
+        id: items.length + 1,
         title: `Sample Illustration #${i}`,
         role: `sample_${i}`,
         source: 'DLsite Doujin',
@@ -735,7 +861,27 @@ function decompressGalleryFromStorage(compressed, rjCode) {
     }
     return items;
   }
-  return [];
+
+  // Deduplicate decompressed items:
+  // If DLsite sample images are present, discard any duplicate Weeab0o mirror items
+  const hasDlsite = rawList.some(item => (item.source || '').includes('DLsite'));
+  const seenUrls = new Set();
+  const seenRoles = new Set();
+  const deduped = [];
+
+  for (const item of rawList) {
+    if (!item || !item.url) continue;
+    if (hasDlsite && (item.source === 'Weeab0o' || (item.url || '').includes('weeabo0'))) {
+      continue;
+    }
+    const cleanUrl = item.url.replace(/^\/image-proxy\?url=/, '').toLowerCase();
+    if (seenUrls.has(cleanUrl)) continue;
+    if (item.role && seenRoles.has(item.role)) continue;
+    seenUrls.add(cleanUrl);
+    if (item.role) seenRoles.add(item.role);
+    deduped.push({ ...item, id: deduped.length + 1 });
+  }
+  return deduped;
 }
 
 async function saveDb(env, data) {
@@ -752,7 +898,12 @@ async function saveDb(env, data) {
           delete data.works[k].tagTranslations;
         }
         if (Array.isArray(data.works[k].gallery)) {
-          data.works[k].gallery = compressGalleryForStorage(data.works[k].gallery, data.works[k].rjCode || k);
+          const comp = compressGalleryForStorage(data.works[k].gallery, data.works[k].rjCode || k);
+          if (comp && comp.length > 0) {
+            data.works[k].gallery = comp;
+          } else {
+            delete data.works[k].gallery;
+          }
         }
       }
     }
@@ -781,15 +932,27 @@ const FALLBACK_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="400" height
   <text x="200" y="270" font-family="system-ui, -apple-system, sans-serif" font-size="15" font-weight="700" fill="#a6adc8" text-anchor="middle">ASMR Cover</text>
 </svg>`;
 
+function getCanonicalDlsiteRj(rjCode) {
+  const clean = (rjCode || '').toUpperCase().trim();
+  const match = clean.match(/^(?:RJ|VJ|BJ)?(\d+)$/i);
+  if (!match) return clean;
+  const pref = (clean.match(/^(RJ|VJ|BJ)/i) || [])[1] || 'RJ';
+  const num = parseInt(match[1], 10);
+  if (isNaN(num) || num <= 0) return clean;
+  const targetLen = num >= 1000000 ? 8 : 6;
+  return pref.toUpperCase() + String(num).padStart(targetLen, '0');
+}
+
 function getDlsiteCoverBucket(rjCode) {
   const clean = (rjCode || '').toUpperCase().trim();
   const match = clean.match(/^(?:RJ|VJ|BJ)?(\d+)$/i);
   if (!match) return clean;
   const pref = (clean.match(/^(RJ|VJ|BJ)/i) || [])[1] || 'RJ';
-  const digits = match[1];
-  const num = parseInt(digits, 10);
+  const num = parseInt(match[1], 10);
+  if (isNaN(num) || num <= 0) return clean;
   const bucketNum = Math.ceil(num / 1000) * 1000;
-  return pref.toUpperCase() + String(bucketNum).padStart(digits.length, '0');
+  const targetLen = num >= 1000000 ? 8 : 6;
+  return pref.toUpperCase() + String(bucketNum).padStart(targetLen, '0');
 }
 
 function formatServerTime(secs) {
@@ -804,28 +967,53 @@ function formatServerTime(secs) {
 }
 const formatTime = formatServerTime;
 
+function normRj(code) {
+  if (!code) return '';
+  const clean = String(code).trim().toUpperCase();
+  const match = clean.match(/^([A-Z]+)(\d+)$/);
+  if (match) {
+    const num = parseInt(match[2], 10);
+    const targetLen = num >= 1000000 ? 8 : 6;
+    return match[1] + String(num).padStart(targetLen, '0');
+  }
+  return clean;
+}
 
 function getCoverCandidates(targetUrl, rjCode) {
   const candidates = [];
   if (targetUrl) {
     let u = targetUrl.trim();
     if (u.startsWith('//')) u = 'https:' + u;
-    candidates.push(u);
-
-    if (u.includes('api.asmr.one') || u.includes('api.asmr-200.com') || u.includes('api.asmr-300.com') || u.includes('api.asmr-100.com')) {
-      const asmrHosts = ['https://api.asmr-200.com', 'https://api.asmr-300.com', 'https://api.asmr.one', 'https://api.asmr-100.com'];
-      for (const h of asmrHosts) {
-        const alt = u.replace(/https?:\/\/[^\/]+/, h);
-        if (!candidates.includes(alt)) candidates.push(alt);
+    while (u.startsWith('/image-proxy') || (u.startsWith('http') && u.includes('/image-proxy?url='))) {
+      const match = u.match(/[?&]url=([^&]+)/);
+      if (match) {
+        try {
+          const dec = decodeURIComponent(match[1]);
+          if (dec === u) break;
+          u = dec;
+        } catch (e) {
+          break;
+        }
+      } else {
+        break;
       }
     }
-
-    if (u.includes('/media/download/')) {
-      const alt = u.replace('/media/download/', '/media/stream/');
-      if (!candidates.includes(alt)) candidates.push(alt);
-    } else if (u.includes('/media/stream/')) {
-      const alt = u.replace('/media/stream/', '/media/download/');
-      if (!candidates.includes(alt)) candidates.push(alt);
+    if (u.startsWith('http://') || u.startsWith('https://')) {
+      candidates.push(u);
+      if (u.includes('api.asmr.one') || u.includes('api.asmr-200.com') || u.includes('api.asmr-300.com') || u.includes('api.asmr-100.com')) {
+        const asmrHosts = ['https://api.asmr-200.com', 'https://api.asmr-300.com', 'https://api.asmr.one', 'https://api.asmr-100.com'];
+        for (const h of asmrHosts) {
+          const alt = u.replace(/https?:\/\/[^\/]+/, h);
+          if (!candidates.includes(alt)) candidates.push(alt);
+        }
+      }
+      if (u.includes('/media/download/')) {
+        const alt = u.replace('/media/download/', '/media/stream/');
+        if (!candidates.includes(alt)) candidates.push(alt);
+      } else if (u.includes('/media/stream/')) {
+        const alt = u.replace('/media/stream/', '/media/download/');
+        if (!candidates.includes(alt)) candidates.push(alt);
+      }
     }
   }
 
@@ -836,21 +1024,19 @@ function getCoverCandidates(targetUrl, rjCode) {
   }
 
   if (cleanRj) {
-    const m = cleanRj.match(/^(?:(RJ|VJ|BJ))?(\d+)$/i);
-    const pref = (m && m[1]) ? m[1].toUpperCase() : 'RJ';
-    const digits = m ? m[2] : cleanRj.replace(/\D/g, '');
-    const standardRj = pref + digits;
-    const cleanNum = digits.replace(/^0+/, '');
-    const bucket = getDlsiteCoverBucket(standardRj);
+    const canonicalRj = getCanonicalDlsiteRj(cleanRj);
+    const bucket = getDlsiteCoverBucket(canonicalRj);
+    const cleanNum = cleanRj.replace(/\D/g, '').replace(/^0+/, '');
+    const digits = cleanRj.replace(/\D/g, '');
 
     const list = [
-      `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${standardRj}_img_main.jpg`,
-      `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${standardRj}_img_main_240x240.jpg`,
-      `https://img.dlsite.jp/modpub/images2/work/pro/${bucket}/${standardRj}_img_main.jpg`,
-      `https://img.dlsite.jp/modpub/images2/work/books/${bucket}/${standardRj}_img_main.jpg`,
-      `https://img.dlsite.jp/modpub/images2/work/girls/${bucket}/${standardRj}_img_main.jpg`,
-      `https://img.dlsite.jp/modpub/images2/work/bl/${bucket}/${standardRj}_img_main.jpg`,
-      `https://img.dlsite.jp/modpub/images2/work/ai/${bucket}/${standardRj}_img_main.jpg`,
+      `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${canonicalRj}_img_main.jpg`,
+      `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${canonicalRj}_img_main_240x240.jpg`,
+      `https://img.dlsite.jp/modpub/images2/work/pro/${bucket}/${canonicalRj}_img_main.jpg`,
+      `https://img.dlsite.jp/modpub/images2/work/books/${bucket}/${canonicalRj}_img_main.jpg`,
+      `https://img.dlsite.jp/modpub/images2/work/girls/${bucket}/${canonicalRj}_img_main.jpg`,
+      `https://img.dlsite.jp/modpub/images2/work/bl/${bucket}/${canonicalRj}_img_main.jpg`,
+      `https://img.dlsite.jp/modpub/images2/work/ai/${bucket}/${canonicalRj}_img_main.jpg`,
       `https://api.asmr-200.com/api/cover/${cleanNum}.jpg?type=main`,
       `https://api.asmr-200.com/api/cover/${cleanNum}.jpg`,
       `https://api.asmr-300.com/api/cover/${cleanNum}.jpg?type=main`,
@@ -859,11 +1045,11 @@ function getCoverCandidates(targetUrl, rjCode) {
       `https://api.asmr.one/api/cover/${cleanNum}.jpg`,
       `https://api.asmr-200.com/api/cover/${digits}.jpg?type=main`,
       `https://api.asmr-200.com/api/cover/${digits}.jpg`,
-      `https://pic.weeabo0.xyz/${standardRj}_img_main.jpg`,
-      `https://pic.weeabo0.xyz/${standardRj}_img_main.webp`,
-      `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${standardRj}_img_sam.jpg`,
-      `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${standardRj}_img_smp1.jpg`,
-      `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${standardRj}_smp1.jpg`
+      `https://pic.weeabo0.xyz/${canonicalRj}_img_main.jpg`,
+      `https://pic.weeabo0.xyz/${canonicalRj}_img_main.webp`,
+      `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${canonicalRj}_img_sam.jpg`,
+      `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${canonicalRj}_img_smp1.jpg`,
+      `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${canonicalRj}_smp1.jpg`
     ];
 
     for (const item of list) {
@@ -872,6 +1058,115 @@ function getCoverCandidates(targetUrl, rjCode) {
   }
 
   return candidates;
+}
+
+function safeEncodeUri(rawUrl) {
+  if (!rawUrl) return '';
+  try {
+    return encodeURI(decodeURI(rawUrl));
+  } catch (e) {
+    return encodeURI(rawUrl);
+  }
+}
+
+function getStreamCandidates(targetUrl, rjCode = '') {
+  const candidates = [];
+  if (!targetUrl) return candidates;
+  let u = targetUrl.trim();
+  if (u.startsWith('//')) u = 'https:' + u;
+
+  while (u.startsWith('/stream') || (u.startsWith('http') && u.includes('/stream?url='))) {
+    const match = u.match(/[?&]url=([^&]+)/);
+    if (match) {
+      try {
+        const dec = decodeURIComponent(match[1]);
+        if (dec === u) break;
+        u = dec;
+      } catch (e) {
+        break;
+      }
+    } else {
+      break;
+    }
+  }
+
+  candidates.push(u);
+
+  // Extract RJ code if present in URL or parameter
+  let rj = (rjCode || '').toUpperCase().trim();
+  if (!rj) {
+    const rjMatch = u.match(/(?:RJ|VJ|BJ)\d+/i);
+    if (rjMatch) rj = rjMatch[0].toUpperCase();
+  }
+  const cleanNum = rj.replace(/^(?:RJ|VJ|BJ)/i, '');
+  const strippedNum = cleanNum.replace(/^0+/, '');
+
+  if (u.includes('kiko-play-niptan.one') || u.includes('asmr.one') || u.includes('asmr-200.com') || u.includes('asmr-300.com') || u.includes('asmr-100.com')) {
+    if (u.includes('/media/stream/')) {
+      candidates.push(u.replace('/media/stream/', '/media/download/'));
+    } else if (u.includes('/media/download/')) {
+      candidates.push(u.replace('/media/download/', '/media/stream/'));
+    }
+
+    if (u.includes('raw.kiko-play-niptan.one')) {
+      candidates.push(u.replace('raw.kiko-play-niptan.one', 'fast.kiko-play-niptan.one'));
+    } else if (u.includes('fast.kiko-play-niptan.one')) {
+      candidates.push(u.replace('fast.kiko-play-niptan.one', 'raw.kiko-play-niptan.one'));
+    }
+
+    const apiGateways = ['https://api.asmr-200.com', 'https://api.asmr.one', 'https://api.asmr-300.com', 'https://api.asmr-100.com'];
+    for (const gw of apiGateways) {
+      const altGw = u.replace(/https?:\/\/[^\/]+/, gw);
+      if (!candidates.includes(altGw)) candidates.push(altGw);
+      if (altGw.includes('/media/stream/')) {
+        const altDl = altGw.replace('/media/stream/', '/media/download/');
+        if (!candidates.includes(altDl)) candidates.push(altDl);
+      }
+    }
+  }
+
+  if (u.includes('hentaiasmr.moe')) {
+    const cdnHosts = ['cdn.hentaiasmr.moe', 'cdn16.hentaiasmr.moe', 'cdn-otome.hentaiasmr.moe'];
+    for (const h of cdnHosts) {
+      const alt = u.replace(/cdn(?:16|-otome)?\.hentaiasmr\.moe/, h);
+      if (!candidates.includes(alt)) candidates.push(alt);
+    }
+  }
+
+  if (u.includes('weeab0o.xyz') || u.includes('japaneseasmr') || u.includes('jasmr.net')) {
+    if (u.endsWith('.m3u8')) {
+      candidates.push(u.replace(/\.m3u8$/i, '.mp3'));
+    } else if (u.endsWith('.mp3')) {
+      candidates.push(u.replace(/\.mp3$/i, '.m3u8'));
+    }
+    if (rj) {
+      const altWeeab = [
+        `https://v.weeab0o.xyz/${rj}.mp3`,
+        `https://v.weeab0o.xyz/RJ${strippedNum}.mp3`,
+        `https://v.weeab0o.xyz/${rj}.m3u8`,
+        `https://v.weeab0o.xyz/RJ${strippedNum}.m3u8`,
+        `https://play.jasmr.net/${rj}/index.m3u8`,
+        `https://play.jasmr.net/RJ${strippedNum}/index.m3u8`
+      ];
+      for (const w of altWeeab) {
+        if (!candidates.includes(w)) candidates.push(w);
+      }
+    }
+  }
+
+  if (rj) {
+    const chobit1 = `https://chobit.cc/api/v1/download?workno=${rj}`;
+    const chobit2 = `https://chobit.cc/api/v1/download?workno=RJ${strippedNum}`;
+    if (!candidates.includes(chobit1)) candidates.push(chobit1);
+    if (!candidates.includes(chobit2)) candidates.push(chobit2);
+  }
+
+  const unique = [];
+  for (const c of candidates) {
+    const encoded = safeEncodeUri(c);
+    if (encoded && !unique.includes(encoded)) unique.push(encoded);
+  }
+  return unique;
 }
 
 function parseIsoDuration(str) {
@@ -914,10 +1209,19 @@ async function fetchHentaiAsmrMetadata(cleanRj, options = {}) {
   if (!cleanUpper) return null;
   const skipAudioProbe = Boolean(options && options.skipAudioProbe);
 
-  // 1. Query WordPress REST API by slug (e.g. ?slug=rj01702393) then fallback to ?search=RJ01702393
+  const cleanNum = cleanUpper.replace(/^(?:RJ|VJ|BJ)/i, '');
+  const strippedNum = cleanNum.replace(/^0+/, '');
+  const strippedLower = `rj${strippedNum}`;
+  const strippedUpper = `RJ${strippedNum}`;
+
+  // 1. Query WordPress REST API by slug & search (both 8-digit, stripped, and numeric)
   const apiUrls = [
     `https://hentaiasmr.moe/wp-json/wp/v2/posts?slug=${encodeURIComponent(cleanLower)}&_embed=1`,
-    `https://hentaiasmr.moe/wp-json/wp/v2/posts?search=${encodeURIComponent(cleanUpper)}&_embed=1`
+    `https://hentaiasmr.moe/wp-json/wp/v2/posts?slug=${encodeURIComponent(strippedLower)}&_embed=1`,
+    `https://hentaiasmr.moe/wp-json/wp/v2/posts?search=${encodeURIComponent(cleanUpper)}&per_page=10&_embed=1`,
+    `https://hentaiasmr.moe/wp-json/wp/v2/posts?search=${encodeURIComponent(strippedUpper)}&per_page=10&_embed=1`,
+    `https://hentaiasmr.moe/wp-json/wp/v2/posts?search=${encodeURIComponent(cleanNum)}&per_page=10&_embed=1`,
+    `https://hentaiasmr.moe/wp-json/wp/v2/posts?search=${encodeURIComponent(strippedNum)}&per_page=10&_embed=1`
   ];
 
   let post = null;
@@ -933,13 +1237,16 @@ async function fetchHentaiAsmrMetadata(cleanRj, options = {}) {
         const posts = await res.json();
         if (Array.isArray(posts) && posts.length > 0) {
           const match = posts.find(p => {
-            const pSlug = (p.slug || '').toLowerCase();
+            const pSlug = decodeURIComponent(p.slug || '').toLowerCase();
             const pTitle = (p.title?.rendered || '').toUpperCase();
-            if (pSlug === cleanLower || pSlug.startsWith(cleanLower + '-') || pSlug.endsWith('-' + cleanLower)) return true;
-            if (pTitle.includes(`[${cleanUpper}]`) || pTitle.includes(`(${cleanUpper})`) || pTitle.includes(` ${cleanUpper} `) || pTitle.startsWith(cleanUpper) || pTitle.endsWith(cleanUpper)) return true;
-            const wordRegex = new RegExp(`\\b${cleanUpper}\\b`, 'i');
-            return wordRegex.test(pTitle);
-          });
+            const pContent = (p.content?.rendered || '').toUpperCase();
+            const pLink = decodeURIComponent(p.link || '').toLowerCase();
+            const validSlugs = [cleanLower, strippedLower, cleanNum, strippedNum];
+            const validCodes = [cleanUpper, strippedUpper, cleanNum, strippedNum];
+            if (validSlugs.some(s => pSlug === s || pSlug.includes(s) || pLink.includes(s))) return true;
+            if (validCodes.some(c => pTitle.includes(c) || pContent.includes(c))) return true;
+            return false;
+          }) || (url.includes('search=') ? posts[0] : null);
           if (match) {
             post = match;
             break;
@@ -949,16 +1256,121 @@ async function fetchHentaiAsmrMetadata(cleanRj, options = {}) {
     } catch (e) {}
   }
 
+  // Direct HTML page fallback if WP REST API did not return post
+  if (!post) {
+    const candidatePages = [
+      `https://hentaiasmr.moe/${cleanLower}.html`,
+      `https://hentaiasmr.moe/${strippedLower}.html`,
+      `https://hentaiasmr.moe/${cleanUpper}.html`,
+      `https://hentaiasmr.moe/${strippedUpper}.html`,
+      `https://hentaiasmr.moe/?s=${encodeURIComponent(cleanUpper)}`,
+      `https://hentaiasmr.moe/?s=${encodeURIComponent(strippedUpper)}`
+    ];
+    for (const pUrl of candidatePages) {
+      try {
+        const pRes = await fetch(pUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Referer': 'https://hentaiasmr.moe/'
+          }
+        });
+        if (pRes.ok) {
+          const htmlText = await pRes.text();
+          // If search results page, find first matching post link and fetch it
+          if (pUrl.includes('?s=')) {
+            const postLinkMatch = htmlText.match(/href="(https:\/\/hentaiasmr\.moe\/[^"]*rj[^"]*\.html)"/i) || htmlText.match(/href="(https:\/\/hentaiasmr\.moe\/\?p=\d+)"/i) || htmlText.match(/href="(https:\/\/hentaiasmr\.moe\/[a-zA-Z0-9_-]+\.html)"/i);
+            if (postLinkMatch) {
+              const targetPostUrl = postLinkMatch[1];
+              try {
+                const subRes = await fetch(targetPostUrl, {
+                  headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36', 'Referer': 'https://hentaiasmr.moe/' }
+                });
+                if (subRes.ok) {
+                  const subHtml = await subRes.text();
+                  const idMatch = subHtml.match(/\/posts\/(\d+)/) || subHtml.match(/postid-(\d+)/i) || subHtml.match(/post-(\d+)/i) || subHtml.match(/\?p=(\d+)/) || subHtml.match(/cdn(?:16|-otome)?\.hentaiasmr\.moe\/mf\/(\d+)\//);
+                  const pId = idMatch ? parseInt(idMatch[1], 10) : 0;
+                  const titleMatch = subHtml.match(/<h1[^>]*class="[^"]*entry-title[^"]*"[^>]*>([\s\S]*?)<\/h1>/i) || subHtml.match(/<title>([\s\S]*?)<\/title>/i);
+                  const pTitle = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, '').replace(/ - .*$/, '').trim() : `Work ${cleanUpper}`;
+                  const imgMatch = subHtml.match(/<meta\s+property="og:image"\s+content="([^"]+)"/i) || subHtml.match(/<img[^>]+class="[^"]*(?:wp-post-image|featured-image)[^"]*"[^>]+src="([^"]+)"/i);
+                  const pImg = imgMatch ? imgMatch[1] : '';
+                  post = {
+                    id: pId || 1,
+                    slug: cleanLower,
+                    link: targetPostUrl,
+                    title: { rendered: pTitle },
+                    content: { rendered: subHtml },
+                    yoast_head: subHtml.slice(0, 3000),
+                    _embedded: {
+                      'wp:featuredmedia': pImg ? [{ source_url: pImg }] : []
+                    }
+                  };
+                  break;
+                }
+              } catch (se) {}
+            }
+          } else {
+            const idMatch = htmlText.match(/\/posts\/(\d+)/) || htmlText.match(/postid-(\d+)/i) || htmlText.match(/post-(\d+)/i) || htmlText.match(/\?p=(\d+)/) || htmlText.match(/cdn(?:16|-otome)?\.hentaiasmr\.moe\/mf\/(\d+)\//);
+            const pId = idMatch ? parseInt(idMatch[1], 10) : 0;
+            const titleMatch = htmlText.match(/<h1[^>]*class="[^"]*entry-title[^"]*"[^>]*>([\s\S]*?)<\/h1>/i) || htmlText.match(/<title>([\s\S]*?)<\/title>/i);
+            const pTitle = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, '').replace(/ - .*$/, '').trim() : `Work ${cleanUpper}`;
+            const imgMatch = htmlText.match(/<meta\s+property="og:image"\s+content="([^"]+)"/i) || htmlText.match(/<img[^>]+class="[^"]*(?:wp-post-image|featured-image)[^"]*"[^>]+src="([^"]+)"/i);
+            const pImg = imgMatch ? imgMatch[1] : '';
+
+            post = {
+              id: pId || 1,
+              slug: cleanLower,
+              link: pUrl,
+              title: { rendered: pTitle },
+              content: { rendered: htmlText },
+              yoast_head: htmlText.slice(0, 3000),
+              _embedded: {
+                'wp:featuredmedia': pImg ? [{ source_url: pImg }] : []
+              }
+            };
+            break;
+          }
+        }
+      } catch (e) {}
+    }
+  }
+
   if (!post || !post.id) return null;
 
   const postId = post.id;
-  const rawTitle = (post.title?.rendered || '')
+  let cleanTitle = (post.title?.rendered || '')
     .replace(/<[^>]+>/g, '')
     .replace(/&#8217;/g, "'")
     .replace(/&amp;/g, '&')
     .replace(/&#038;/g, '&')
+    .replace(/&quot;/g, '"')
     .replace(/^\[(?:RJ|VJ|BJ)\d+\]\s*/i, '')
+    .replace(/\((?:RJ|VJ|BJ)\d+\)\s*/i, '')
     .trim();
+
+  let extractedCircle = '';
+  // Check if title has circle in brackets: e.g. [Circle Name] Title or (Circle Name) Title or 【Circle Name】 Title
+  const bracketCircleMatch = cleanTitle.match(/^(?:\[([^\]]+)\]|\(([^\)]+)\)|【([^】]+)】)\s*(.+)$/);
+  if (bracketCircleMatch) {
+    const candidateCircle = (bracketCircleMatch[1] || bracketCircleMatch[2] || bracketCircleMatch[3] || '').trim();
+    const restTitle = (bracketCircleMatch[4] || '').trim();
+    if (candidateCircle && !/^(?:cv|mp3|wav|flac|hls|rj\d+|vj\d+|bj\d+|dl版|特典)/i.test(candidateCircle) && restTitle.length > 2) {
+      extractedCircle = candidateCircle;
+      cleanTitle = restTitle;
+    }
+  }
+
+  // Also check if circle is at the end: Title 【Circle Name】 or Title [Circle Name]
+  if (!extractedCircle) {
+    const endCircleMatch = cleanTitle.match(/^(.+?)\s*(?:\[([^\]]+)\]|【([^】]+)】)$/);
+    if (endCircleMatch) {
+      const restTitle = (endCircleMatch[1] || '').trim();
+      const candidateCircle = (endCircleMatch[2] || endCircleMatch[3] || '').trim();
+      if (candidateCircle && !/^(?:cv|mp3|wav|flac|hls|rj\d+|vj\d+|bj\d+|dl版|特典)/i.test(candidateCircle) && restTitle.length > 2) {
+        extractedCircle = candidateCircle;
+        cleanTitle = restTitle;
+      }
+    }
+  }
 
   // Cover image
   let coverUrl = '';
@@ -967,7 +1379,7 @@ async function fetchHentaiAsmrMetadata(cleanRj, options = {}) {
     coverUrl = media.source_url || media.media_details?.sizes?.full?.source_url || '';
   }
 
-  // Terms: tags, actors, categories
+  // Terms: tags, actors, categories, circles
   const tags = [];
   const tagTranslations = {};
   const cvList = [];
@@ -980,12 +1392,16 @@ async function fetchHentaiAsmrMetadata(cleanRj, options = {}) {
       for (const term of group) {
         if (!term || !term.name) continue;
         const tName = term.name.trim();
-        const taxonomy = term.taxonomy || '';
+        const taxonomy = (term.taxonomy || '').toLowerCase();
         
         let rawSlug = term.slug || '';
         try { rawSlug = decodeURIComponent(rawSlug); } catch (e) {}
 
-        if (taxonomy === 'actors' || taxonomy === 'cv') {
+        if (taxonomy === 'circle' || taxonomy === 'maker' || taxonomy === 'developer' || taxonomy === 'brand' || taxonomy === 'publisher' || taxonomy === 'group') {
+          if (tName && !extractedCircle) {
+            extractedCircle = tName;
+          }
+        } else if (taxonomy === 'actors' || taxonomy === 'cv') {
           tName.split(/[,、/&＋+;・]/).forEach(c => {
             const cleanC = c.replace(/様|さん|氏|他|'/g, '').trim();
             if (cleanC && cleanC.length >= 2 && !cvList.includes(cleanC)) {
@@ -1015,12 +1431,63 @@ async function fetchHentaiAsmrMetadata(cleanRj, options = {}) {
   // 2. Direct Media CDN Probe for Audio Files (Skip if skipAudioProbe is requested)
   const singleTrackCandidates = [];
 
-  // Unescape content HTML and extract embedded audio URLs
+  // Unescape content HTML and extract embedded audio URLs & ground-truth duration
   const unescapedContent = (post.content?.rendered || '')
     .replace(/\\\//g, '/')
     .replace(/&#8217;/g, "'")
     .replace(/&quot;/g, '"')
     .replace(/&amp;/g, '&');
+  const excerptText = (post.excerpt?.rendered || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&amp;/g, '&');
+  const combinedPostText = unescapedContent + ' ' + excerptText + ' ' + (post.yoast_head || '');
+
+  if (!extractedCircle) {
+    const circleTextMatch = combinedPostText.match(/(?:Circle|サークル|Maker|ブランド|メーカー|Developer|Brand)[\s:：]+([^\n<,]+)/i);
+    if (circleTextMatch && circleTextMatch[1]) {
+      const cStr = circleTextMatch[1].trim();
+      if (cStr && cStr.length >= 2 && cStr.length < 50 && !/^(?:https?:|none|n\/a)/i.test(cStr)) {
+        extractedCircle = cStr;
+      }
+    }
+  }
+
+  let parsedDuration = 0;
+  // Match ISO 8601 duration format (e.g. PT02H21M44S, PT2H3M, PT45M12S)
+  const isoDurMatch = combinedPostText.match(/itemprop=["']duration["']\s+content=["']PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?["']/i) ||
+                      combinedPostText.match(/"duration"\s*:\s*["']PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?["']/i) ||
+                      combinedPostText.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/i);
+  if (isoDurMatch && (isoDurMatch[1] || isoDurMatch[2] || isoDurMatch[3])) {
+    const h = parseInt(isoDurMatch[1] || '0', 10);
+    const m = parseInt(isoDurMatch[2] || '0', 10);
+    const s = parseInt(isoDurMatch[3] || '0', 10);
+    parsedDuration = h * 3600 + m * 60 + s;
+  }
+  if (!parsedDuration) {
+    const durMatch = combinedPostText.match(/(?:Duration|収録時間|再生時間|時間|長さ|length)[\s:：]+([0-9a-zA-Z\s分時間秒hms:]+)/i);
+    if (durMatch && durMatch[1]) {
+      const dStr = durMatch[1].trim();
+      // Match "2h 3m", "2h3m", "2h 30min", "120m", "90分", "01:25:30", "45:12"
+      const hmsMatch = dStr.match(/(?:(\d+)\s*(?:h|hours?|時間|hr))?\s*(?:(\d+)\s*(?:m|mins?|minutes?|分))?\s*(?:(\d+)\s*(?:s|secs?|seconds?|秒))?/i);
+      if (hmsMatch && (hmsMatch[1] || hmsMatch[2])) {
+        const h = parseInt(hmsMatch[1] || '0', 10);
+        const m = parseInt(hmsMatch[2] || '0', 10);
+        const s = parseInt(hmsMatch[3] || '0', 10);
+        if (h > 0 || m > 0 || s > 0) parsedDuration = h * 3600 + m * 60 + s;
+      }
+      if (!parsedDuration) {
+        const colonMatch = dStr.match(/\b(?:(\d{1,2}):)?(\d{1,2}):(\d{2})\b/);
+        if (colonMatch) {
+          if (colonMatch[1]) {
+            parsedDuration = parseInt(colonMatch[1], 10) * 3600 + parseInt(colonMatch[2], 10) * 60 + parseInt(colonMatch[3], 10);
+          } else {
+            parsedDuration = parseInt(colonMatch[2], 10) * 60 + parseInt(colonMatch[3], 10);
+          }
+        }
+      }
+    }
+  }
+
   const contentUrls = unescapedContent.match(/https?:\/\/[^\s"'<>]+\.(?:mp3|m4a|wav|ogg|flac|m3u8)/gi) || [];
   contentUrls.forEach(u => {
     if (u && !singleTrackCandidates.includes(u)) singleTrackCandidates.push(u);
@@ -1028,62 +1495,83 @@ async function fetchHentaiAsmrMetadata(cleanRj, options = {}) {
 
   // Discovered Single-Track Patterns across CDN endpoints
   const singlePatterns = [
+    `https://cdn.hentaiasmr.moe/mf/${postId}/merge/${cleanUpper}.mp3`,
+    `https://cdn16.hentaiasmr.moe/mf/${postId}/merge/${cleanUpper}.mp3`,
+    `https://cdn-otome.hentaiasmr.moe/mf/${postId}/merge/${cleanUpper}.mp3`,
+    `https://cdn.hentaiasmr.moe/mf/${postId}/merge/${strippedUpper}.mp3`,
+    `https://cdn.hentaiasmr.moe/mf/${postId}/merge/${cleanLower}.mp3`,
+    `https://cdn.hentaiasmr.moe/mf/${postId}/merge/${strippedLower}.mp3`,
+    `https://cdn.hentaiasmr.moe/mf/${postId}/${cleanUpper}.mp3`,
+    `https://cdn.hentaiasmr.moe/mf/${postId}/${strippedUpper}.mp3`,
+    `https://cdn.hentaiasmr.moe/mf/${postId}/1.mp3`,
     `https://cdn16.hentaiasmr.moe/audio/${postId}.mp3`,
     `https://cdn.hentaiasmr.moe/audio/${postId}.mp3`,
     `https://cdn-otome.hentaiasmr.moe/audio/${postId}.mp3`,
     `https://cdn.hentaiasmr.moe/mp4/${postId}.mp3`,
     `https://cdn16.hentaiasmr.moe/mp4/${postId}.mp3`,
     `https://cdn-otome.hentaiasmr.moe/mp4/${postId}.mp3`,
-    `https://cdn.hentaiasmr.moe/mf/${postId}/merge/${cleanUpper}.mp3`,
-    `https://cdn16.hentaiasmr.moe/mf/${postId}/merge/${cleanUpper}.mp3`,
-    `https://cdn-otome.hentaiasmr.moe/mf/${postId}/merge/${cleanUpper}.mp3`,
     `https://cdn.hentaiasmr.moe/audio/${cleanUpper}.mp3`,
-    `https://cdn16.hentaiasmr.moe/audio/${cleanUpper}.mp3`
+    `https://cdn16.hentaiasmr.moe/audio/${cleanUpper}.mp3`,
+    `https://cdn.hentaiasmr.moe/audio/${strippedUpper}.mp3`
   ];
   singlePatterns.forEach(u => {
     if (!singleTrackCandidates.includes(u)) singleTrackCandidates.push(u);
   });
 
-  const probeReferer = post.link || `https://hentaiasmr.moe/${cleanLower}.html`;
-  const probeHeaders = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    'Referer': probeReferer,
-    'Origin': 'https://hentaiasmr.moe',
-    'Accept': '*/*'
-  };
+  const probeReferers = [
+    post.link,
+    `https://hentaiasmr.moe/${cleanLower}.html`,
+    `https://hentaiasmr.moe/${strippedLower}.html`,
+    'https://hentaiasmr.moe/'
+  ].filter(Boolean);
 
   async function probeMediaCandidate(targetUrl) {
     if (!targetUrl) return null;
-    try {
-      let res = await fetch(encodeURI(targetUrl), {
-        method: 'GET',
-        headers: {
-          ...probeHeaders,
-          'Range': 'bytes=0-0'
+    for (const ref of probeReferers) {
+      const probeHeaders = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Referer': ref,
+        'Origin': 'https://hentaiasmr.moe',
+        'Accept': '*/*'
+      };
+      try {
+        let res = await fetch(encodeURI(targetUrl), {
+          method: 'GET',
+          headers: {
+            ...probeHeaders,
+            'Range': 'bytes=0-0'
+          },
+          redirect: 'follow'
+        });
+        if (!res.ok && res.status !== 206 && res.status !== 301 && res.status !== 302 && res.status !== 307) {
+          try {
+            const headRes = await fetch(encodeURI(targetUrl), {
+              method: 'HEAD',
+              headers: probeHeaders,
+              redirect: 'follow'
+            });
+            if (headRes.ok || (headRes.status >= 200 && headRes.status < 400)) {
+              res = headRes;
+            }
+          } catch (he) {}
         }
-      });
-      if (!res.ok && res.status !== 206 && res.status !== 301 && res.status !== 302 && res.status !== 307) {
-        try {
-          const headRes = await fetch(encodeURI(targetUrl), {
-            method: 'HEAD',
-            headers: probeHeaders
-          });
-          if (headRes.ok || (headRes.status >= 200 && headRes.status < 400)) {
-            res = headRes;
+        if (res.ok || res.status === 206 || (res.status >= 200 && res.status < 400)) {
+          const cType = (res.headers.get('content-type') || '').toLowerCase();
+          // Reject HTML error pages or non-media text
+          if (cType.includes('text/html') || cType.includes('text/plain') || cType.includes('application/json')) {
+            continue;
           }
-        } catch (he) {}
-      }
-      if (res.ok || res.status === 206 || (res.status >= 200 && res.status < 400)) {
-        let size = 0;
-        const cr = res.headers.get('content-range');
-        if (cr) {
-          const m = cr.match(/\/(\d+)/);
-          if (m) size = parseInt(m[1], 10);
+          let size = 0;
+          const cr = res.headers.get('content-range');
+          if (cr) {
+            const m = cr.match(/\/(\d+)/);
+            if (m) size = parseInt(m[1], 10);
+          }
+          if (!size) size = parseInt(res.headers.get('content-length') || '0', 10);
+          return { ok: true, size };
         }
-        if (!size) size = parseInt(res.headers.get('content-length') || '0', 10);
-        return { ok: true, size };
-      }
-    } catch (e) {}
+      } catch (e) {}
+    }
     return null;
   }
 
@@ -1103,28 +1591,19 @@ async function fetchHentaiAsmrMetadata(cleanRj, options = {}) {
       });
       if (pageRes.ok) {
         const html = await pageRes.text();
-        const playlistRegex = /playlist\.push\(\s*\{\s*file:\s*["']([^"']+)["'](?:[\s\S]*?title:\s*["']([^"']+)["'])?/gi;
-        let pMatch;
-        let htmlTracks = [];
-        let trkIdx = 1;
-        while ((pMatch = playlistRegex.exec(html)) !== null) {
-          const fileUrl = pMatch[1];
-          const trkTitle = pMatch[2] || `Track ${trkIdx}`;
-          if (fileUrl && !htmlTracks.some(t => t.streamUrl === fileUrl)) {
-            htmlTracks.push({
-              index: trkIdx,
-              title: trkTitle,
-              rawTitle: `${trkIdx}.mp3`,
-              streamUrl: fileUrl,
-              category: trkIdx === 1 ? 'main' : (trkIdx === 2 ? 'freetalk' : 'bonus'),
-              _size: 0,
-              isHls: false
+        const htmlTracks = extractMoeHtmlTracks(html, pageUrl, coverUrl, cleanTitle, cleanUpper);
+        if (htmlTracks && htmlTracks.length > 0) {
+          htmlTracks.forEach((t, i) => {
+            audioTracks.push({
+              index: i + 1,
+              title: t.title || `Track ${i + 1}`,
+              rawTitle: `${i + 1}.mp3`,
+              streamUrl: t.rawUrl || t.streamUrl,
+              category: t.category || (i === 0 ? 'main' : (i === 1 ? 'freetalk' : 'bonus')),
+              _size: t.size || 0,
+              isHls: Boolean(t.isHls)
             });
-            trkIdx++;
-          }
-        }
-        if (htmlTracks.length > 0) {
-          audioTracks.push(...htmlTracks);
+          });
           foundPattern = 'html_jwplayer_playlist';
         }
       }
@@ -1138,7 +1617,7 @@ async function fetchHentaiAsmrMetadata(cleanRj, options = {}) {
         if (probe && probe.ok) {
           audioTracks.push({
             index: 1,
-            title: `${rawTitle || cleanUpper} (Full)`,
+            title: `${cleanTitle || cleanUpper} (Full)`,
             rawTitle: `${cleanUpper}.mp3`,
             streamUrl: mergeUrl,
             category: 'main',
@@ -1187,26 +1666,41 @@ async function fetchHentaiAsmrMetadata(cleanRj, options = {}) {
     }
   }
 
+  // If work exists on Moe (valid postId) but CDN probe was blocked by Cloudflare/WAF, synthesize default single-track merge URL
+  if (postId && audioTracks.length === 0) {
+    const defaultMergeUrl = `https://cdn.hentaiasmr.moe/mf/${postId}/merge/${cleanUpper}.mp3`;
+    audioTracks.push({
+      index: 1,
+      title: cleanTitle ? `${cleanTitle} (Full)` : `${cleanUpper} (Full)`,
+      rawTitle: `${cleanUpper}.mp3`,
+      streamUrl: defaultMergeUrl,
+      category: 'main',
+      _size: 0,
+      isHls: false
+    });
+    foundPattern = 'inferred_merge_postid';
+  }
+
   const isAudioFound = audioTracks.length > 0;
   const diagnostic = (!isAudioFound && postId) ? {
     rjCode: cleanUpper,
     postId,
     slug: post.slug,
     postLink: post.link || `https://hentaiasmr.moe/${cleanLower}.html`,
-    title: rawTitle,
+    title: cleanTitle || `Work ${cleanUpper}`,
     triedUrls
   } : null;
 
   return {
     postId,
-    title: rawTitle,
-    circle: 'ASMR Circle',
+    title: cleanTitle || `Work ${cleanUpper}`,
+    circle: extractedCircle || 'ASMR Circle',
     cv: cvJa ? (cvRomaji ? `${cvJa} (${cvRomaji})` : cvJa) : (cv || 'N/A'),
     cvJa,
     cvRomaji,
     releaseDate: '',
     series: '',
-    duration: 0,
+    duration: parsedDuration || 0,
     totalBytes: audioTracks.reduce((sum, t) => sum + (t._size || 0), 0),
     tags,
     tagTranslations,
@@ -1219,10 +1713,204 @@ async function fetchHentaiAsmrMetadata(cleanRj, options = {}) {
   };
 }
 
+// Fast Metadata-Only Resolver (For metadata updates, CV, Circle, Tags without heavy audio probes)
+function isPlaceholderTitle(t, rj) {
+  if (!t || typeof t !== 'string') return true;
+  const s = t.trim().toUpperCase();
+  const r = (rj || '').toUpperCase().trim();
+  const num = r.replace(/^(?:RJ|VJ|BJ)/, '');
+  return s === '' || s === r || s === `WORK ${r}` || s === `RJ${num}` || s === `WORK RJ${num}` || s === 'UNKNOWN TITLE' || s === 'UNKNOWN WORK' || s === 'UNTITLED' || s === 'LOADING...' || s.startsWith('WORK RJ') || s.startsWith('RJ0');
+}
+
+function isPlaceholderCircle(c) {
+  if (!c || typeof c !== 'string') return true;
+  const s = c.trim().toLowerCase();
+  return s === '' || s === 'unknown circle' || s === 'asmr circle' || s === 'unknown' || s === 'n/a' || s === 'none' || s === 'null' || s === 'undefined' || s === 'asmr';
+}
+
+function isPlaceholderCv(v) {
+  if (!v || typeof v !== 'string') return true;
+  const s = v.trim().toLowerCase();
+  return s === '' || s === 'n/a' || s === 'none' || s === 'unknown' || s === 'null' || s === 'undefined';
+}
+
+async function resolveRjMetadataOnly(rjCode, oldWork = null) {
+  const cleanRj = (rjCode || '').toUpperCase().trim();
+  const cleanNum = cleanRj.replace(/^(?:RJ|VJ|BJ)/i, '');
+  const canonicalRj = getCanonicalDlsiteRj(cleanRj);
+  const bucket = getDlsiteCoverBucket(canonicalRj);
+
+  let title = (oldWork && !isPlaceholderTitle(oldWork.title, cleanRj)) ? oldWork.title : '';
+  let circle = (oldWork && !isPlaceholderCircle(oldWork.circle)) ? oldWork.circle : '';
+  let cv = (oldWork && !isPlaceholderCv(oldWork.cv)) ? oldWork.cv : '';
+  let tags = (oldWork && Array.isArray(oldWork.tags)) ? [...oldWork.tags] : [];
+  const tagTranslations = (oldWork && oldWork.tagTranslations) ? { ...oldWork.tagTranslations } : {};
+  let coverUrl = (oldWork && oldWork.rawCoverUrl) || (oldWork && oldWork.coverUrl) || '';
+  while (coverUrl && (coverUrl.startsWith('/image-proxy') || (coverUrl.startsWith('http') && coverUrl.includes('/image-proxy?url=')))) {
+    const match = coverUrl.match(/[?&]url=([^&]+)/);
+    if (match) {
+      try {
+        const dec = decodeURIComponent(match[1]);
+        if (dec === coverUrl) break;
+        coverUrl = dec;
+      } catch (e) {
+        break;
+      }
+    } else {
+      break;
+    }
+  }
+  let isAdult = oldWork ? (oldWork.isNsfw ?? true) : true;
+  let series = (oldWork && oldWork.series) || '';
+  let releaseDate = (oldWork && oldWork.releaseDate) || '';
+
+  // 1. Step 1: DLsite API (Authoritative & fast)
+  if (isPlaceholderTitle(title, cleanRj) || isPlaceholderCircle(circle) || tags.length < 3) {
+    try {
+      const dlsiteMeta = await fetchDlsiteMetadata(cleanRj);
+      if (dlsiteMeta) {
+        if (dlsiteMeta.title && !isPlaceholderTitle(dlsiteMeta.title, cleanRj)) title = dlsiteMeta.title;
+        if (dlsiteMeta.circle && !isPlaceholderCircle(dlsiteMeta.circle)) circle = dlsiteMeta.circle;
+        if (dlsiteMeta.cv && !isPlaceholderCv(dlsiteMeta.cv)) cv = dlsiteMeta.cv;
+        if (dlsiteMeta.series && !series) series = dlsiteMeta.series;
+        if (dlsiteMeta.releaseDate && !releaseDate) releaseDate = dlsiteMeta.releaseDate;
+        if (dlsiteMeta.rawCoverUrl && (!coverUrl || coverUrl.includes('placeholder'))) coverUrl = dlsiteMeta.rawCoverUrl;
+        if (Array.isArray(dlsiteMeta.tags)) {
+          dlsiteMeta.tags.forEach(t => { if (t && !tags.includes(t)) tags.push(t); });
+        }
+        if (dlsiteMeta.tagTranslations) Object.assign(tagTranslations, dlsiteMeta.tagTranslations);
+        if (dlsiteMeta.isNsfw !== undefined) isAdult = dlsiteMeta.isNsfw;
+      }
+    } catch (e) {}
+  }
+
+  // Early skip check after DLsite
+  if (!isPlaceholderTitle(title, cleanRj) && !isPlaceholderCircle(circle) && tags.length >= 3) {
+    return assembleMetadataResult();
+  }
+
+  // 2. Step 2: ASMR.one Public API
+  if (isPlaceholderTitle(title, cleanRj) || isPlaceholderCircle(circle) || tags.length < 3) {
+    const asmrHosts = ['https://api.asmr.one', 'https://api.asmr-200.com', 'https://api.asmr-300.com'];
+    for (const host of asmrHosts) {
+      try {
+        const asmrRes = await fetch(`${host}/api/work/${cleanNum}`, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json, text/plain, */*',
+            'Referer': 'https://www.asmr.one/'
+          }
+        });
+        if (asmrRes.ok) {
+          const data = await asmrRes.json();
+          if (data) {
+            if (data.title && isPlaceholderTitle(title, cleanRj)) title = data.title;
+            if (data.circle?.name && isPlaceholderCircle(circle)) circle = data.circle.name;
+            if (data.series?.name && !series) series = data.series.name;
+            if (data.release && !releaseDate) releaseDate = data.release;
+            if (data.mainCoverUrl && (!coverUrl || coverUrl.includes('placeholder') || coverUrl.includes('no-image'))) {
+              coverUrl = data.mainCoverUrl;
+            }
+            if (Array.isArray(data.vas) && data.vas.length > 0 && isPlaceholderCv(cv)) {
+              cv = data.vas.map(v => (v.name || v)).filter(Boolean).join(', ');
+            }
+            if (Array.isArray(data.tags)) {
+              data.tags.forEach(t => {
+                const name = t.name || t;
+                if (name && !tags.includes(name)) tags.push(name);
+              });
+            }
+            if (data.tag_translations && typeof data.tag_translations === 'object') {
+              Object.assign(tagTranslations, data.tag_translations);
+            }
+            if (data.age_category === 1 || data.rating === 'general') isAdult = false;
+            break;
+          }
+        }
+      } catch (e) {}
+    }
+  }
+
+  // Early skip check after ASMR.one
+  if (!isPlaceholderTitle(title, cleanRj) && !isPlaceholderCircle(circle) && tags.length >= 3) {
+    return assembleMetadataResult();
+  }
+
+  // 3. Step 3: Fallback to HentaiASMR Moe metadata (without audio probe)
+  if (isPlaceholderTitle(title, cleanRj) || isPlaceholderCircle(circle) || isPlaceholderCv(cv) || tags.length < 3) {
+    try {
+      const moeMeta = await fetchHentaiAsmrMetadata(cleanRj, { skipAudioProbe: true });
+      if (moeMeta) {
+        if (moeMeta.title && isPlaceholderTitle(title, cleanRj)) title = moeMeta.title;
+        if (moeMeta.circle && isPlaceholderCircle(circle)) circle = moeMeta.circle;
+        if (moeMeta.cv && isPlaceholderCv(cv)) cv = moeMeta.cv;
+        if (moeMeta.series && !series) series = moeMeta.series;
+        if (moeMeta.releaseDate && !releaseDate) releaseDate = moeMeta.releaseDate;
+        if (Array.isArray(moeMeta.tags)) {
+          moeMeta.tags.forEach(t => { if (t && !tags.includes(t)) tags.push(t); });
+        }
+        if (moeMeta.rawCoverUrl && (!coverUrl || coverUrl.includes('placeholder'))) coverUrl = moeMeta.rawCoverUrl;
+        if (moeMeta.tagTranslations) Object.assign(tagTranslations, moeMeta.tagTranslations);
+      }
+    } catch (e) {}
+  }
+
+  function assembleMetadataResult() {
+    if (!coverUrl || coverUrl.includes('placeholder') || coverUrl.includes('no-image')) {
+      coverUrl = `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${canonicalRj}_img_main.jpg`;
+    }
+
+    // Filter out CV names from tags
+    const rawCvForDedupe = cv || (oldWork && oldWork.cv) || '';
+    const cvNamesList = [];
+    if (rawCvForDedupe && !isPlaceholderCv(rawCvForDedupe)) {
+      rawCvForDedupe.split(/[,、/&＋+;・\n|]/).forEach(c => {
+        const clean = cleanCVName(c);
+        if (clean) cvNamesList.push(clean.toLowerCase());
+      });
+    }
+    const cleanTags = tags.filter(t => {
+      const clean = String(t || '').trim();
+      if (!clean) return false;
+      if (cvNamesList.includes(clean.toLowerCase())) return false;
+      const entry = (typeof BASE_TAG_DICT !== 'undefined') ? BASE_TAG_DICT[clean] : null;
+      if (entry && entry.isCV) return false;
+      return true;
+    });
+
+    return {
+      ...(oldWork || {}),
+      rjCode: cleanRj,
+      title: title || (oldWork && oldWork.title) || `Work ${cleanRj}`,
+      circle: circle || (oldWork && oldWork.circle) || 'ASMR Circle',
+      cv: cv || (oldWork && oldWork.cv) || 'N/A',
+      series: series || (oldWork && oldWork.series) || '',
+      releaseDate: releaseDate || (oldWork && oldWork.releaseDate) || '',
+      tags: cleanTags.length > 0 ? cleanTags : ['ASMR', 'Audio'],
+      tagTranslations,
+      coverUrl: (coverUrl && coverUrl.startsWith('http')) ? `/image-proxy?url=${encodeURIComponent(coverUrl)}&rj=${encodeURIComponent(cleanRj)}` : `/image-proxy?rj=${encodeURIComponent(cleanRj)}`,
+      rawCoverUrl: coverUrl,
+      isNsfw: isAdult,
+      totalTracks: oldWork?.tracks?.length || oldWork?.totalTracks || 1,
+      tracks: oldWork?.tracks || [],
+      sampleTracks: oldWork?.sampleTracks || [],
+      gallery: oldWork?.gallery,
+      chapters: oldWork?.chapters || [],
+      addedAt: oldWork?.addedAt || new Date().toISOString(),
+      favorite: oldWork?.favorite || false,
+      _sampleChecked: (oldWork && oldWork._sampleChecked) || false
+    };
+  }
+
+  return assembleMetadataResult();
+}
+
 // Resolver: Unified Multi-Source (ASMR.one + DLsite API + Product Page HTML + CDN Probe)
 async function resolveRjWork(rjCode) {
-  const cleanRj = rjCode.toUpperCase();
+  const cleanRj = (rjCode || '').toUpperCase().trim();
   const cleanNum = cleanRj.replace(/^(?:RJ|VJ|BJ)/i, '');
+  const strippedNum = cleanNum.replace(/^0+/, '');
+  const canonicalRj = getCanonicalDlsiteRj(cleanRj);
 
   let title = '';
   let circle = '';
@@ -1431,174 +2119,194 @@ async function resolveRjWork(rjCode) {
     coverUrl = `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${cleanRj}_img_main.jpg`;
   }
 
-  // 1. Probe JapaneseASMR (weeab0o.xyz): First check primary MP3 & M3U8 in parallel
-  const mainMp3Url = `https://v.weeab0o.xyz/${cleanRj}.mp3`;
-  const m3u8Url = `https://v.weeab0o.xyz/${cleanRj}.m3u8`;
+  // 1. Probe JapaneseASMR (weeab0o.xyz): First check primary MP3 & M3U8 in parallel (both 8-digit and stripped)
+  const weeabCandidates = [
+    { mp3: `https://v.weeab0o.xyz/${cleanRj}.mp3`, m3u8: `https://v.weeab0o.xyz/${cleanRj}.m3u8`, code: cleanRj },
+    { mp3: `https://v.weeab0o.xyz/RJ${strippedNum}.mp3`, m3u8: `https://v.weeab0o.xyz/RJ${strippedNum}.m3u8`, code: `RJ${strippedNum}` }
+  ];
   let hasHls = false;
   const japTracks = [];
 
-  const [mainMp3Res, m3u8Res] = await Promise.all([
-    fetch(mainMp3Url, { method: 'HEAD', headers: { 'Referer': 'https://japaneseasmr.com/', 'User-Agent': 'Mozilla/5.0' } }).catch(() => null),
-    fetch(m3u8Url, { method: 'GET', headers: { 'Referer': 'https://japaneseasmr.com/', 'User-Agent': 'Mozilla/5.0' } }).catch(() => null)
-  ]);
+  const isWeeabValid = (res) => {
+    if (!res || !res.ok) return false;
+    const ct = (res.headers.get('content-type') || '').toLowerCase();
+    if (ct.includes('text/html') || ct.includes('text/plain') || ct.includes('application/json')) return false;
+    const sz = parseInt(res.headers.get('content-length') || '0', 10);
+    return sz > 50 * 1024 || ct.includes('audio') || ct.includes('video') || ct.includes('octet-stream');
+  };
 
-  if (mainMp3Res && mainMp3Res.ok) {
-    const sz = parseInt(mainMp3Res.headers.get('content-length') || '0', 10);
-    japTracks.push({
-      id: 1,
-      title: 'Track 1 (トラック1)',
-      size: sz,
-      formattedTime: '00:00:00',
-      startTime: 0,
-      isHls: false,
-      category: 'main',
-      rawUrl: mainMp3Url,
-      referer: 'https://japaneseasmr.com/',
-      streamUrl: `/stream?url=${encodeURIComponent(mainMp3Url)}&referer=${encodeURIComponent('https://japaneseasmr.com/')}`,
-      poster: `/image-proxy?url=${encodeURIComponent(coverUrl)}`
-    });
+  for (const cand of weeabCandidates) {
+    if (japTracks.length > 0) break;
+    const [mainMp3Res, m3u8Res] = await Promise.all([
+      fetch(cand.mp3, { method: 'HEAD', headers: { 'Referer': 'https://japaneseasmr.com/', 'User-Agent': 'Mozilla/5.0' } }).catch(() => null),
+      fetch(cand.m3u8, { method: 'GET', headers: { 'Referer': 'https://japaneseasmr.com/', 'User-Agent': 'Mozilla/5.0' } }).catch(() => null)
+    ]);
 
-    // Only probe bonus & extra tracks if the primary MP3 actually exists
-    const bonusCandidates = [
-      { type: 'freetalk', title: 'Free Talk (フリートーク)', url: `https://v.weeab0o.xyz/${cleanRj} freetalk.mp3` },
-      { type: 'freetalk', title: 'Free Talk (フリートーク)', url: `https://v.weeab0o.xyz/${cleanRj}_freetalk.mp3` },
-      { type: 'freetalk', title: 'Free Talk (フリートーク)', url: `https://v.weeab0o.xyz/${cleanRj}-freetalk.mp3` },
-      { type: 'freetalk', title: 'Free Talk (フリートーク)', url: `https://v.weeab0o.xyz/${cleanRj}freetalk.mp3` },
-      { type: 'bonus', title: 'Omake (おまけ)', url: `https://v.weeab0o.xyz/${cleanRj}omake.mp3` },
-      { type: 'bonus', title: 'Omake (おまけ)', url: `https://v.weeab0o.xyz/${cleanRj} omake.mp3` },
-      { type: 'bonus', title: 'Omake (おまけ)', url: `https://v.weeab0o.xyz/${cleanRj}_omake.mp3` },
-      { type: 'bonus', title: 'Omake (おまけ)', url: `https://v.weeab0o.xyz/${cleanRj}-omake.mp3` },
-      { type: 'bonus', title: 'Bonus (特典)', url: `https://v.weeab0o.xyz/${cleanRj} bonus.mp3` },
-      { type: 'bonus', title: 'Bonus (特典)', url: `https://v.weeab0o.xyz/${cleanRj}bonus.mp3` },
-      { type: 'bonus', title: 'Bonus (特典)', url: `https://v.weeab0o.xyz/${cleanRj}_bonus.mp3` },
-      { type: 'main', title: 'Track 2 (トラック2)', url: `https://v.weeab0o.xyz/${cleanRj} 2.mp3` },
-      { type: 'main', title: 'Track 3 (トラック3)', url: `https://v.weeab0o.xyz/${cleanRj} 3.mp3` },
-      { type: 'main', title: 'Track 4 (トラック4)', url: `https://v.weeab0o.xyz/${cleanRj} 4.mp3` },
-      { type: 'main', title: 'Track 5 (トラック5)', url: `https://v.weeab0o.xyz/${cleanRj} 5.mp3` },
-      { type: 'main', title: 'Track 6 (トラック6)', url: `https://v.weeab0o.xyz/${cleanRj} 6.mp3` },
-      { type: 'main', title: 'Track 7 (トラック7)', url: `https://v.weeab0o.xyz/${cleanRj} 7.mp3` },
-      { type: 'main', title: 'Track 8 (トラック8)', url: `https://v.weeab0o.xyz/${cleanRj} 8.mp3` },
-      { type: 'main', title: 'Track 2 (トラック2)', url: `https://v.weeab0o.xyz/${cleanRj}_2.mp3` },
-      { type: 'main', title: 'Track 3 (トラック3)', url: `https://v.weeab0o.xyz/${cleanRj}_3.mp3` },
-      { type: 'main', title: 'Track 2 (トラック2)', url: `https://v.weeab0o.xyz/${cleanRj}-2.mp3` },
-      { type: 'main', title: 'Track 3 (トラック3)', url: `https://v.weeab0o.xyz/${cleanRj}-3.mp3` }
-    ];
+    if (isWeeabValid(mainMp3Res)) {
+      const sz = parseInt(mainMp3Res.headers.get('content-length') || '0', 10);
+      japTracks.push({
+        id: 1,
+        title: 'Track 1 (トラック1)',
+        size: sz,
+        formattedTime: '00:00:00',
+        startTime: 0,
+        isHls: false,
+        category: 'main',
+        rawUrl: cand.mp3,
+        referer: 'https://japaneseasmr.com/',
+        streamUrl: `/stream?url=${encodeURIComponent(cand.mp3)}&referer=${encodeURIComponent('https://japaneseasmr.com/')}&rj=${encodeURIComponent(cleanRj)}`,
+        poster: `/image-proxy?url=${encodeURIComponent(coverUrl)}`
+      });
 
-    const bonusChecks = await Promise.all(
-      bonusCandidates.map(async (c) => {
-        try {
-          const res = await fetch(encodeURI(c.url), {
-            method: 'HEAD',
-            headers: { 'Referer': 'https://japaneseasmr.com/', 'User-Agent': 'Mozilla/5.0' }
+      // Only probe bonus & extra tracks if the primary MP3 actually exists
+      const bonusCandidates = [
+        { type: 'freetalk', title: 'Free Talk (フリートーク)', url: `https://v.weeab0o.xyz/${cand.code} freetalk.mp3` },
+        { type: 'freetalk', title: 'Free Talk (フリートーク)', url: `https://v.weeab0o.xyz/${cand.code}_freetalk.mp3` },
+        { type: 'freetalk', title: 'Free Talk (フリートーク)', url: `https://v.weeab0o.xyz/${cand.code}-freetalk.mp3` },
+        { type: 'freetalk', title: 'Free Talk (フリートーク)', url: `https://v.weeab0o.xyz/${cand.code}freetalk.mp3` },
+        { type: 'bonus', title: 'Omake (おまけ)', url: `https://v.weeab0o.xyz/${cand.code}omake.mp3` },
+        { type: 'bonus', title: 'Omake (おまけ)', url: `https://v.weeab0o.xyz/${cand.code} omake.mp3` },
+        { type: 'bonus', title: 'Omake (おまけ)', url: `https://v.weeab0o.xyz/${cand.code}_omake.mp3` },
+        { type: 'bonus', title: 'Omake (おまけ)', url: `https://v.weeab0o.xyz/${cand.code}-omake.mp3` },
+        { type: 'bonus', title: 'Bonus (特典)', url: `https://v.weeab0o.xyz/${cand.code} bonus.mp3` },
+        { type: 'bonus', title: 'Bonus (特典)', url: `https://v.weeab0o.xyz/${cand.code}bonus.mp3` },
+        { type: 'bonus', title: 'Bonus (特典)', url: `https://v.weeab0o.xyz/${cand.code}_bonus.mp3` },
+        { type: 'main', title: 'Track 2 (トラック2)', url: `https://v.weeab0o.xyz/${cand.code} 2.mp3` },
+        { type: 'main', title: 'Track 3 (トラック3)', url: `https://v.weeab0o.xyz/${cand.code} 3.mp3` },
+        { type: 'main', title: 'Track 4 (トラック4)', url: `https://v.weeab0o.xyz/${cand.code} 4.mp3` },
+        { type: 'main', title: 'Track 5 (トラック5)', url: `https://v.weeab0o.xyz/${cand.code} 5.mp3` },
+        { type: 'main', title: 'Track 6 (トラック6)', url: `https://v.weeab0o.xyz/${cand.code} 6.mp3` },
+        { type: 'main', title: 'Track 7 (トラック7)', url: `https://v.weeab0o.xyz/${cand.code} 7.mp3` },
+        { type: 'main', title: 'Track 8 (トラック8)', url: `https://v.weeab0o.xyz/${cand.code} 8.mp3` },
+        { type: 'main', title: 'Track 2 (トラック2)', url: `https://v.weeab0o.xyz/${cand.code}_2.mp3` },
+        { type: 'main', title: 'Track 3 (トラック3)', url: `https://v.weeab0o.xyz/${cand.code}_3.mp3` },
+        { type: 'main', title: 'Track 2 (トラック2)', url: `https://v.weeab0o.xyz/${cand.code}-2.mp3` },
+        { type: 'main', title: 'Track 3 (トラック3)', url: `https://v.weeab0o.xyz/${cand.code}-3.mp3` }
+      ];
+
+      const bonusChecks = await Promise.all(
+        bonusCandidates.map(async (c) => {
+          try {
+            const res = await fetch(encodeURI(c.url), {
+              method: 'HEAD',
+              headers: { 'Referer': 'https://japaneseasmr.com/', 'User-Agent': 'Mozilla/5.0' }
+            });
+            if (res.ok) {
+              const sz = parseInt(res.headers.get('content-length') || '0', 10);
+              return { ...c, size: sz };
+            }
+          } catch (e) {}
+          return null;
+        })
+      );
+
+      let trkIndex = 2;
+      for (const b of bonusChecks) {
+        if (b) {
+          japTracks.push({
+            id: trkIndex++,
+            title: b.title,
+            size: b.size,
+            formattedTime: '00:00:00',
+            startTime: 0,
+            isHls: false,
+            category: b.type,
+            rawUrl: b.url,
+            referer: 'https://japaneseasmr.com/',
+            streamUrl: `/stream?url=${encodeURIComponent(b.url)}&referer=${encodeURIComponent('https://japaneseasmr.com/')}&rj=${encodeURIComponent(cleanRj)}`,
+            poster: `/image-proxy?url=${encodeURIComponent(coverUrl)}`
           });
-          if (res.ok) {
-            const sz = parseInt(res.headers.get('content-length') || '0', 10);
-            return { ...c, size: sz };
-          }
-        } catch (e) {}
-        return null;
-      })
-    );
-
-    let trkIndex = 2;
-    for (const b of bonusChecks) {
-      if (b) {
-        japTracks.push({
-          id: trkIndex++,
-          title: b.title,
-          size: b.size,
-          formattedTime: '00:00:00',
-          startTime: 0,
-          isHls: false,
-          category: b.type,
-          rawUrl: b.url,
-          referer: 'https://japaneseasmr.com/',
-          streamUrl: `/stream?url=${encodeURIComponent(b.url)}&referer=${encodeURIComponent('https://japaneseasmr.com/')}`,
-          poster: `/image-proxy?url=${encodeURIComponent(coverUrl)}`
-        });
+        }
       }
+    } else if (m3u8Res && m3u8Res.ok) {
+      try {
+        const manifest = await m3u8Res.text();
+        if (manifest.includes('#EXTM3U')) {
+          hasHls = true;
+          let m3u8Secs = 0;
+          const extinfMatches = manifest.match(/#EXTINF:([0-9.]+)/g) || [];
+          extinfMatches.forEach(m => {
+            const s = parseFloat(m.replace('#EXTINF:', ''));
+            if (!isNaN(s)) m3u8Secs += s;
+          });
+          const estBytes = Math.round(m3u8Secs * 16000); // ~128kbps audio estimation
+          japTracks.push({
+            id: 1,
+            title: title ? `01. ${title}` : '01. Audio Track',
+            duration: Math.round(m3u8Secs),
+            size: estBytes,
+            formattedTime: m3u8Secs > 0 ? formatServerTime(Math.round(m3u8Secs)) : '00:00:00',
+            startTime: 0,
+            isHls: true,
+            category: 'main',
+            rawUrl: cand.m3u8,
+            referer: 'https://japaneseasmr.com/',
+            streamUrl: `/stream?url=${encodeURIComponent(cand.m3u8)}&referer=${encodeURIComponent('https://japaneseasmr.com/')}&rj=${encodeURIComponent(cleanRj)}`,
+            poster: `/image-proxy?url=${encodeURIComponent(coverUrl)}`
+          });
+        }
+      } catch (e) {}
     }
-  } else if (m3u8Res && m3u8Res.ok) {
-    try {
-      const manifest = await m3u8Res.text();
-      if (manifest.includes('#EXTM3U')) {
-        hasHls = true;
-        let m3u8Secs = 0;
-        const extinfMatches = manifest.match(/#EXTINF:([0-9.]+)/g) || [];
-        extinfMatches.forEach(m => {
-          const s = parseFloat(m.replace('#EXTINF:', ''));
-          if (!isNaN(s)) m3u8Secs += s;
-        });
-        const estBytes = Math.round(m3u8Secs * 16000); // ~128kbps audio estimation
-        japTracks.push({
-          id: 1,
-          title: title ? `01. ${title}` : '01. Audio Track',
-          duration: Math.round(m3u8Secs),
-          size: estBytes,
-          formattedTime: m3u8Secs > 0 ? formatServerTime(Math.round(m3u8Secs)) : '00:00:00',
-          startTime: 0,
-          isHls: true,
-          category: 'main',
-          rawUrl: m3u8Url,
-          referer: 'https://japaneseasmr.com/',
-          streamUrl: `/stream?url=${encodeURIComponent(m3u8Url)}&referer=${encodeURIComponent('https://japaneseasmr.com/')}`,
-          poster: `/image-proxy?url=${encodeURIComponent(coverUrl)}`
-        });
-      }
-    } catch (e) {}
   }
 
-  // 2. Fetch Ground-Truth Reference Tracks from ASMR.one only if JapaneseASMR audio was NOT found
+  // 2. Fetch Ground-Truth Reference Tracks from ASMR.one
   let gtTracks = [];
   if (japTracks.length === 0) {
     try {
       const cleanNum = cleanRj.replace(/^(?:RJ|VJ|BJ)/i, '');
-      const apiHosts = ['https://api.asmr.one', 'https://api.asmr-200.com'];
-      for (const host of apiHosts) {
-        try {
-          const asmrRes = await fetch(`${host}/api/tracks/${cleanNum}`, {
-            headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
-          });
-          if (asmrRes.ok) {
-            const treeData = await asmrRes.json();
-            if (Array.isArray(treeData) && treeData.length > 0) {
-              const audioList = [];
-              const isBonus = (t) => /(特典|おまけ|bonus|extra|ex_|sp_|後日談|アフター|ショートストーリー|ss)/i.test(t || '');
-              const isTalk = (t) => /(フリートーク|free[\s_-]?talk|talk|座談会|キャストコメント)/i.test(t || '');
-              const isSamp = (t) => /(サンプル|sample|体験版|予告|試聴|pv|ダイジェスト|digest|\.mp4|\.mkv)/i.test(t || '');
+      const strippedNum = cleanNum.replace(/^0+/, '');
+      const trackIdsToTry = Array.from(new Set([strippedNum, cleanNum])).filter(Boolean);
+      const apiHosts = ['https://api.asmr-200.com', 'https://api.asmr-300.com', 'https://api.asmr.one'];
+      for (const tid of trackIdsToTry) {
+        for (const host of apiHosts) {
+          try {
+            const asmrRes = await fetch(`${host}/api/tracks/${tid}`, {
+              headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
+            });
+            if (asmrRes.ok) {
+              const treeData = await asmrRes.json();
+              if (Array.isArray(treeData) && treeData.length > 0) {
+                const audioList = [];
+                const isBonus = (t) => /(特典|おまけ|bonus|extra|ex_|sp_|後日談|アフター|ショートストーリー|ss)/i.test(t || '');
+                const isTalk = (t) => /(フリートーク|free[\s_-]?talk|talk|座談会|キャストコメント)/i.test(t || '');
+                const isSamp = (t) => /(サンプル|sample|体験版|予告|試聴|pv|ダイジェスト|digest|\.mp4|\.mkv)/i.test(t || '');
 
-              const trav = (items, folder = '') => {
-                if (!Array.isArray(items)) return;
-                for (const item of items) {
-                  if (!item) continue;
-                  const title = (item.title || '').trim();
-                  const type = (item.type || '').toLowerCase();
-                  const dur = Math.max(0, Math.round(Number(item.duration) || 0));
-                  if ((type === 'audio' || /\.(mp3|wav|flac|m4a|aac|ogg|opus)$/i.test(title)) && dur > 0 && !isSamp(title)) {
-                    let cat = 'main';
-                    if (isTalk(title) || isTalk(folder)) cat = 'freetalk';
-                    else if (isBonus(title) || isBonus(folder)) cat = 'bonus';
-                    audioList.push({
-                      title: title.replace(/\.[a-zA-Z0-9]+$/, '').trim(),
-                      duration: dur,
-                      formattedTime: formatServerTime(dur),
-                      category: cat,
-                      folder: folder
-                    });
+                const trav = (items, folder = '') => {
+                  if (!Array.isArray(items)) return;
+                  for (const item of items) {
+                    if (!item) continue;
+                    const title = (item.title || '').trim();
+                    const type = (item.type || '').toLowerCase();
+                    const dur = Math.max(0, Math.round(Number(item.duration) || 0));
+                    const streamCandidateUrl = item.mediaStreamUrl || item.streamLowQualityUrl || item.mediaDownloadUrl || item.downloadUrl || item.streamUrl || item.url || (item.hash ? `${host}/api/media/stream/${item.hash}` : '');
+                    if ((type === 'audio' || /\.(mp3|wav|flac|m4a|aac|ogg|opus)$/i.test(title)) && dur > 0 && !isSamp(title)) {
+                      let cat = 'main';
+                      if (isTalk(title) || isTalk(folder)) cat = 'freetalk';
+                      else if (isBonus(title) || isBonus(folder)) cat = 'bonus';
+                      audioList.push({
+                        title: title.replace(/\.[a-zA-Z0-9]+$/, '').trim(),
+                        duration: dur,
+                        formattedTime: formatServerTime(dur),
+                        category: cat,
+                        folder: folder,
+                        url: streamCandidateUrl
+                      });
+                    }
+                    if (Array.isArray(item.children) && item.children.length > 0) {
+                      trav(item.children, folder ? `${folder}/${title}` : title);
+                    }
                   }
-                  if (Array.isArray(item.children) && item.children.length > 0) {
-                    trav(item.children, folder ? `${folder}/${title}` : title);
-                  }
+                };
+                trav(treeData);
+                if (audioList.length > 0) {
+                  gtTracks = audioList;
+                  break;
                 }
-              };
-              trav(treeData);
-              if (audioList.length > 0) {
-                gtTracks = audioList;
-                break;
               }
             }
-          }
-        } catch (e) {}
+          } catch (e) {}
+          if (gtTracks.length > 0) break;
+        }
         if (gtTracks.length > 0) break;
       }
     } catch (e) {}
@@ -1709,7 +2417,9 @@ async function resolveRjWork(rjCode) {
           else if (/(?:おまけ|bonus|特典|omake)/i.test(t.title)) cat = 'bonus';
         }
 
-        if (!trackDur && t._size) {
+        if (!trackDur && moeMeta.duration > 0 && moeMeta.audioTracks.length === 1) {
+          trackDur = moeMeta.duration;
+        } else if (!trackDur && t._size) {
           trackDur = Math.round(t._size / 16000); // ~128kbps MP3
         }
 
@@ -1724,8 +2434,8 @@ async function resolveRjWork(rjCode) {
           isCombinedAllInOne: isCombined,
           category: cat,
           rawUrl: t.streamUrl,
-          referer: 'https://hentaiasmr.moe/',
-          streamUrl: `/stream?url=${encodeURIComponent(t.streamUrl)}&referer=${encodeURIComponent('https://hentaiasmr.moe/')}`,
+          referer: moeMeta.postLink || `https://hentaiasmr.moe/${cleanRj.toLowerCase()}.html`,
+          streamUrl: `/stream?url=${encodeURIComponent(t.streamUrl)}&referer=${encodeURIComponent(moeMeta.postLink || `https://hentaiasmr.moe/${cleanRj.toLowerCase()}.html`)}&rj=${encodeURIComponent(cleanRj)}`,
           poster: `/image-proxy?url=${encodeURIComponent(coverUrl)}`
         });
       });
@@ -1735,7 +2445,22 @@ async function resolveRjWork(rjCode) {
   // Probe DLsite Chobit official preview audio
   const chobitTracks = await fetchChobitSampleTracks(cleanRj);
 
-  // 4. Source Selection: Multi-track Moe > Multi-track JapaneseASMR > Single-track Moe > Single-track JapaneseASMR > Chobit Preview
+  // Ground-truth and ASMR.one track tree audio streams
+  const asmrTracks = gtTracks.filter(t => Boolean(t.url)).map((t, idx) => ({
+    id: idx + 1,
+    title: t.title || `Track ${idx + 1}`,
+    duration: t.duration || 0,
+    formattedTime: formatServerTime(t.duration || 0),
+    startTime: 0,
+    isHls: false,
+    category: t.category || 'main',
+    rawUrl: t.url,
+    referer: 'https://www.asmr.one/',
+    streamUrl: `/stream?url=${encodeURIComponent(t.url)}&referer=${encodeURIComponent('https://www.asmr.one/')}&rj=${encodeURIComponent(cleanRj)}`,
+    poster: `/image-proxy?url=${encodeURIComponent(coverUrl)}`
+  }));
+
+  // 4. Source Selection: Multi-track Moe > Multi-track JapaneseASMR > Multi-track ASMR.one > Single-track Moe > Single-track JapaneseASMR > Single-track ASMR.one > Chobit Preview
   let tracks = [];
   let selectedSource = '';
   let hasLazyAudio = false;
@@ -1749,6 +2474,11 @@ async function resolveRjWork(rjCode) {
     tracks = japTracks;
     selectedSource = (tracks[0] && tracks[0].isHls) ? 'JapaneseASMR (HLS Stream)' : 'JapaneseASMR (Multi-Track MP3)';
     hasLazyAudio = false;
+  } else if (asmrTracks.length > 1) {
+    tracks = asmrTracks;
+    selectedSource = 'ASMR.one (Multi-Track Audio Stream)';
+    hasLazyAudio = false;
+    hasHls = false;
   } else if (moeTracks.length === 1) {
     tracks = moeTracks;
     selectedSource = 'HentaiASMR Moe (Discrete MP3 track)';
@@ -1758,6 +2488,11 @@ async function resolveRjWork(rjCode) {
     tracks = japTracks;
     selectedSource = (tracks[0] && tracks[0].isHls) ? 'JapaneseASMR (HLS Stream)' : 'JapaneseASMR (Discrete MP3 track)';
     hasLazyAudio = false;
+  } else if (asmrTracks.length === 1) {
+    tracks = asmrTracks;
+    selectedSource = 'ASMR.one (Discrete Audio Stream)';
+    hasLazyAudio = false;
+    hasHls = false;
   } else if (moeMeta?.isAudioFound) {
     hasLazyAudio = true;
     tracks.push({
@@ -1777,8 +2512,12 @@ async function resolveRjWork(rjCode) {
     tracks = [];
     selectedSource = 'DLsite Official Sample Audio (Chobit CDN)';
     hasLazyAudio = false;
+  } else if (title && !isPlaceholderTitle(title, cleanRj)) {
+    tracks = [];
+    selectedSource = 'DLsite Official Metadata (Preview / Sample Clips Only)';
+    hasLazyAudio = false;
   } else {
-    throw new Error(`Work ${cleanRj} not found on JapaneseASMR, HentaiASMR Moe, or DLsite Chobit`);
+    throw new Error(`Work ${cleanRj} not found on JapaneseASMR, HentaiASMR Moe, ASMR.one, or DLsite Chobit`);
   }
 
   const postLink = moeMeta?.postLink || moeMetaForResolve?.postLink || `https://hentaiasmr.moe/${cleanRj.toLowerCase()}.html`;
@@ -1845,13 +2584,78 @@ async function resolveRjWork(rjCode) {
 }
 
 // Extract exact JWPlayer audio playlist from Moe post HTML
-function extractMoeHtmlTracks(html, postLink, coverUrl, title) {
+function extractMoeHtmlTracks(html, postLink, coverUrl, title, rjCode = '') {
   const tracks = [];
   if (!html) return tracks;
+  const cleanRj = (rjCode || '').toUpperCase();
+  const cleanLower = (rjCode || '').toLowerCase();
+  const pageReferer = postLink || (cleanLower ? `https://hentaiasmr.moe/${cleanLower}.html` : 'https://hentaiasmr.moe/');
 
-  // Pattern 1: JWPlayer playlist.push({ file: '...', title: '...' })
-  const itemRegex = /playlist\.push\(\s*\{([\s\S]*?)\}\s*\);/gi;
+  // Ground-truth ISO 8601 duration in page HTML (e.g. PT02H21M44S)
+  let htmlDuration = 0;
+  const isoDurMatch = html.match(/itemprop=["']duration["']\s+content=["']PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?["']/i) ||
+                      html.match(/"duration"\s*:\s*["']PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?["']/i) ||
+                      html.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/i);
+  if (isoDurMatch && (isoDurMatch[1] || isoDurMatch[2] || isoDurMatch[3])) {
+    const h = parseInt(isoDurMatch[1] || '0', 10);
+    const m = parseInt(isoDurMatch[2] || '0', 10);
+    const s = parseInt(isoDurMatch[3] || '0', 10);
+    htmlDuration = h * 3600 + m * 60 + s;
+  }
+
+  // Pattern 1: JWPlayer setup direct file or playlist
+  const jwSetupRegex = /jwplayer\([^)]*\)\.setup\(\s*\{[\s\S]*?file\s*:\s*["']([^"']+)["']/gi;
   let match;
+  while ((match = jwSetupRegex.exec(html)) !== null) {
+    let fUrl = match[1].replace(/\\\//g, '/').replace(/&amp;/g, '&').trim();
+    if (fUrl.startsWith('//')) fUrl = 'https:' + fUrl;
+    if (/\.(?:mp3|m4a|wav|ogg|flac|m3u8)(?:\?.*)?$/i.test(fUrl)) {
+      if (!tracks.some(t => t.rawUrl === fUrl)) {
+        const trkNum = tracks.length + 1;
+        const trkTitle = title ? `${cleanRj || title} (Full)` : `Track ${trkNum}`;
+        tracks.push({
+          id: trkNum,
+          title: trkTitle,
+          rawUrl: fUrl,
+          streamUrl: `/stream?url=${encodeURIComponent(fUrl)}&referer=${encodeURIComponent(pageReferer)}&rj=${encodeURIComponent(cleanRj)}`,
+          category: 'main',
+          formattedTime: htmlDuration > 0 ? formatServerTime(htmlDuration) : '00:00:00',
+          duration: htmlDuration,
+          size: 0,
+          isHls: fUrl.toLowerCase().includes('.m3u8'),
+          poster: coverUrl ? `/image-proxy?url=${encodeURIComponent(coverUrl)}` : ''
+        });
+      }
+    }
+  }
+
+  // Pattern 2: Any JWPlayer file object { file: "...", title: "..." }
+  const fileObjRegex = /\{\s*(?:file|src)\s*:\s*["']([^"']+)["'](?:[^{}]*?title\s*:\s*["']([^"']+)["'])?[^}]*\}/gi;
+  while ((match = fileObjRegex.exec(html)) !== null) {
+    let fUrl = match[1].replace(/\\\//g, '/').replace(/&amp;/g, '&').trim();
+    if (fUrl.startsWith('//')) fUrl = 'https:' + fUrl;
+    if (/\.(?:mp3|m4a|wav|ogg|flac|m3u8)(?:\?.*)?$/i.test(fUrl)) {
+      if (!tracks.some(t => t.rawUrl === fUrl)) {
+        const trkNum = tracks.length + 1;
+        const trkTitle = match[2] ? match[2].trim() : (title ? `${String(trkNum).padStart(2, '0')}. Track ${trkNum}` : `Track ${trkNum}`);
+        tracks.push({
+          id: trkNum,
+          title: trkTitle,
+          rawUrl: fUrl,
+          streamUrl: `/stream?url=${encodeURIComponent(fUrl)}&referer=${encodeURIComponent(pageReferer)}&rj=${encodeURIComponent(cleanRj)}`,
+          category: /(?:フリートーク|free[\s_-]?talk|talk)/i.test(trkTitle) ? 'freetalk' : (/(?:おまけ|bonus|特典|omake)/i.test(trkTitle) ? 'bonus' : 'main'),
+          formattedTime: htmlDuration > 0 && tracks.length === 0 ? formatServerTime(htmlDuration) : '00:00:00',
+          duration: tracks.length === 0 ? htmlDuration : 0,
+          size: 0,
+          isHls: fUrl.toLowerCase().includes('.m3u8'),
+          poster: coverUrl ? `/image-proxy?url=${encodeURIComponent(coverUrl)}` : ''
+        });
+      }
+    }
+  }
+
+  // Pattern 3: playlist.push({ file: '...', title: '...' })
+  const itemRegex = /playlist\.push\(\s*\{([\s\S]*?)\}\s*\);/gi;
   while ((match = itemRegex.exec(html)) !== null) {
     const block = match[1];
     const fileM = block.match(/file\s*:\s*["']([^"']+)["']/i);
@@ -1859,15 +2663,66 @@ function extractMoeHtmlTracks(html, postLink, coverUrl, title) {
     if (fileM) {
       let fUrl = fileM[1].replace(/\\\//g, '/').replace(/&amp;/g, '&').trim();
       if (fUrl.startsWith('//')) fUrl = 'https:' + fUrl;
-      const tTitle = titleM ? titleM[1].trim() : `Track ${tracks.length + 1}`;
+      if (!tracks.some(t => t.rawUrl === fUrl)) {
+        const trkNum = tracks.length + 1;
+        const tTitle = titleM ? titleM[1].trim() : `Track ${trkNum}`;
+        tracks.push({
+          id: trkNum,
+          title: tTitle,
+          rawUrl: fUrl,
+          streamUrl: `/stream?url=${encodeURIComponent(fUrl)}&referer=${encodeURIComponent(pageReferer)}&rj=${encodeURIComponent(cleanRj)}`,
+          category: /(?:フリートーク|free[\s_-]?talk|talk)/i.test(tTitle) ? 'freetalk' : (/(?:おまけ|bonus|特典|omake)/i.test(tTitle) ? 'bonus' : 'main'),
+          formattedTime: '00:00:00',
+          duration: 0,
+          size: 0,
+          isHls: fUrl.toLowerCase().includes('.m3u8'),
+          poster: coverUrl ? `/image-proxy?url=${encodeURIComponent(coverUrl)}` : ''
+        });
+      }
+    }
+  }
+
+  // Pattern 4: Button tracking link: <a class="button-track" ... href="...">
+  const buttonTrackRegex = /<a\b[^>]*class=["'][^"']*button-track[^"']*["'][^>]*href=["']([^"']+)["']/gi;
+  while ((match = buttonTrackRegex.exec(html)) !== null) {
+    let fUrl = match[1].replace(/\\\//g, '/').replace(/&amp;/g, '&').trim();
+    if (fUrl.startsWith('//')) fUrl = 'https:' + fUrl;
+    if (/\.(?:mp3|m4a|wav|ogg|flac|m3u8)(?:\?.*)?$/i.test(fUrl)) {
+      if (!tracks.some(t => t.rawUrl === fUrl)) {
+        const trkNum = tracks.length + 1;
+        const trkTitle = title ? `${cleanRj || title} (Full)` : `Track ${trkNum}`;
+        tracks.push({
+          id: trkNum,
+          title: trkTitle,
+          rawUrl: fUrl,
+          streamUrl: `/stream?url=${encodeURIComponent(fUrl)}&referer=${encodeURIComponent(pageReferer)}&rj=${encodeURIComponent(cleanRj)}`,
+          category: 'main',
+          formattedTime: htmlDuration > 0 ? formatServerTime(htmlDuration) : '00:00:00',
+          duration: htmlDuration,
+          size: 0,
+          isHls: fUrl.toLowerCase().includes('.m3u8'),
+          poster: coverUrl ? `/image-proxy?url=${encodeURIComponent(coverUrl)}` : ''
+        });
+      }
+    }
+  }
+
+  // Pattern 5: Direct CDN audio links in script/content (e.g. cdn.hentaiasmr.moe/mf/...)
+  const directAudioRegex = /https?:\/\/cdn(?:16|-otome)?\.hentaiasmr\.moe\/[^\s"'<>]+\.(?:mp3|m4a|wav|ogg|flac|m3u8)/gi;
+  let dMatch;
+  while ((dMatch = directAudioRegex.exec(html)) !== null) {
+    let fUrl = dMatch[0].replace(/\\\//g, '/').replace(/&amp;/g, '&').trim();
+    if (!tracks.some(t => t.rawUrl === fUrl)) {
+      const trkNum = tracks.length + 1;
+      const trkTitle = title ? `${String(trkNum).padStart(2, '0')}. Track ${trkNum}` : `Track ${trkNum}`;
       tracks.push({
-        id: tracks.length + 1,
-        title: tTitle,
+        id: trkNum,
+        title: trkTitle,
         rawUrl: fUrl,
-        streamUrl: `/stream?url=${encodeURIComponent(fUrl)}&referer=${encodeURIComponent('https://hentaiasmr.moe/')}`,
-        category: /(?:フリートーク|free[\s_-]?talk|talk)/i.test(tTitle) ? 'freetalk' : (/(?:おまけ|bonus|特典|omake)/i.test(tTitle) ? 'bonus' : 'main'),
-        formattedTime: '00:00:00',
-        duration: 0,
+        streamUrl: `/stream?url=${encodeURIComponent(fUrl)}&referer=${encodeURIComponent(pageReferer)}&rj=${encodeURIComponent(cleanRj)}`,
+        category: trkNum === 1 ? 'main' : (trkNum === 2 ? 'freetalk' : 'bonus'),
+        formattedTime: htmlDuration > 0 && tracks.length === 0 ? formatServerTime(htmlDuration) : '00:00:00',
+        duration: tracks.length === 0 ? htmlDuration : 0,
         size: 0,
         isHls: fUrl.toLowerCase().includes('.m3u8'),
         poster: coverUrl ? `/image-proxy?url=${encodeURIComponent(coverUrl)}` : ''
@@ -1875,51 +2730,30 @@ function extractMoeHtmlTracks(html, postLink, coverUrl, title) {
     }
   }
 
-  // Pattern 2: sources: [ { file: "..." } ]
-  if (tracks.length === 0) {
-    const srcRegex = /sources\s*:\s*\[\s*\{([\s\S]*?)\}\s*\]/gi;
-    while ((match = srcRegex.exec(html)) !== null) {
-      const block = match[1];
-      const fileM = block.match(/file\s*:\s*["']([^"']+)["']/i);
-      if (fileM) {
-        let fUrl = fileM[1].replace(/\\\//g, '/').replace(/&amp;/g, '&').trim();
-        if (fUrl.startsWith('//')) fUrl = 'https:' + fUrl;
-        tracks.push({
-          id: tracks.length + 1,
-          title: title ? `01. ${title}` : '01. Audio Track',
-          rawUrl: fUrl,
-          streamUrl: `/stream?url=${encodeURIComponent(fUrl)}&referer=${encodeURIComponent('https://hentaiasmr.moe/')}`,
-          category: 'main',
-          formattedTime: '00:00:00',
-          duration: 0,
-          size: 0,
-          isHls: fUrl.toLowerCase().includes('.m3u8'),
-          poster: coverUrl ? `/image-proxy?url=${encodeURIComponent(coverUrl)}` : ''
-        });
-      }
+  // Pattern 6: <audio> / <source> / schema contentURL / contentUrl
+  const audioRegex = /(?:<source[^>]+src=["']|<audio[^>]+src=["']|"(?:contentURL|contentUrl)"\s*:\s*["']|itemprop=["']contentURL["']\s+content=["'])(https?:\/\/[^\s"'<>]+\.(?:mp3|m4a|wav|ogg|flac|m3u8))/gi;
+  while ((match = audioRegex.exec(html)) !== null) {
+    let fUrl = match[1].replace(/\\\//g, '/').replace(/&amp;/g, '&').trim();
+    if (!tracks.some(t => t.rawUrl === fUrl)) {
+      const trkNum = tracks.length + 1;
+      tracks.push({
+        id: trkNum,
+        title: title ? `${String(trkNum).padStart(2, '0')}. Track ${trkNum}` : `Track ${trkNum}`,
+        rawUrl: fUrl,
+        streamUrl: `/stream?url=${encodeURIComponent(fUrl)}&referer=${encodeURIComponent(pageReferer)}&rj=${encodeURIComponent(cleanRj)}`,
+        category: 'main',
+        formattedTime: htmlDuration > 0 && tracks.length === 0 ? formatServerTime(htmlDuration) : '00:00:00',
+        duration: tracks.length === 0 ? htmlDuration : 0,
+        size: 0,
+        isHls: fUrl.toLowerCase().includes('.m3u8'),
+        poster: coverUrl ? `/image-proxy?url=${encodeURIComponent(coverUrl)}` : ''
+      });
     }
   }
 
-  // Pattern 3: <audio> / <source> / schema contentURL
-  if (tracks.length === 0) {
-    const audioRegex = /(?:<source[^>]+src=["']|<audio[^>]+src=["']|"contentURL"\s*:\s*["'])(https?:\/\/[^\s"'<>]+\.(?:mp3|m4a|wav|ogg|flac|m3u8))/gi;
-    while ((match = audioRegex.exec(html)) !== null) {
-      let fUrl = match[1].replace(/\\\//g, '/').replace(/&amp;/g, '&').trim();
-      if (!tracks.some(t => t.rawUrl === fUrl)) {
-        tracks.push({
-          id: tracks.length + 1,
-          title: title ? `01. ${title}` : `Track ${tracks.length + 1}`,
-          rawUrl: fUrl,
-          streamUrl: `/stream?url=${encodeURIComponent(fUrl)}&referer=${encodeURIComponent('https://hentaiasmr.moe/')}`,
-          category: 'main',
-          formattedTime: '00:00:00',
-          duration: 0,
-          size: 0,
-          isHls: fUrl.toLowerCase().includes('.m3u8'),
-          poster: coverUrl ? `/image-proxy?url=${encodeURIComponent(coverUrl)}` : ''
-        });
-      }
-    }
+  if (tracks.length === 1 && htmlDuration > 0 && (!tracks[0].duration || tracks[0].duration === 0)) {
+    tracks[0].duration = htmlDuration;
+    tracks[0].formattedTime = formatServerTime(htmlDuration);
   }
 
   return tracks;
@@ -1928,28 +2762,67 @@ function extractMoeHtmlTracks(html, postLink, coverUrl, title) {
 // On-demand lazy resolution: Fetches Moe post HTML and extracts exact tracks
 async function resolveLazyWorkAudio(work) {
   if (!work) return null;
+  const cleanRj = (work.rjCode || '').toUpperCase();
   const cleanLower = (work.rjCode || '').toLowerCase();
-  const pageUrl = work.postLink || `https://hentaiasmr.moe/${cleanLower}.html`;
+  const cleanNum = cleanRj.replace(/^(?:RJ|VJ|BJ)/i, '');
+  const strippedNum = cleanNum.replace(/^0+/, '');
+  const strippedLower = `rj${strippedNum}`;
 
+  const candidatePages = [
+    work.postLink,
+    `https://hentaiasmr.moe/${cleanLower}.html`,
+    `https://hentaiasmr.moe/${strippedLower}.html`,
+    `https://hentaiasmr.moe/${cleanRj}.html`,
+    `https://hentaiasmr.moe/RJ${strippedNum}.html`
+  ].filter(Boolean);
+
+  for (const pageUrl of candidatePages) {
+    try {
+      const res = await fetch(pageUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Referer': 'https://hentaiasmr.moe/',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9,ja;q=0.8'
+        }
+      });
+      if (res.ok) {
+        const html = await res.text();
+        const extractedTracks = extractMoeHtmlTracks(html, pageUrl, work.rawCoverUrl || work.coverUrl, work.title, cleanRj);
+        if (extractedTracks && extractedTracks.length > 0) {
+          work.tracks = extractedTracks;
+          work.hasLazyAudio = false;
+          work.totalTracks = extractedTracks.length;
+          work.hasHls = extractedTracks.some(t => t.isHls);
+          return work;
+        }
+      }
+    } catch (e) {}
+  }
+
+  // Fallback to ASMR.one / Chapters if Moe page didn't have tracks
   try {
-    const res = await fetch(pageUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Referer': 'https://hentaiasmr.moe/',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9,ja;q=0.8'
+    const chapData = await fetchChaptersAndGallery(cleanRj, false, work.totalDuration || 0);
+    if (chapData && Array.isArray(chapData.audioTracks) && chapData.audioTracks.length > 0) {
+      work.tracks = chapData.audioTracks.map((t, idx) => ({
+        id: idx + 1,
+        title: t.title || ('Track ' + (idx + 1)),
+        duration: t.duration || 0,
+        formattedTime: formatServerTime(t.duration || 0),
+        startTime: 0,
+        isHls: false,
+        rawUrl: t.url,
+        referer: 'https://www.asmr.one/',
+        streamUrl: `/stream?url=${encodeURIComponent(t.url)}&referer=${encodeURIComponent('https://www.asmr.one/')}&rj=${encodeURIComponent(cleanRj)}`,
+        poster: work.coverUrl || ''
+      }));
+      work.hasLazyAudio = false;
+      work.totalTracks = work.tracks.length;
+      work.hasHls = false;
+      if (Array.isArray(chapData.chapters) && chapData.chapters.length > 0) {
+        work.chapters = chapData.chapters;
       }
-    });
-    if (res.ok) {
-      const html = await res.text();
-      const extractedTracks = extractMoeHtmlTracks(html, pageUrl, work.rawCoverUrl || work.coverUrl, work.title);
-      if (extractedTracks && extractedTracks.length > 0) {
-        work.tracks = extractedTracks;
-        work.hasLazyAudio = false;
-        work.totalTracks = extractedTracks.length;
-        work.hasHls = extractedTracks.some(t => t.isHls);
-        return work;
-      }
+      return work;
     }
   } catch (e) {}
 
@@ -1966,80 +2839,100 @@ async function resolveWorkMetadataOnly(cleanRj, oldWork) {
   let coverUrl = oldWork?.coverUrl || '';
   let isAdult = oldWork?.isNsfw ?? true;
 
-  // Source 1: ASMR.one Public API (1 fast subrequest)
+  // Source 1: ASMR.one Public API across multiple hosts
   let asmrFetched = false;
-  try {
-    const asmrRes = await fetch(`https://api.asmr-200.com/api/work/${cleanNum}`, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'application/json'
-      }
-    });
-    if (asmrRes.ok) {
-      const data = await asmrRes.json();
-      if (data && data.title) {
-        asmrFetched = true;
-        title = data.title;
-        if (data.circle?.name) circle = data.circle.name;
-        if (Array.isArray(data.vas) && data.vas.length > 0) {
-          cv = data.vas.map(v => v.name).join(', ');
-        }
-        if (Array.isArray(data.tags)) {
-          tags = [];
-          data.tags.forEach(t => {
-            const name = t.name || (typeof t === 'string' ? t : '');
-            if (name && !tags.includes(name)) tags.push(name);
-            const en = t.i18n?.['en-us']?.name || t.i18n?.['en']?.name || (BASE_TAG_DICT[name] || '');
-            if (name && en && name !== en) {
-              tagTranslations[name] = en;
-            }
-          });
-        }
-        let img = data.mainCoverUrl || data.thumbnailCoverUrl || data.samCoverUrl || '';
-        if (img) coverUrl = img;
+  const canonicalRj = getCanonicalDlsiteRj(cleanRj);
+  const strippedNum = cleanNum.replace(/^0+/, '');
+  const asmrHosts = ['https://api.asmr-200.com', 'https://api.asmr-300.com', 'https://api.asmr.one', 'https://api.asmr-100.com'];
+  const idsToTry = Array.from(new Set([strippedNum, cleanNum, cleanRj, canonicalRj])).filter(Boolean);
 
-        isAdult = (data.age_category === 1 || data.age_category_string === 'general' || data.rating === 'general') ? false : true;
-      }
-    }
-  } catch (e) {}
-
-  // Source 2: Official DLsite JSON API (fallback)
-  if (!asmrFetched) {
-    const divisions = ['home', 'maniax', 'girls'];
-    for (const div of divisions) {
+  for (const tid of idsToTry) {
+    for (const host of asmrHosts) {
       try {
-        const dlsiteRes = await fetch(`https://www.dlsite.com/${div}/api/=/product.json?workno=${cleanRj}`, {
-          headers: { 'User-Agent': 'Mozilla/5.0' }
+        const asmrRes = await fetch(`${host}/api/work/${tid}`, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0',
+            'Accept': 'application/json'
+          }
         });
-        if (dlsiteRes.ok) {
-          const data = await dlsiteRes.json();
-          if (data && data.length > 0) {
-            const item = data[0];
-            if (item.work_name) title = item.work_name;
-            if (item.maker_name) circle = item.maker_name;
-            if (Array.isArray(item.voice_actor)) cv = item.voice_actor.join(', ');
-            else if (typeof item.voice_actor === 'string') cv = item.voice_actor;
-            if (Array.isArray(item.genres)) {
-              tags = item.genres.map(g => g.name || g);
+        if (asmrRes.ok) {
+          const data = await asmrRes.json();
+          if (data && data.title) {
+            asmrFetched = true;
+            title = data.title;
+            if (data.circle?.name) circle = data.circle.name;
+            if (Array.isArray(data.vas) && data.vas.length > 0) {
+              cv = data.vas.map(v => v.name).join(', ');
             }
-            isAdult = (item.age_category === 1 || item.age_category_string === 'general') ? false : true;
+            if (Array.isArray(data.tags)) {
+              tags = [];
+              data.tags.forEach(t => {
+                const name = t.name || (typeof t === 'string' ? t : '');
+                if (name && !tags.includes(name)) tags.push(name);
+                const en = t.i18n?.['en-us']?.name || t.i18n?.['en']?.name || (BASE_TAG_DICT[name] || '');
+                if (name && en && name !== en) {
+                  tagTranslations[name] = en;
+                }
+              });
+            }
+            let img = data.mainCoverUrl || data.thumbnailCoverUrl || data.samCoverUrl || '';
+            if (img) coverUrl = img;
+
+            isAdult = (data.age_category === 1 || data.age_category_string === 'general' || data.rating === 'general') ? false : true;
             break;
           }
         }
       } catch (e) {}
     }
+    if (asmrFetched) break;
   }
 
-  // Source 3: HentaiASMR Multi-Source Fallback
+  // Source 2: Official DLsite JSON API (parallel fallback across divisions)
+  if (!asmrFetched) {
+    const divisions = ['maniax', 'home', 'girls', 'pro', 'books', 'comic', 'soft', 'bl', 'touch', 'gay', 'eng'];
+    try {
+      const divResults = await Promise.all(
+        divisions.map(async (div) => {
+          try {
+            const dlsiteRes = await fetch(`https://www.dlsite.com/${div}/api/=/product.json?workno=${cleanRj}`, {
+              headers: { 'User-Agent': 'Mozilla/5.0', 'Cookie': 'adultchecked=1' }
+            });
+            if (dlsiteRes.ok) {
+              const data = await dlsiteRes.json();
+              if (data && data.length > 0) {
+                return { div, item: data[0] };
+              }
+            }
+          } catch (e) {}
+          return null;
+        })
+      );
+
+      const validDiv = divResults.find(r => r && r.item);
+      if (validDiv) {
+        const item = validDiv.item;
+        if (item.work_name) title = item.work_name;
+        if (item.maker_name) circle = item.maker_name;
+        if (Array.isArray(item.voice_actor)) cv = item.voice_actor.join(', ');
+        else if (typeof item.voice_actor === 'string') cv = item.voice_actor;
+        if (Array.isArray(item.genres)) {
+          tags = item.genres.map(g => g.name || g);
+        }
+        isAdult = (item.age_category === 1 || item.age_category_string === 'general') ? false : true;
+      }
+    } catch (e) {}
+  }
+
+  // Source 3: HentaiASMR Multi-Source Fallback (Skipping audio probe)
   let series = oldWork?.series || '';
   let releaseDate = oldWork?.releaseDate || '';
-  if (!title || !cv || cv === 'N/A' || !circle || tags.length < 3) {
+  if (!title || title.startsWith('Work ') || !cv || cv === 'N/A' || !circle || circle === 'ASMR Circle' || tags.length < 3) {
     try {
-      const moeMeta = await fetchHentaiAsmrMetadata(cleanRj);
+      const moeMeta = await fetchHentaiAsmrMetadata(cleanRj, { skipAudioProbe: true });
       if (moeMeta) {
-        if (!title && moeMeta.title) title = moeMeta.title;
-        if ((!circle || circle === 'ASMR Circle') && moeMeta.circle) circle = moeMeta.circle;
-        if ((!cv || cv === 'N/A') && moeMeta.cv) cv = moeMeta.cv;
+        if ((!title || title.startsWith('Work ')) && moeMeta.title && !moeMeta.title.startsWith('Work ')) title = moeMeta.title;
+        if ((!circle || circle === 'ASMR Circle') && moeMeta.circle && moeMeta.circle !== 'ASMR Circle') circle = moeMeta.circle;
+        if ((!cv || cv === 'N/A') && moeMeta.cv && moeMeta.cv !== 'N/A') cv = moeMeta.cv;
         if (moeMeta.series) {
           series = moeMeta.series;
           if (!tags.includes(moeMeta.series)) tags.push(moeMeta.series);
@@ -2176,7 +3069,7 @@ function parseAsmrTreeData(treeData, hasHls = true, targetDuration = 0, hostUrl 
           duration: dur,
           rawTitle: title,
           folder: currentFolder,
-          url: rawUrl
+          url: fullUrl || (item.hash ? `${defaultHost}/api/media/stream/${item.hash}` : (rawUrl || ''))
         };
         if (currentFolder) {
           if (!folderAudioMap[currentFolder]) folderAudioMap[currentFolder] = [];
@@ -2528,14 +3421,15 @@ async function fetchChobitSampleTracks(cleanRj) {
 
 async function probeDlsiteAndWeeabGallery(cleanRj) {
   const cleanUpper = (cleanRj || '').toUpperCase().trim();
+  const canonicalRj = getCanonicalDlsiteRj(cleanUpper);
   const cleanNum = cleanUpper.replace(/^(?:RJ|VJ|BJ)/i, '');
   const strippedNum = cleanNum.replace(/^0+/, '');
-  const bucket = getDlsiteCoverBucket(cleanUpper);
+  const bucket = getDlsiteCoverBucket(canonicalRj);
   const candidates = [];
 
   // 1. DLsite Doujin: High-res main illustration
   const dlsiteDoujin = { key: 'doujin', label: 'DLsite Doujin' };
-  const dlsiteMainUrl = `https://img.dlsite.jp/modpub/images2/work/${dlsiteDoujin.key}/${bucket}/${cleanUpper}_img_main.jpg`;
+  const dlsiteMainUrl = `https://img.dlsite.jp/modpub/images2/work/${dlsiteDoujin.key}/${bucket}/${canonicalRj}_img_main.jpg`;
   candidates.push({
     title: 'Main Package Artwork',
     role: 'main_cover',
@@ -2544,56 +3438,18 @@ async function probeDlsiteAndWeeabGallery(cleanRj) {
     proxyUrl: `/image-proxy?url=${encodeURIComponent(dlsiteMainUrl)}`
   });
 
-  // DLsite Doujin sample pages 1-8
+  // DLsite Doujin sample pages 1-8 (standard primary format: _img_smpX.jpg)
   for (let i = 1; i <= 8; i++) {
     candidates.push({
       title: `Sample Illustration #${i}`,
       role: `sample_${i}`,
       source: dlsiteDoujin.label,
-      url: `https://img.dlsite.jp/modpub/images2/work/${dlsiteDoujin.key}/${bucket}/${cleanUpper}_img_smp${i}.jpg`,
-      proxyUrl: `/image-proxy?url=${encodeURIComponent(`https://img.dlsite.jp/modpub/images2/work/${dlsiteDoujin.key}/${bucket}/${cleanUpper}_img_smp${i}.jpg`)}`
-    });
-    candidates.push({
-      title: `Sample Illustration #${i}`,
-      role: `sample_${i}`,
-      source: dlsiteDoujin.label,
-      url: `https://img.dlsite.jp/modpub/images2/work/${dlsiteDoujin.key}/${bucket}/${cleanUpper}_smp${i}.jpg`,
-      proxyUrl: `/image-proxy?url=${encodeURIComponent(`https://img.dlsite.jp/modpub/images2/work/${dlsiteDoujin.key}/${bucket}/${cleanUpper}_smp${i}.jpg`)}`
-    });
-  }
-
-  // 2. Fallback ASMR.one Official Cover
-  if (strippedNum) {
-    const asmrCoverUrl = `https://api.asmr-200.com/api/cover/${strippedNum}.jpg?type=main`;
-    candidates.push({
-      title: 'Official Cover / CD Jacket',
-      role: 'asmr_fallback_cover',
-      source: 'ASMR.one',
-      url: asmrCoverUrl,
-      proxyUrl: `/image-proxy?url=${encodeURIComponent(asmrCoverUrl)}`
-    });
-  }
-
-  // 3. Weeab0o / JapaneseASMR sample images 1-4
-  for (let i = 1; i <= 4; i++) {
-    candidates.push({
-      title: `Sample Artwork #${i}`,
-      role: `weeab_sample_${i}`,
-      source: 'Weeab0o',
-      url: `https://pic.weeabo0.xyz/${cleanUpper}_img_smp${i}.jpg`,
-      proxyUrl: `/image-proxy?url=${encodeURIComponent(`https://pic.weeabo0.xyz/${cleanUpper}_img_smp${i}.jpg`)}`
-    });
-    candidates.push({
-      title: `Sample Artwork #${i}`,
-      role: `weeab_sample_${i}`,
-      source: 'Weeab0o',
-      url: `https://pic.weeabo0.xyz/${cleanUpper}_smp${i}.jpg`,
-      proxyUrl: `/image-proxy?url=${encodeURIComponent(`https://pic.weeabo0.xyz/${cleanUpper}_smp${i}.jpg`)}`
+      url: `https://img.dlsite.jp/modpub/images2/work/${dlsiteDoujin.key}/${bucket}/${canonicalRj}_img_smp${i}.jpg`,
+      proxyUrl: `/image-proxy?url=${encodeURIComponent(`https://img.dlsite.jp/modpub/images2/work/${dlsiteDoujin.key}/${bucket}/${canonicalRj}_img_smp${i}.jpg`)}`
     });
   }
 
   try {
-    // Process candidate probes in chunks of 4 with explicit stream cancellation to prevent Worker deadlock
     let validList = [];
     const chunkSize = 4;
 
@@ -2602,28 +3458,20 @@ async function probeDlsiteAndWeeabGallery(cleanRj) {
       const results = await Promise.all(
         chunk.map(async (item) => {
           try {
-            let referer = 'https://www.dlsite.com/';
-            const isAsmr = item.url.includes('asmr.one') || item.url.includes('asmr-200.com') || item.url.includes('asmr-300.com') || item.url.includes('asmr-100.com');
-            if (item.url.includes('weeabo0') || item.url.includes('japaneseasmr')) {
-              referer = 'https://japaneseasmr.com/';
-            } else if (isAsmr) {
-              referer = 'https://www.asmr.one/';
-            }
             const fetchHeaders = {
-              'Referer': referer,
+              'Referer': 'https://www.dlsite.com/',
               'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+              'Range': 'bytes=0-0',
               'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
             };
-            if (isAsmr) {
-              fetchHeaders['Range'] = 'bytes=0-0';
-            }
             const res = await safeWorkerFetch(item.url, {
-              method: isAsmr ? 'GET' : 'HEAD',
+              method: 'GET',
               headers: fetchHeaders,
               cf: { cacheEverything: true, cacheTtl: 86400 }
             }, 3500);
-            if (res.ok || res.status === 200 || res.status === 206) {
-              const cl = res.headers.get('content-length') || '';
+            if (res.ok || res.status === 200 || res.status === 206 || res.status === 304) {
+              const cr = res.headers.get('content-range');
+              const cl = cr ? (cr.match(/\/(\d+)/) || [])[1] : (res.headers.get('content-length') || '');
               const et = res.headers.get('etag') || '';
               if (res.body) {
                 try { await res.body.cancel(); } catch (e) {}
@@ -2640,8 +3488,9 @@ async function probeDlsiteAndWeeabGallery(cleanRj) {
       results.filter(Boolean).forEach(r => validList.push(r));
     }
 
-    // Fallback: If 0 DLsite doujin images were found, try other categories (pro, books, girls, bl, ai) with small footprint
     const hasDlsite = validList.some(v => v.source && v.source.includes('DLsite'));
+
+    // If 0 DLsite doujin images were found, try other DLsite categories (pro, books, girls, bl, ai)
     if (!hasDlsite) {
       const altCats = [
         { key: 'pro', label: 'DLsite Pro' },
@@ -2656,22 +3505,38 @@ async function probeDlsiteAndWeeabGallery(cleanRj) {
           title: 'Main Package Artwork',
           role: 'main_cover',
           source: cat.label,
-          url: `https://img.dlsite.jp/modpub/images2/work/${cat.key}/${bucket}/${cleanUpper}_img_main.jpg`,
-          proxyUrl: `/image-proxy?url=${encodeURIComponent(`https://img.dlsite.jp/modpub/images2/work/${cat.key}/${bucket}/${cleanUpper}_img_main.jpg`)}`
+          url: `https://img.dlsite.jp/modpub/images2/work/${cat.key}/${bucket}/${canonicalRj}_img_main.jpg`,
+          proxyUrl: `/image-proxy?url=${encodeURIComponent(`https://img.dlsite.jp/modpub/images2/work/${cat.key}/${bucket}/${canonicalRj}_img_main.jpg`)}`
         });
+        for (let i = 1; i <= 4; i++) {
+          altCandidates.push({
+            title: `Sample Illustration #${i}`,
+            role: `sample_${i}`,
+            source: cat.label,
+            url: `https://img.dlsite.jp/modpub/images2/work/${cat.key}/${bucket}/${canonicalRj}_img_smp${i}.jpg`,
+            proxyUrl: `/image-proxy?url=${encodeURIComponent(`https://img.dlsite.jp/modpub/images2/work/${cat.key}/${bucket}/${canonicalRj}_img_smp${i}.jpg`)}`
+          });
+        }
       }
+
       for (let i = 0; i < altCandidates.length; i += chunkSize) {
         const altChunk = altCandidates.slice(i, i + chunkSize);
-        const altChecked = await Promise.all(
+        const altResults = await Promise.all(
           altChunk.map(async (item) => {
             try {
               const res = await safeWorkerFetch(item.url, {
-                method: 'HEAD',
-                headers: { 'Referer': 'https://www.dlsite.com/', 'User-Agent': 'Mozilla/5.0' },
+                method: 'GET',
+                headers: {
+                  'Referer': 'https://www.dlsite.com/',
+                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                  'Range': 'bytes=0-0',
+                  'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
+                },
                 cf: { cacheEverything: true, cacheTtl: 86400 }
-              }, 3000);
-              if (res.ok || res.status === 200 || res.status === 206) {
-                const cl = res.headers.get('content-length') || '';
+              }, 3500);
+              if (res.ok || res.status === 200 || res.status === 206 || res.status === 304) {
+                const cr = res.headers.get('content-range');
+                const cl = cr ? (cr.match(/\/(\d+)/) || [])[1] : (res.headers.get('content-length') || '');
                 const et = res.headers.get('etag') || '';
                 if (res.body) {
                   try { await res.body.cancel(); } catch (e) {}
@@ -2685,29 +3550,64 @@ async function probeDlsiteAndWeeabGallery(cleanRj) {
             return null;
           })
         );
-        altChecked.filter(Boolean).forEach(r => validList.push(r));
+        altResults.filter(Boolean).forEach(r => validList.push(r));
       }
     }
 
-    // --- Deduplication Logic ---
-    // 1. If we have a primary DLsite Main Cover, discard the ASMR.one fallback mirror cover
-    const hasPrimaryMain = validList.some(v => v.role === 'main_cover');
-    if (hasPrimaryMain) {
-      validList = validList.filter(v => v.role !== 'asmr_fallback_cover');
+    // Only probe Weeab0o mirrors if no DLsite samples were found
+    const hasDlsiteSamples = validList.some(v => v.role && v.role.startsWith('sample_'));
+    if (!hasDlsiteSamples) {
+      const weeabCandidates = [];
+      for (let i = 1; i <= 4; i++) {
+        weeabCandidates.push({
+          title: `Sample Artwork #${i}`,
+          role: `sample_${i}`,
+          source: 'Weeab0o',
+          url: `https://pic.weeabo0.xyz/${canonicalRj}_img_smp${i}.jpg`,
+          proxyUrl: `/image-proxy?url=${encodeURIComponent(`https://pic.weeabo0.xyz/${canonicalRj}_img_smp${i}.jpg`)}`
+        });
+      }
+      for (let i = 0; i < weeabCandidates.length; i += chunkSize) {
+        const chunk = weeabCandidates.slice(i, i + chunkSize);
+        const weeabChecked = await Promise.all(
+          chunk.map(async (item) => {
+            try {
+              const res = await safeWorkerFetch(item.url, {
+                method: 'GET',
+                headers: { 'Referer': 'https://japaneseasmr.com/', 'User-Agent': 'Mozilla/5.0', 'Range': 'bytes=0-0', 'Accept': 'image/*,*/*' },
+                cf: { cacheEverything: true, cacheTtl: 86400 }
+              }, 3000);
+              if (res.ok || res.status === 200 || res.status === 206 || res.status === 304) {
+                const cr = res.headers.get('content-range');
+                const cl = cr ? (cr.match(/\/(\d+)/) || [])[1] : (res.headers.get('content-length') || '');
+                const et = res.headers.get('etag') || '';
+                if (res.body) {
+                  try { await res.body.cancel(); } catch (e) {}
+                }
+                return { ...item, contentLength: cl ? parseInt(cl, 10) : null, etag: et };
+              }
+              if (res.body) {
+                try { await res.body.cancel(); } catch (e) {}
+              }
+            } catch (e) {}
+            return null;
+          })
+        );
+        weeabChecked.filter(Boolean).forEach(r => validList.push(r));
+      }
     }
 
-    // 2. Deduplicate by unique sample roles (e.g. keep one of img_smpX vs smpX)
+    // Deduplicate by unique sample roles (e.g. keep one of each role)
     const seenRoles = new Set();
     const roleFiltered = [];
     for (const item of validList) {
-      if (item.role && item.role.startsWith('sample_')) {
+      if (item.role) {
         if (seenRoles.has(item.role)) continue;
         seenRoles.add(item.role);
       }
       roleFiltered.push(item);
     }
 
-    // 3. Deduplicate images whose byte sizes differ by <= 0.01%
     return dedupeGalleryByImageSize(roleFiltered);
   } catch (e) {
     return [];
@@ -2718,16 +3618,21 @@ function dedupeGalleryByImageSize(galleryList) {
   if (!Array.isArray(galleryList) || galleryList.length === 0) return [];
   const result = [];
   const seenUrls = new Set();
+  const seenTitles = new Set();
   const keptSizes = [];
 
   for (const item of galleryList) {
     if (!item || !item.url) continue;
     if (seenUrls.has(item.url)) continue;
 
+    const normTitle = (item.title || '').trim().toLowerCase();
+    if (normTitle && seenTitles.has(normTitle) && (item.role === 'main_cover' || item.source === 'DLsite Doujin')) {
+      continue;
+    }
+
     const size = (typeof item.contentLength === 'number' && item.contentLength > 0) ? item.contentLength : null;
 
     if (size !== null) {
-      // If two images differ by <= 0.01% (0.0001 relative tolerance), treat as duplicate
       const isDuplicate = keptSizes.some(k => {
         const diff = Math.abs(k.size - size);
         const max = Math.max(k.size, size);
@@ -2742,6 +3647,7 @@ function dedupeGalleryByImageSize(galleryList) {
     }
 
     seenUrls.add(item.url);
+    if (normTitle) seenTitles.add(normTitle);
     result.push(item);
   }
 
@@ -2829,9 +3735,6 @@ async function fetchChaptersAndGallery(cleanRj, hasHls = true, targetDuration = 
             }
             const res = parseAsmrTreeData(treeList, hasHls, targetDuration, host);
             parsed = res;
-            if (res.gallery && res.gallery.length > 0) {
-              extractedArtworks.push(...res.gallery);
-            }
             break;
           }
         }
@@ -3004,94 +3907,133 @@ export default {
 
     // 2. Stream & HLS Proxy
     if (pathname === '/stream') {
-      let targetUrl = url.searchParams.get('url');
-      if (!targetUrl) return new Response('Missing url', { status: 400 });
-      if (targetUrl.startsWith('//')) targetUrl = 'https:' + targetUrl;
+      let rawTarget = url.searchParams.get('url');
+      if (!rawTarget) return new Response('Missing url', { status: 400 });
+      if (rawTarget.startsWith('//')) rawTarget = 'https:' + rawTarget;
 
-      const isM3u8 = targetUrl.toLowerCase().includes('.m3u8');
-      const lowerTarget = targetUrl.toLowerCase();
+      const rjParam = url.searchParams.get('rj') || '';
+      const candidates = getStreamCandidates(rawTarget, rjParam);
       const queryReferer = url.searchParams.get('referer');
-
-      let referer = queryReferer || '';
-      if (!referer) {
-        if (lowerTarget.includes('hentaiasmr.moe') || lowerTarget.includes('asmr-tracks') || lowerTarget.includes('asmr.moe')) {
-          referer = 'https://hentaiasmr.moe/';
-        } else if (lowerTarget.includes('chobit.cc') || lowerTarget.includes('file.chobit.cc')) {
-          referer = 'https://chobit.cc/';
-        } else if (lowerTarget.includes('asmr.one') || lowerTarget.includes('kikoeru') || lowerTarget.includes('kiko-play') || lowerTarget.includes('niptan.one') || lowerTarget.includes('asmr-200.com') || lowerTarget.includes('asmr-100.com') || lowerTarget.includes('asmr-300.com')) {
-          referer = 'https://www.asmr.one/';
-        } else if (lowerTarget.includes('dlsite.com') || lowerTarget.includes('dlsite.jp')) {
-          referer = 'https://www.dlsite.com/';
-        } else if (lowerTarget.includes('weeab0o.xyz') || lowerTarget.includes('japaneseasmr') || lowerTarget.includes('weeab')) {
-          referer = 'https://japaneseasmr.com/';
-        } else {
-          referer = 'https://www.asmr.one/';
-        }
-      }
-
       const rangeHeader = request.headers.get('range');
 
-      const fetchHeaders = {
-        'Referer': referer,
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-      };
+      let lastError = null;
 
-      if (rangeHeader && !isM3u8) {
-        fetchHeaders['Range'] = rangeHeader;
+      for (const candUrl of candidates) {
+        try {
+          const isM3u8 = candUrl.toLowerCase().includes('.m3u8');
+          const lowerTarget = candUrl.toLowerCase();
+
+          // Determine RJ code from param or URL for smart referer construction
+          const rjMatch = candUrl.match(/(?:RJ|VJ|BJ)\d+/i) || (rjParam ? [rjParam] : null);
+          const currentRj = rjMatch ? rjMatch[0].toLowerCase() : '';
+
+          // Build list of referers to try for this candidate
+          const referersToTry = [];
+          if (queryReferer) referersToTry.push(queryReferer);
+
+          if (lowerTarget.includes('hentaiasmr.moe') || lowerTarget.includes('asmr-tracks') || lowerTarget.includes('asmr.moe')) {
+            const strippedRj = currentRj.replace(/^(?:rj|vj|bj)0+/i, 'rj');
+            if (currentRj) referersToTry.push(`https://hentaiasmr.moe/${currentRj}.html`);
+            if (strippedRj && strippedRj !== currentRj) referersToTry.push(`https://hentaiasmr.moe/${strippedRj}.html`);
+            referersToTry.push('https://hentaiasmr.moe/');
+          } else if (lowerTarget.includes('chobit.cc') || lowerTarget.includes('file.chobit.cc')) {
+            referersToTry.push('https://chobit.cc/');
+          } else if (lowerTarget.includes('asmr.one') || lowerTarget.includes('kikoeru') || lowerTarget.includes('kiko-play') || lowerTarget.includes('niptan.one') || lowerTarget.includes('asmr-200.com') || lowerTarget.includes('asmr-100.com') || lowerTarget.includes('asmr-300.com')) {
+            referersToTry.push('https://www.asmr.one/');
+          } else if (lowerTarget.includes('dlsite.com') || lowerTarget.includes('dlsite.jp')) {
+            referersToTry.push('https://www.dlsite.com/');
+          } else if (lowerTarget.includes('weeab0o.xyz') || lowerTarget.includes('japaneseasmr') || lowerTarget.includes('weeab') || lowerTarget.includes('jasmr.net')) {
+            referersToTry.push('https://japaneseasmr.com/');
+          } else {
+            referersToTry.push('https://www.asmr.one/');
+          }
+
+          let origin = '';
+          if (lowerTarget.includes('hentaiasmr.moe')) origin = 'https://hentaiasmr.moe';
+          else if (lowerTarget.includes('chobit.cc')) origin = 'https://chobit.cc';
+          else if (lowerTarget.includes('asmr.one') || lowerTarget.includes('kiko-play') || lowerTarget.includes('niptan.one')) origin = 'https://www.asmr.one';
+          else if (lowerTarget.includes('weeab0o.xyz') || lowerTarget.includes('japaneseasmr')) origin = 'https://japaneseasmr.com';
+
+          // Try referers for this candidate URL
+          let streamRes = null;
+          const isTs = candUrl.toLowerCase().endsWith('.ts');
+          const cfConfig = (isTs || isM3u8) ? { cacheEverything: true, cacheTtl: 86400 } : undefined;
+
+          for (const ref of referersToTry) {
+            const fetchHeaders = {
+              'Referer': ref,
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+              'Accept': '*/*'
+            };
+            if (origin) fetchHeaders['Origin'] = origin;
+            if (rangeHeader && !isM3u8) {
+              fetchHeaders['Range'] = rangeHeader;
+            }
+
+            try {
+              const res = await fetch(candUrl, { headers: fetchHeaders, cf: cfConfig });
+              if (res.ok || res.status === 206 || res.status === 304) {
+                streamRes = res;
+                break;
+              }
+            } catch (fe) {}
+          }
+
+          if (!streamRes) {
+            lastError = new Error('Upstream failed for ' + candUrl);
+            continue;
+          }
+
+          if (isM3u8) {
+            const originalM3u8 = await streamRes.text();
+            const baseUrl = new URL('.', candUrl).href;
+
+            const rewritten = originalM3u8.split(/\r?\n/).map(line => {
+              const trimmed = line.trim();
+              if (!trimmed) return line;
+              if (trimmed.startsWith('#EXT-X-KEY:')) {
+                return trimmed.replace(/URI="([^"]+)"/, (m, key) => {
+                  const absKey = new URL(key, baseUrl).href;
+                  return 'URI="/stream?url=' + encodeURIComponent(absKey) + (currentRj ? '&rj=' + encodeURIComponent(currentRj) : '') + '"';
+                });
+              }
+              if (trimmed.startsWith('#')) return line;
+              const absSeg = new URL(trimmed, baseUrl).href;
+              return '/stream?url=' + encodeURIComponent(absSeg) + (currentRj ? '&rj=' + encodeURIComponent(currentRj) : '');
+            }).join('\n');
+
+            return new Response(rewritten, {
+              status: 200,
+              headers: {
+                'Content-Type': 'application/vnd.apple.mpegurl; charset=utf-8',
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Headers': 'Range, Content-Type',
+                'Access-Control-Expose-Headers': 'Content-Range, Content-Length, Accept-Ranges',
+                'Accept-Ranges': 'bytes',
+                'Cache-Control': 'no-cache'
+              }
+            });
+          }
+
+          const respHeaders = new Headers(streamRes.headers);
+          respHeaders.set('Access-Control-Allow-Origin', '*');
+          respHeaders.set('Access-Control-Allow-Headers', 'Range, Content-Type');
+          respHeaders.set('Access-Control-Expose-Headers', 'Content-Range, Content-Length, Accept-Ranges');
+          respHeaders.set('Accept-Ranges', 'bytes');
+          if (isTs) {
+            respHeaders.set('Content-Type', 'video/mp2t');
+            respHeaders.set('Cache-Control', 'public, max-age=86400');
+          } else {
+            respHeaders.set('Cache-Control', 'public, max-age=3600');
+          }
+
+          return new Response(streamRes.body, { status: streamRes.status, headers: respHeaders });
+        } catch (err) {
+          lastError = err;
+        }
       }
 
-      try {
-        const isTs = targetUrl.toLowerCase().endsWith('.ts');
-        const cfConfig = (isTs || isM3u8) ? { cacheEverything: true, cacheTtl: 86400 } : undefined;
-        const streamRes = await fetch(targetUrl, { headers: fetchHeaders, cf: cfConfig });
-
-        if (isM3u8) {
-          const originalM3u8 = await streamRes.text();
-          const baseUrl = new URL('.', targetUrl).href;
-
-          const rewritten = originalM3u8.split(/\r?\n/).map(line => {
-            const trimmed = line.trim();
-            if (!trimmed) return line;
-            if (trimmed.startsWith('#EXT-X-KEY:')) {
-              return trimmed.replace(/URI="([^"]+)"/, (m, key) => {
-                const absKey = new URL(key, baseUrl).href;
-                return `URI="/stream?url=${encodeURIComponent(absKey)}"`;
-              });
-            }
-            if (trimmed.startsWith('#')) return line;
-            const absSeg = new URL(trimmed, baseUrl).href;
-            return `/stream?url=${encodeURIComponent(absSeg)}`;
-          }).join('\n');
-
-          return new Response(rewritten, {
-            status: 200,
-            headers: {
-              'Content-Type': 'application/vnd.apple.mpegurl; charset=utf-8',
-              'Access-Control-Allow-Origin': '*',
-              'Access-Control-Allow-Headers': 'Range, Content-Type',
-              'Access-Control-Expose-Headers': 'Content-Range, Content-Length, Accept-Ranges',
-              'Accept-Ranges': 'bytes',
-              'Cache-Control': 'no-cache'
-            }
-          });
-        }
-
-        const respHeaders = new Headers(streamRes.headers);
-        respHeaders.set('Access-Control-Allow-Origin', '*');
-        respHeaders.set('Access-Control-Allow-Headers', 'Range, Content-Type');
-        respHeaders.set('Access-Control-Expose-Headers', 'Content-Range, Content-Length, Accept-Ranges');
-        respHeaders.set('Accept-Ranges', 'bytes');
-        if (isTs) {
-          respHeaders.set('Content-Type', 'video/mp2t');
-          respHeaders.set('Cache-Control', 'public, max-age=86400');
-        } else {
-          respHeaders.set('Cache-Control', 'public, max-age=3600');
-        }
-
-        return new Response(streamRes.body, { status: streamRes.status, headers: respHeaders });
-      } catch (err) {
-        return new Response(`Stream error: ${err.message}`, { status: 500 });
-      }
+      return new Response('Stream error: ' + (lastError ? lastError.message : 'All stream candidates failed'), { status: 500 });
     }
 
     // 3. Auth APIs
@@ -3432,40 +4374,135 @@ export default {
       return json({ success: true, count: 0, savedToKv: false });
     }
 
-    // Refresh Single Work
+    // Refresh Single Work (Fast Metadata Refresh or Full Audio Reprobe)
     if (pathname.startsWith('/api/library/refresh/') && request.method === 'POST') {
       if (!isAuth()) return json({ error: 'Unauthorized' }, 401);
       const rjCode = pathname.replace('/api/library/refresh/', '').toUpperCase();
+      const reqBody = await request.json().catch(() => ({}));
+      const clientMoe = reqBody && reqBody.clientMoe ? reqBody.clientMoe : null;
       const dbCheck = await getDb(env);
-      const old = dbCheck.works ? dbCheck.works[rjCode] : null;
-      if (!old) return json({ error: 'Work not found in library' }, 404);
+      const oldKey = dbCheck.works ? (dbCheck.works[rjCode] ? rjCode : Object.keys(dbCheck.works).find(k => (k || '').replace(/^RJ0+/, 'RJ') === rjCode.replace(/^RJ0+/, 'RJ'))) : null;
+      const old = oldKey ? dbCheck.works[oldKey] : null;
+      const reprobeAudio = url.searchParams.get('reprobeAudio') === 'true' || url.searchParams.get('force') === 'true';
+
+      if (!old) {
+        try {
+          let fresh = null;
+          try {
+            fresh = await resolveRjWork(rjCode);
+          } catch (rErr) {
+            if (clientMoe && clientMoe.url) {
+              fresh = await resolveRjMetadataOnly(rjCode).catch(() => ({ rjCode, title: `Work ${rjCode}` }));
+            } else {
+              throw rErr;
+            }
+          }
+          if (clientMoe && clientMoe.url && (!fresh.tracks || fresh.tracks.length === 0)) {
+            fresh.tracks = [{
+              id: 1,
+              title: (fresh.title || clientMoe.title || rjCode) + ' (Full)',
+              duration: fresh.totalDuration || clientMoe.duration || 0,
+              formattedTime: (fresh.totalDuration || clientMoe.duration) ? formatServerTime(fresh.totalDuration || clientMoe.duration) : '00:00:00',
+              rawUrl: clientMoe.url,
+              streamUrl: `/stream?url=${encodeURIComponent(clientMoe.url)}&referer=${encodeURIComponent(clientMoe.link || 'https://hentaiasmr.moe/')}&rj=${encodeURIComponent(rjCode)}`,
+              category: 'main',
+              size: 0,
+              isHls: false,
+              poster: fresh.coverUrl || ''
+            }];
+            fresh.totalTracks = 1;
+            fresh.selectedSource = 'HentaiASMR Moe (Client-Assisted Stream)';
+          }
+          if (fresh) {
+            const freshDb = await getDb(env);
+            freshDb.works = freshDb.works || {};
+            freshDb.wishlist = (freshDb.wishlist || []).filter(w => (w.rjCode || '').replace(/^RJ0+/, 'RJ') !== rjCode.replace(/^RJ0+/, 'RJ'));
+            freshDb.works[rjCode] = fresh;
+            await saveDb(env, freshDb);
+            const clientWork = {
+              ...fresh,
+              gallery: fresh.gallery ? decompressGalleryFromStorage(fresh.gallery, rjCode) : []
+            };
+            return json({ success: true, work: clientWork, changed: true, savedToKv: true });
+          }
+        } catch (re) {
+          return json({ error: 'Work not found: ' + re.message }, 404);
+        }
+        return json({ error: 'Work not found in library' }, 404);
+      }
+
       try {
-        const fresh = await resolveRjWork(rjCode, false);
-        const changed = isWorkMetadataChanged(old, fresh);
+        let fresh = null;
+        if (reprobeAudio) {
+          try {
+            fresh = await resolveRjWork(rjCode);
+          } catch (rErr) {
+            if (clientMoe && clientMoe.url) {
+              fresh = await resolveRjMetadataOnly(rjCode, old).catch(() => ({ rjCode, title: old?.title || `Work ${rjCode}` }));
+            } else {
+              throw rErr;
+            }
+          }
+        } else {
+          fresh = await resolveRjMetadataOnly(rjCode, old);
+        }
+
+        if (clientMoe && clientMoe.url && (!fresh.tracks || fresh.tracks.length === 0)) {
+          fresh.tracks = [{
+            id: 1,
+            title: (fresh.title || clientMoe.title || rjCode) + ' (Full)',
+            duration: fresh.totalDuration || clientMoe.duration || 0,
+            formattedTime: (fresh.totalDuration || clientMoe.duration) ? formatServerTime(fresh.totalDuration || clientMoe.duration) : '00:00:00',
+            rawUrl: clientMoe.url,
+            streamUrl: `/stream?url=${encodeURIComponent(clientMoe.url)}&referer=${encodeURIComponent(clientMoe.link || 'https://hentaiasmr.moe/')}&rj=${encodeURIComponent(rjCode)}`,
+            category: 'main',
+            size: 0,
+            isHls: false,
+            poster: fresh.coverUrl || old?.coverUrl || ''
+          }];
+          fresh.totalTracks = 1;
+          fresh.selectedSource = 'HentaiASMR Moe (Client-Assisted Stream)';
+        }
+
+        const changed = reprobeAudio || isWorkMetadataChanged(old, fresh);
         const updatedWork = {
+          ...old,
           ...fresh,
-          chapters: (Array.isArray(old.chapters) && old.chapters.length > 1) ? old.chapters : fresh.chapters,
+          tracks: reprobeAudio ? ((fresh.tracks && fresh.tracks.length > 0) ? fresh.tracks : (old.tracks || [])) : ((old.tracks && old.tracks.length > 0) ? old.tracks : (fresh.tracks || [])),
+          hasHls: reprobeAudio ? Boolean(fresh.hasHls) : Boolean(old.hasHls),
+          totalTracks: reprobeAudio ? ((fresh.tracks && fresh.tracks.length > 0) ? fresh.tracks.length : (old.totalTracks || 0)) : ((old.tracks && old.tracks.length > 0) ? old.tracks.length : (old.totalTracks || 0)),
+          hasLazyAudio: reprobeAudio ? Boolean(fresh.hasLazyAudio) : Boolean(old.hasLazyAudio),
+          chapters: (Array.isArray(old.chapters) && old.chapters.length > 0) ? old.chapters : ((fresh.chapters && fresh.chapters.length > 0) ? fresh.chapters : []),
+          gallery: (old.gallery && (Array.isArray(old.gallery) || old.gallery._tpl)) ? old.gallery : fresh.gallery,
+          sampleTracks: reprobeAudio ? (fresh.sampleTracks || []) : ((Array.isArray(old.sampleTracks) && old.sampleTracks.length > 0) ? old.sampleTracks : (fresh.sampleTracks || [])),
+          _v: getCodebaseVersion(env),
+          _sampleChecked: true,
+          _fetchedAt: Date.now(),
           favorite: old.favorite || false,
-          addedAt: old.addedAt || fresh.addedAt
+          addedAt: old.addedAt || new Date().toISOString()
         };
-        // Preserve existing authentic cover if fresh didn't find one or returned fallback
+        // Preserve existing authentic cover if fresh returned placeholder
         if (old && old.coverUrl && (!updatedWork.coverUrl || !updatedWork.coverUrl.includes('img.dlsite.jp') || updatedWork.coverUrl.includes('placeholder') || updatedWork.coverUrl.includes('no-image'))) {
           updatedWork.coverUrl = old.coverUrl;
         }
-        if (changed) {
-          const freshDb = await getDb(env);
-          if (freshDb.works) {
-            freshDb.works[rjCode] = updatedWork;
-            await saveDb(env, freshDb);
-          }
+        const freshDb = await getDb(env);
+        if (freshDb.works) {
+          const targetKey = oldKey || rjCode;
+          freshDb.works[targetKey] = updatedWork;
+          freshDb.wishlist = (freshDb.wishlist || []).filter(w => (w.rjCode || '').replace(/^RJ0+/, 'RJ') !== rjCode.replace(/^RJ0+/, 'RJ'));
+          await saveDb(env, freshDb);
         }
-        return json({ success: true, work: updatedWork, changed, savedToKv: changed });
+        const clientWork = {
+          ...updatedWork,
+          gallery: updatedWork.gallery ? decompressGalleryFromStorage(updatedWork.gallery, rjCode) : []
+        };
+        return json({ success: true, work: clientWork, changed: true, savedToKv: true });
       } catch (e) {
         return json({ error: 'Failed to refresh metadata: ' + e.message }, 500);
       }
     }
 
-    // Refresh Metadata for All Works
+    // Refresh Metadata for All Works (Fast Metadata Refresh)
     if (pathname === '/api/library/refresh-all' && request.method === 'POST') {
       if (!isAuth()) return json({ error: 'Unauthorized' }, 401);
       const db = await getDb(env);
@@ -3475,14 +4512,23 @@ export default {
 
       for (const rj of rjList) {
         try {
-          const fresh = await resolveRjWork(rj, false);
           const old = db.works[rj];
+          const fresh = await resolveRjMetadataOnly(rj, old);
           if (isWorkMetadataChanged(old, fresh)) {
             const upWork = {
+              ...old,
               ...fresh,
-              chapters: (Array.isArray(old.chapters) && old.chapters.length > 1) ? old.chapters : fresh.chapters,
+              tracks: (old.tracks && old.tracks.length > 0) ? old.tracks : [],
+              hasHls: Boolean(old.hasHls),
+              totalTracks: (old.tracks && old.tracks.length > 0) ? old.tracks.length : (old.totalTracks || 0),
+              chapters: (Array.isArray(old.chapters) && old.chapters.length > 0) ? old.chapters : [],
+              gallery: (old.gallery && (Array.isArray(old.gallery) || old.gallery._tpl)) ? old.gallery : undefined,
+              sampleTracks: (Array.isArray(old.sampleTracks) && old.sampleTracks.length > 0) ? old.sampleTracks : [],
+              _v: old._v || getCodebaseVersion(env),
+              _sampleChecked: old._sampleChecked || false,
+              _fetchedAt: Date.now(),
               favorite: old.favorite || false,
-              addedAt: old.addedAt || fresh.addedAt
+              addedAt: old.addedAt || new Date().toISOString()
             };
             if (old && old.coverUrl && (!upWork.coverUrl || !upWork.coverUrl.includes('img.dlsite.jp') || upWork.coverUrl.includes('placeholder') || upWork.coverUrl.includes('no-image'))) {
               upWork.coverUrl = old.coverUrl;
@@ -3514,8 +4560,10 @@ export default {
       const work = db.works ? (db.works[rjCode] || Object.values(db.works).find(w => (w.rjCode || '').replace(/^RJ0+/, 'RJ') === rjCode.replace(/^RJ0+/, 'RJ'))) : null;
       const currentCodebaseVer = getCodebaseVersion(env);
 
-      // Instant return if already cached with rich gallery / chapters and matching codebase version
-      if (!forceRefresh && work && work._v === currentCodebaseVer && work.gallery && (Array.isArray(work.gallery) || work.gallery._tpl) && (work.chapters || work.tracks)) {
+      const hasValidGallery = (Array.isArray(work?.gallery) && work.gallery.length > 0) || (work?.gallery && work.gallery._tpl && (work.gallery.count > 0 || work.gallery.hasMain));
+      const hasSampleCheck = (work && Array.isArray(work.sampleTracks) && work.sampleTracks.length > 0) || (work && work._sampleChecked === true);
+      // Instant return if already cached with rich gallery / chapters and sample tracks check matching codebase version
+      if (!forceRefresh && work && work._v === currentCodebaseVer && hasValidGallery && (work.chapters || work.tracks) && hasSampleCheck) {
         const decompressedGallery = decompressGalleryFromStorage(work.gallery, rjCode);
         return json({
           success: true,
@@ -3571,7 +4619,12 @@ export default {
         work._v = currentCodebaseVer;
         work._fetchedAt = Date.now();
         if (Array.isArray(result.chapters) && result.chapters.length > 0) work.chapters = result.chapters;
-        if (Array.isArray(result.sampleTracks) && result.sampleTracks.length > 0) work.sampleTracks = result.sampleTracks;
+        if (Array.isArray(result.sampleTracks) && result.sampleTracks.length > 0) {
+          work.sampleTracks = result.sampleTracks;
+        } else {
+          work.sampleTracks = [];
+        }
+        work._sampleChecked = true;
         if (Array.isArray(result.gallery) && result.gallery.length > 0) {
           work.gallery = compressGalleryForStorage(result.gallery, work.rjCode || rjCode);
         }
@@ -3710,24 +4763,51 @@ export default {
     if (pathname === '/api/history' && request.method === 'POST') {
       if (!isAuth()) return json({ error: 'Unauthorized' }, 401);
       const body = await request.json().catch(() => ({}));
-      if (!body || !body.rjCode) return json({ error: 'Missing rjCode' }, 400);
+      if (!body) return json({ error: 'Invalid payload' }, 400);
+
       const db = await getDb(env);
-      db.history = db.history || [];
-      const entry = {
-        rjCode: body.rjCode,
-        title: body.title || '',
-        trackTitle: body.trackTitle || '',
-        trackIndex: body.trackIndex || 0,
-        coverUrl: body.coverUrl || '',
-        cv: body.cv || '',
-        circle: body.circle || '',
-        playedAt: body.playedAt || new Date().toISOString()
-      };
-      db.history = db.history.filter(item => normRj(item.rjCode) !== normRj(body.rjCode));
-      db.history.unshift(entry);
-      if (db.history.length > 20) {
-        db.history = db.history.slice(0, 20);
+      db.history = Array.isArray(db.history) ? db.history : [];
+
+      const incomingItems = Array.isArray(body.history) ? body.history : (Array.isArray(body) ? body : (body.rjCode ? [body] : []));
+      if (incomingItems.length === 0) {
+        return json({ error: 'Missing rjCode or history list' }, 400);
       }
+
+      const map = new Map();
+      const all = [...db.history, ...incomingItems];
+      for (const item of all) {
+        if (!item || !item.rjCode) continue;
+        const key = normRj(item.rjCode);
+        const existing = map.get(key);
+        if (!existing) {
+          map.set(key, {
+            rjCode: item.rjCode,
+            title: item.title || '',
+            trackTitle: item.trackTitle || '',
+            trackIndex: item.trackIndex || 0,
+            coverUrl: item.coverUrl || '',
+            cv: item.cv || '',
+            circle: item.circle || '',
+            isNsfw: item.isNsfw,
+            tags: item.tags || [],
+            playedAt: item.playedAt || new Date().toISOString()
+          });
+        } else {
+          const t1 = new Date(existing.playedAt || 0).getTime();
+          const t2 = new Date(item.playedAt || 0).getTime();
+          if (t2 >= t1) {
+            map.set(key, {
+              ...existing,
+              ...item,
+              playedAt: item.playedAt || existing.playedAt || new Date().toISOString()
+            });
+          }
+        }
+      }
+      const merged = Array.from(map.values());
+      merged.sort((a, b) => new Date(b.playedAt || 0) - new Date(a.playedAt || 0));
+      db.history = merged.slice(0, 20);
+
       await saveDb(env, db);
       return json({ success: true, history: db.history });
     }
@@ -4333,27 +5413,29 @@ const INDEX_HTML = `<!DOCTYPE html>
     .nav-item:hover { background: var(--bg-card-hover); color: #fff; }
     .nav-item.active { background: var(--accent); color: #fff; }
 
-    /* Responsive Mobile Top Navbar */
-    .mobile-topbar {
-      display: none;
+    /* Responsive App Topbar (Unified for Desktop and Mobile) */
+    .mobile-topbar, .app-topbar {
+      display: flex;
       position: fixed;
       top: 0;
-      left: 0;
+      left: var(--sidebar-w);
       right: 0;
-      height: 58px;
+      height: 60px;
       background: rgba(12, 13, 20, 0.95);
       backdrop-filter: blur(14px);
       -webkit-backdrop-filter: blur(14px);
       border-bottom: 1px solid var(--border);
       z-index: 60;
-      padding: 0 14px;
+      padding: 0 28px;
       align-items: center;
       justify-content: space-between;
+      gap: 16px;
     }
+    .topbar-logo { display: none; }
     .mobile-nav-pills {
       display: none;
       position: fixed;
-      top: 58px;
+      top: 52px;
       left: 0;
       right: 0;
       background: rgba(10, 10, 15, 0.96);
@@ -4374,14 +5456,14 @@ const INDEX_HTML = `<!DOCTYPE html>
       position: relative;
       display: flex;
       align-items: center;
-      height: 36px;
+      height: 38px;
     }
     .mobile-search-bar span {
       position: absolute;
-      left: 10px;
+      left: 12px;
       top: 50%;
       transform: translateY(-50%);
-      font-size: 0.85rem;
+      font-size: 0.9rem;
       pointer-events: none;
       z-index: 2;
       line-height: 1;
@@ -4391,14 +5473,15 @@ const INDEX_HTML = `<!DOCTYPE html>
       height: 100%;
       background: #0c0d12;
       border: 1px solid var(--border);
-      padding: 0 8px 0 32px !important;
-      border-radius: 8px;
+      padding: 0 12px 0 36px !important;
+      border-radius: 9px;
       color: #fff;
-      font-size: 0.8rem;
+      font-size: 0.85rem;
       outline: none;
       min-width: 0;
       box-sizing: border-box;
       text-overflow: ellipsis;
+      transition: border-color 0.15s, box-shadow 0.15s;
     }
     .mobile-search-bar input:focus {
       border-color: var(--accent);
@@ -4432,7 +5515,7 @@ const INDEX_HTML = `<!DOCTYPE html>
     .mobile-pill.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 
     /* Main Container */
-    .app-main { margin-left: var(--sidebar-w); flex: 1; padding: 24px 36px 120px; min-height: 100vh; }
+    .app-main { margin-left: var(--sidebar-w); flex: 1; padding: 84px 36px 120px; min-height: 100vh; }
     .topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; gap: 16px; }
     .search-box { flex: 1; max-width: 480px; position: relative; display: flex; align-items: center; }
     .search-box input { width: 100%; background: var(--bg-card); border: 1px solid var(--border); padding: 10px 16px 10px 42px; border-radius: 10px; color: #fff; font-size: 0.9rem; outline: none; transition: 0.2s; }
@@ -4621,6 +5704,43 @@ const INDEX_HTML = `<!DOCTYPE html>
     .scroll-jump-btn:active {
       transform: scale(0.95);
     }
+    .dev-log-filter-btn {
+      background: rgba(255,255,255,0.06);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      padding: 3px 9px;
+      border-radius: 6px;
+      font-size: 0.74rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .dev-log-filter-btn:hover { color: #fff; background: rgba(255,255,255,0.12); }
+    .dev-log-filter-btn.active {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+      box-shadow: 0 0 8px var(--accent-glow);
+    }
+    .dev-log-entry {
+      padding: 3px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+      display: flex;
+      gap: 8px;
+      font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+      font-size: 0.78rem;
+      line-height: 1.45;
+    }
+    .dev-log-entry:last-child { border-bottom: none; }
+    .dev-log-ts { color: #64748b; flex-shrink: 0; }
+    .dev-log-lvl { font-weight: 800; flex-shrink: 0; width: 48px; }
+    .dev-log-lvl.lvl-INFO { color: #38bdf8; }
+    .dev-log-lvl.lvl-WARN { color: #fbbf24; }
+    .dev-log-lvl.lvl-ERROR { color: #f87171; }
+    .dev-log-lvl.lvl-DEBUG { color: #94a3b8; }
+    .dev-log-mod { color: #c084fc; font-weight: 700; flex-shrink: 0; }
+    .dev-log-msg { color: #e2e8f0; flex: 1; word-break: break-all; }
+
     .zen-chips-bar {
       display: flex;
       flex-wrap: wrap;
@@ -4860,6 +5980,7 @@ const INDEX_HTML = `<!DOCTYPE html>
     .works-list-row { cursor: pointer; transition: background 0.15s; }
     .works-list-row:hover { background: var(--bg-card-hover); }
     .list-thumb { width: 44px; height: 44px; border-radius: 6px; object-fit: cover; background: #0c0d12; flex-shrink: 0; }
+    .history-mobile-date { display: none !important; }
 
     /* Pagination Bar */
     .pagination-bar {
@@ -5196,11 +6317,12 @@ const INDEX_HTML = `<!DOCTYPE html>
       #playerBarChapterBtnMobile, #playerBarWorkBtnMobile { display: inline-flex; }
       #playerBarChapterBtn { display: none; }
       .app-sidebar { display: none; }
-      .mobile-topbar { display: flex; height: 52px; }
-      .mobile-nav-pills { display: flex; top: 52px; }
+      .mobile-topbar, .app-topbar { left: 0; right: 0; height: 52px; padding: 0 10px; }
+      .topbar-logo { display: flex; }
+      .mobile-nav-pills { display: flex !important; top: 52px; }
       .app-main {
         margin-left: 0 !important;
-        padding: 104px 12px 180px !important;
+        padding: 110px 12px 180px !important;
       }
       #dragWidget, .drag-widget { display: none !important; }
       .pagination-bar {
@@ -5727,6 +6849,9 @@ const INDEX_HTML = `<!DOCTYPE html>
       .works-list-table.history-list-table tr.works-list-row td.w-col-date {
         display: none !important;
       }
+      .history-mobile-date {
+        display: inline !important;
+      }
       .works-list-table tr.works-list-row td.w-col-actions,
       .works-list-table tr.works-list-row td:last-child {
         grid-area: actions !important;
@@ -5924,7 +7049,59 @@ const INDEX_HTML = `<!DOCTYPE html>
     }
     @keyframes pulseWidget {
       0%, 100% { border-color: rgba(56, 189, 248, 0.45); box-shadow: 0 4px 16px rgba(0,0,0,0.6); }
-      50% { border-color: rgba(56, 189, 248, 0.85); box-shadow: 0 4px 20px rgba(56, 189, 248, 0.35); }
+    /* 🛠️ Dev Mode Diagnostic Activity Log Modal Styles */
+    .dev-log-filter-btn {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 3px 8px;
+      font-size: 0.74rem;
+      font-weight: 700;
+      color: #94a3b8;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .dev-log-filter-btn:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: #fff;
+    }
+    .dev-log-filter-btn.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+      box-shadow: 0 0 10px var(--accent-glow);
+    }
+    .dev-log-entry {
+      padding: 2px 0;
+      display: flex;
+      gap: 8px;
+      align-items: baseline;
+      font-family: inherit;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+    }
+    .dev-log-ts {
+      color: #64748b;
+      font-size: 0.72rem;
+      flex-shrink: 0;
+    }
+    .dev-log-lvl {
+      font-weight: 800;
+      font-size: 0.72rem;
+      flex-shrink: 0;
+    }
+    .dev-log-lvl.lvl-INFO { color: #38bdf8; }
+    .dev-log-lvl.lvl-WARN { color: #fbbf24; }
+    .dev-log-lvl.lvl-ERROR { color: #f87171; }
+    .dev-log-mod {
+      color: #a78bfa;
+      font-weight: 700;
+      font-size: 0.72rem;
+      flex-shrink: 0;
+    }
+    .dev-log-msg {
+      color: #e2e8f0;
+      word-break: break-word;
+      flex: 1;
     }
   </style>
 </head>
@@ -6032,6 +7209,54 @@ const INDEX_HTML = `<!DOCTYPE html>
 
       <div style="display: flex; justify-content: flex-end; margin-top: 20px;">
         <button class="btn-primary" onclick="closeChangelogModal()">Got it</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Dev Activity Log Modal -->
+  <div id="devLogModal" class="modal-overlay">
+    <div class="modal-content" style="max-width: 880px; width: 95vw; max-height: 88vh; display: flex; flex-direction: column; padding: 0; overflow: hidden; background: #080a10; border: 1px solid rgba(56, 189, 248, 0.45); border-radius: 14px; box-shadow: 0 16px 48px rgba(0,0,0,0.85);">
+      <!-- Modal Header -->
+      <div style="display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--border); background: rgba(15, 18, 28, 0.95);">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <div style="width: 34px; height: 34px; border-radius: 9px; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.35); display: flex; align-items: center; justify-content: center; font-size: 1.15rem; color: #38bdf8;">🛠️</div>
+          <div>
+            <h3 style="font-size: 1.05rem; font-weight: 800; color: #fff; margin: 0;">Dev Activity &amp; Error Logs</h3>
+            <div style="font-size: 0.72rem; color: #94a3b8; margin-top: 1px;">Tail of last 100 client-cached diagnostic events</div>
+          </div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 6px;">
+          <button class="btn-outline" style="padding: 3px 8px; font-size: 0.75rem;" onclick="renderDevLogTail()">🔄 Refresh</button>
+          <button class="btn-outline" style="padding: 3px 8px; font-size: 0.75rem;" onclick="copyDevLogs()">📋 Copy</button>
+          <button class="btn-outline" style="padding: 3px 8px; font-size: 0.75rem;" onclick="exportDevLogs()">💾 Export</button>
+          <button class="btn-outline" style="padding: 3px 8px; font-size: 0.75rem; color: #ef4444; border-color: rgba(239,68,68,0.35);" onclick="clearDevLogs()">🗑️ Clear</button>
+          <button class="btn-outline" style="padding: 3px 8px; font-size: 0.8rem;" onclick="closeDevLogModal()">✖</button>
+        </div>
+      </div>
+      
+      <!-- Filter bar -->
+      <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 16px; background: rgba(10, 12, 18, 0.95); border-bottom: 1px solid var(--border); font-size: 0.78rem; flex-wrap: wrap; gap: 8px;">
+        <div style="display: flex; gap: 6px; align-items: center; flex-wrap: wrap;">
+          <span style="color: var(--text-muted); font-weight: 700; margin-right: 4px;">FILTER:</span>
+          <button class="dev-log-filter-btn active" data-filter="ALL" onclick="setDevLogFilter('ALL', this)">ALL</button>
+          <button class="dev-log-filter-btn" data-filter="ERROR" onclick="setDevLogFilter('ERROR', this)" style="color: #f87171;">ERRORS</button>
+          <button class="dev-log-filter-btn" data-filter="WARN" onclick="setDevLogFilter('WARN', this)" style="color: #fbbf24;">WARNS</button>
+          <button class="dev-log-filter-btn" data-filter="API" onclick="setDevLogFilter('API', this)" style="color: #38bdf8;">API</button>
+          <button class="dev-log-filter-btn" data-filter="REFETCH" onclick="setDevLogFilter('REFETCH', this)" style="color: #a78bfa;">REFETCH</button>
+          <button class="dev-log-filter-btn" data-filter="TRACE" onclick="setDevLogFilter('TRACE', this)" style="color: #34d399;">TRACE</button>
+        </div>
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <label style="display: flex; align-items: center; gap: 5px; color: #34d399; font-weight: 600; cursor: pointer; user-select: none;">
+            <input type="checkbox" id="devLogVerboseTrace" onchange="toggleDevLogVerboseTrace(this.checked)" style="accent-color: #10b981;"> 🔬 Verbose Tracing
+          </label>
+          <label style="display: flex; align-items: center; gap: 6px; color: var(--text-muted); cursor: pointer; user-select: none;">
+            <input type="checkbox" id="devLogAutoScroll" checked style="accent-color: var(--accent);"> Auto-scroll
+          </label>
+        </div>
+      </div>
+
+      <!-- Terminal Console Log Box -->
+      <div id="devLogConsoleContainer" style="flex: 1; min-height: 360px; max-height: 520px; overflow-y: auto; background: #040508; padding: 12px 16px; font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size: 0.78rem; line-height: 1.5; color: #e2e8f0; white-space: pre-wrap; word-break: break-all; scrollbar-width: thin;">
       </div>
     </div>
   </div>
@@ -6373,22 +7598,22 @@ const INDEX_HTML = `<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- Mobile Topbar Header (Row 1: Logo + 2 Equal Search Bars) -->
-  <header class="mobile-topbar" style="gap: 8px; padding: 0 10px; display: flex; align-items: center;">
-    <a href="#/library" class="logo-area" style="margin-bottom: 0; padding: 0; text-decoration: none; color: inherit; flex-shrink: 0; gap: 4px;" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); switchView('library'); }">
+  <!-- Topbar Header (Row 1: Logo + 2 Search Bars) -->
+  <header class="mobile-topbar app-topbar">
+    <a href="#/library" class="logo-area topbar-logo" style="margin-bottom: 0; padding: 0; text-decoration: none; color: inherit; flex-shrink: 0; gap: 4px;" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); switchView('library'); }">
       <div class="logo-icon" style="width: 32px; height: 32px; font-size: 1.1rem; border-radius: 8px;">🐧</div>
       <div class="logo-title" style="font-size: 1rem; display: none;">aStreamer</div>
     </a>
-    <div style="display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0;">
+    <div style="display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0;">
       <!-- Title / RJ Search Bar -->
-      <div class="mobile-search-bar">
+      <div class="mobile-search-bar" style="flex: 1; max-width: 480px;">
         <span>🔍</span>
-        <input type="text" id="mobileSearchInput" placeholder="Title / RJ..." oninput="handleTitleSearch(this.value)" autocomplete="off">
+        <input type="text" id="mobileSearchInput" placeholder="Search title, RJ, circle, CV..." oninput="handleTitleSearch(this.value)" autocomplete="off">
       </div>
       <!-- Tags / CV Search Bar -->
-      <div class="mobile-search-bar tags-bar" onclick="openZenTagSearch()" title="Open Tag & CV Search">
+      <div class="mobile-search-bar tags-bar" style="flex: 1; max-width: 480px;" onclick="openZenTagSearch()" title="Open Tag & CV Search">
         <span>🏷️</span>
-        <input type="text" id="mobileTagSearchInput" placeholder="Tags / CV..." onfocus="openZenTagSearch(this.value)" onclick="openZenTagSearch(this.value)" readonly>
+        <input type="text" id="mobileTagSearchInput" placeholder="Search tags + CV..." onfocus="openZenTagSearch(this.value)" onclick="openZenTagSearch(this.value)" readonly>
       </div>
     </div>
   </header>
@@ -6405,6 +7630,7 @@ const INDEX_HTML = `<!DOCTYPE html>
     <button class="mobile-pill" onclick="quickAddRj()">➕ Add RJ</button>
     <button class="mobile-pill" onclick="openImportModal()">📥 Import</button>
     <button class="mobile-pill" onclick="openPageImportModal()">📑 Page Import</button>
+    <button class="mobile-pill" onclick="openDevLogModal()">🛠️ Logs</button>
     <button class="mobile-pill" onclick="openChangelogModal()">📜 Notes</button>
     <a href="#/settings" class="mobile-pill" data-view="settings" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); switchView('settings'); }">⚙️ Settings</a>
     <button class="mobile-pill" id="mobileAdminBtn" onclick="toggleAdminModal()">🔓 Admin</button>
@@ -6438,17 +7664,6 @@ const INDEX_HTML = `<!DOCTYPE html>
         <span id="appVersionTag" style="font-size: 0.65rem; color: var(--accent); font-weight: 700; background: var(--accent-glow); padding: 1px 6px; border-radius: 4px; border: 1px solid var(--accent);">v2.0 Official</span>
       </div>
     </a>
-
-    <!-- Sidebar Dual Search Bars -->
-    <div class="search-box" style="margin-bottom: 8px; width: 100%; max-width: 100%;">
-      <span>🔍</span>
-      <input type="text" id="globalSearch" placeholder="Search title, RJ, circle..." oninput="handleTitleSearch(this.value)">
-    </div>
-    <div class="search-box" style="margin-bottom: 14px; width: 100%; max-width: 100%;" onclick="openZenTagSearch()" title="Open Tag Search">
-      <span>🏷️</span>
-      <input type="text" id="globalTagSearch" placeholder="Search tags + CV..." onfocus="openZenTagSearch(this.value)" onclick="openZenTagSearch(this.value)" readonly style="cursor: pointer;">
-      <div id="tagSuggestionsDropdown" class="tag-suggestions-dropdown"></div>
-    </div>
 
     <!-- Sidebar Quick Add -->
     <button class="btn-primary" style="width: 100%; justify-content: center; margin-bottom: 12px; padding: 10px;" onclick="quickAddRj()">+ Add RJ Code</button>
@@ -6488,6 +7703,7 @@ const INDEX_HTML = `<!DOCTYPE html>
       <div class="nav-title">Manage</div>
       <button class="nav-item" onclick="openImportModal()">📥 Batch Import</button>
       <button class="nav-item" onclick="openPageImportModal()">📑 Page Import</button>
+      <button class="nav-item" onclick="openDevLogModal()">🛠️ Dev Activity Logs</button>
       <button class="nav-item" onclick="openChangelogModal()">📜 Release Notes</button>
       <a href="#/settings" class="nav-item" data-view="settings" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); switchView('settings'); }">⚙️ Settings</a>
       <button class="nav-item" id="sidebarAdminBtn" onclick="toggleAdminModal()">🔓 Unlock Admin</button>
@@ -7795,13 +9011,30 @@ const INDEX_HTML = `<!DOCTYPE html>
         const sfwRj = SFW_DISGUISE_LIST[hash % SFW_DISGUISE_LIST.length];
         return { coverUrl: '/image-proxy?url=' + encodeURIComponent('https://pic.weeabo0.xyz/' + sfwRj + '_img_main.jpg'), isDisguised: true };
       }
-      if (!rawCover && work.rjCode) {
-        return { coverUrl: '/image-proxy?rj=' + encodeURIComponent(work.rjCode), isDisguised: false };
+      while (rawCover && (rawCover.startsWith('/image-proxy?url=') || (rawCover.startsWith('http') && rawCover.includes('/image-proxy?url=')))) {
+        const match = rawCover.match(/[?&]url=([^&]+)/);
+        if (match) {
+          try {
+            const dec = decodeURIComponent(match[1]);
+            if (dec === rawCover) break;
+            rawCover = dec;
+          } catch (e) {
+            break;
+          }
+        } else {
+          break;
+        }
       }
-      if (rawCover && rawCover.startsWith('http') && !rawCover.includes('/image-proxy')) {
+      if (!rawCover || rawCover.includes('placeholder') || rawCover.includes('no-image')) {
+        if (work.rjCode) return { coverUrl: '/image-proxy?rj=' + encodeURIComponent(work.rjCode), isDisguised: false };
+      }
+      if (rawCover && rawCover.startsWith('http')) {
         return { coverUrl: '/image-proxy?url=' + encodeURIComponent(rawCover) + (work.rjCode ? '&rj=' + encodeURIComponent(work.rjCode) : ''), isDisguised: false };
       }
-      return { coverUrl: rawCover, isDisguised: false };
+      if (rawCover && rawCover.startsWith('/image-proxy')) {
+        return { coverUrl: rawCover, isDisguised: false };
+      }
+      return { coverUrl: work.rjCode ? ('/image-proxy?rj=' + encodeURIComponent(work.rjCode)) : rawCover, isDisguised: false };
     }
 
     function renderLockedState(title, desc) {
@@ -7984,7 +9217,10 @@ const INDEX_HTML = `<!DOCTYPE html>
         const data = await res.json().catch(() => ({}));
         isAdmin = Boolean(data.authenticated);
         updateAdminUI(isAdmin);
-        if (isAdmin) updateWishlistBadge();
+        if (isAdmin) {
+          updateWishlistBadge();
+          syncHistoryInBackground();
+        }
       } catch(e) {
         isAdmin = false;
         updateAdminUI(false);
@@ -8055,6 +9291,7 @@ const INDEX_HTML = `<!DOCTYPE html>
           closeAdminModal();
           updateAdminUI(true);
           updateWishlistBadge();
+          syncHistoryInBackground();
           handleHashRoute();
         } else {
           const errEl = document.getElementById('loginError');
@@ -8068,7 +9305,166 @@ const INDEX_HTML = `<!DOCTYPE html>
       }
     }
 
+    // =========================================================================
+    // 🛠️ Developer Diagnostics & Activity Log Subsystem
+    // =========================================================================
+    function isDevModeEnabled() {
+      const stored = localStorage.getItem('astreamer_dev_mode');
+      return stored === null ? true : stored === 'true';
+    }
+    function setDevMode(val) {
+      localStorage.setItem('astreamer_dev_mode', String(val));
+      showToast(val ? '🛠️ Dev Mode enabled' : '🛠️ Dev Mode disabled');
+      devLog('INFO', 'CONFIG', 'Dev Diagnostics Mode set to ' + val);
+    }
+
+    window.devLogs = [];
+    let devLogVerboseTraceEnabled = localStorage.getItem('astreamer_dev_verbose_trace') === 'true';
+    try {
+      const saved = localStorage.getItem('astreamer_dev_logs');
+      if (saved) window.devLogs = JSON.parse(saved) || [];
+    } catch(e) {
+      window.devLogs = [];
+    }
+
+    let devLogFilter = 'ALL';
+
+    function toggleDevLogVerboseTrace(enabled) {
+      devLogVerboseTraceEnabled = Boolean(enabled);
+      localStorage.setItem('astreamer_dev_verbose_trace', devLogVerboseTraceEnabled ? 'true' : 'false');
+      devLog('INFO', 'CONFIG', 'Verbose Tracing ' + (devLogVerboseTraceEnabled ? 'ENABLED' : 'DISABLED'));
+      renderDevLogTail();
+    }
+
+    function isVerboseTraceEnabled() {
+      return devLogVerboseTraceEnabled;
+    }
+
+    function devLog(level, module, message, data = null) {
+      const lvl = (level || 'INFO').toUpperCase();
+      if (lvl === 'TRACE' && !devLogVerboseTraceEnabled) return;
+      if (!isDevModeEnabled() && lvl !== 'ERROR' && lvl !== 'WARN') return;
+      const ts = new Date().toTimeString().split(' ')[0] + '.' + String(Date.now() % 1000).padStart(3, '0');
+      const entry = {
+        time: ts,
+        level: lvl,
+        module: (module || 'APP').toUpperCase(),
+        message: String(message || ''),
+        data: data ? (typeof data === 'object' ? JSON.stringify(data) : String(data)) : null
+      };
+      window.devLogs.push(entry);
+      if (window.devLogs.length > 500) {
+        window.devLogs = window.devLogs.slice(-350);
+      }
+      try {
+        localStorage.setItem('astreamer_dev_logs', JSON.stringify(window.devLogs.slice(-150)));
+      } catch(e) {}
+
+      const modal = document.getElementById('devLogModal');
+      if (modal && (modal.style.display === 'flex' || modal.style.display === 'block')) {
+        renderDevLogTail();
+      }
+    }
+
+    function openDevLogModal() {
+      const modal = document.getElementById('devLogModal');
+      if (modal) {
+        modal.style.display = 'flex';
+        const vCheckbox = document.getElementById('devLogVerboseTrace');
+        if (vCheckbox) vCheckbox.checked = devLogVerboseTraceEnabled;
+        renderDevLogTail();
+      }
+    }
+
+    function closeDevLogModal() {
+      const modal = document.getElementById('devLogModal');
+      if (modal) modal.style.display = 'none';
+    }
+
+    function setDevLogFilter(filterName, btn) {
+      devLogFilter = filterName;
+      document.querySelectorAll('.dev-log-filter-btn').forEach(b => b.classList.remove('active'));
+      if (btn) btn.classList.add('active');
+      renderDevLogTail();
+    }
+
+    function renderDevLogTail() {
+      const container = document.getElementById('devLogConsoleContainer');
+      if (!container) return;
+      
+      const allLogs = window.devLogs || [];
+      const filtered = allLogs.filter(entry => {
+        if (devLogFilter === 'ALL') return true;
+        if (devLogFilter === 'ERROR') return entry.level === 'ERROR';
+        if (devLogFilter === 'WARN') return entry.level === 'WARN' || entry.level === 'ERROR';
+        if (devLogFilter === 'API') return entry.module === 'API';
+        if (devLogFilter === 'REFETCH') return entry.module === 'REFETCH' || entry.module === 'SCRAPER' || entry.module === 'CLIENT_PROBE';
+        if (devLogFilter === 'TRACE') return entry.level === 'TRACE' || entry.module === 'PROBE' || entry.module === 'CLIENT_PROBE';
+        return true;
+      });
+
+      const tail = filtered.slice(-150);
+
+      if (tail.length === 0) {
+        container.innerHTML = '<div style="color: #64748b; text-align: center; padding: 40px 0;">[No diagnostic log entries recorded yet]</div>';
+        return;
+      }
+
+      let html = '';
+      tail.forEach(item => {
+        const lvlClass = 'lvl-' + (item.level || 'INFO');
+        const dataStr = item.data ? (' <span style="color: #6ee7b7;">' + escapeHtml(item.data) + '</span>') : '';
+        html += '<div class="dev-log-entry">' +
+          '<span class="dev-log-ts">[' + item.time + ']</span>' +
+          '<span class="dev-log-lvl ' + lvlClass + '">[' + item.level + ']</span>' +
+          '<span class="dev-log-mod">[' + item.module + ']</span>' +
+          '<span class="dev-log-msg">' + escapeHtml(item.message) + dataStr + '</span>' +
+        '</div>';
+      });
+
+      container.innerHTML = html;
+
+      const autoScroll = document.getElementById('devLogAutoScroll');
+      if (autoScroll && autoScroll.checked) {
+        container.scrollTop = container.scrollHeight;
+      }
+    }
+
+    function copyDevLogs() {
+      const allLogs = window.devLogs || [];
+      const text = allLogs.map(l => '[' + l.time + '] [' + l.level + '] [' + l.module + '] ' + l.message + (l.data ? ' ' + l.data : '')).join('\\n');
+      navigator.clipboard.writeText(text).then(() => {
+        showToast('📋 Copied ' + allLogs.length + ' log entries to clipboard');
+      }).catch(e => {
+        showToast('❌ Copy failed: ' + e.message);
+      });
+    }
+
+    function exportDevLogs() {
+      const allLogs = window.devLogs || [];
+      const text = '# aStreamer Diagnostic Dev Log\\n# Exported: ' + new Date().toISOString() + '\\n============================================================\\n' +
+        allLogs.map(l => '[' + l.time + '] [' + l.level + '] [' + l.module + '] ' + l.message + (l.data ? ' ' + l.data : '')).join('\\n');
+      const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'astreamer_dev_logs_' + new Date().toISOString().slice(0, 10) + '.txt';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { if (a.parentNode) a.parentNode.removeChild(a); URL.revokeObjectURL(url); }, 1000);
+      showToast('💾 Exported diagnostic log file');
+    }
+
+    function clearDevLogs() {
+      window.devLogs = [];
+      try { localStorage.removeItem('astreamer_dev_logs'); } catch(e) {}
+      renderDevLogTail();
+      showToast('🗑️ Cleared diagnostic activity logs');
+    }
+
     async function apiFetch(url, options = {}) {
+      const method = (options.method || 'GET').toUpperCase();
+      devLog('INFO', 'API', method + ' ' + url);
       options.headers = options.headers || { 'Content-Type': 'application/json' };
       const savedPass = localStorage.getItem('astreamer_admin_passcode') || '';
       if (savedPass) {
@@ -8078,13 +9474,36 @@ const INDEX_HTML = `<!DOCTYPE html>
           options.headers['x-admin-passcode'] = savedPass;
         }
       }
-      const res = await fetch(url, options);
-      if (res.status === 401) {
-        isAdmin = false;
-        updateAdminUI(false);
-        openAdminModal('Admin authorization required to perform this action.');
+      try {
+        const res = await fetch(url, options);
+        if (!res.ok) {
+          let errDetail = res.statusText || 'Error';
+          try {
+            const clone = res.clone();
+            const errJson = await clone.json();
+            if (errJson && errJson.error) errDetail = errJson.error;
+            else if (errJson && errJson.message) errDetail = errJson.message;
+          } catch(e) {
+            try {
+              const clone = res.clone();
+              const errTxt = await clone.text();
+              if (errTxt && errTxt.length < 120) errDetail = errTxt;
+            } catch(e2) {}
+          }
+          devLog(res.status >= 500 ? 'ERROR' : 'WARN', 'API', method + ' ' + url + ' -> HTTP ' + res.status + ' (' + errDetail + ')');
+        } else {
+          devLog('INFO', 'API', method + ' ' + url + ' -> HTTP ' + res.status);
+        }
+        if (res.status === 401) {
+          isAdmin = false;
+          updateAdminUI(false);
+          openAdminModal('Admin authorization required to perform this action.');
+        }
+        return res;
+      } catch (err) {
+        devLog('ERROR', 'API', method + ' ' + url + ' -> Network Error: ' + err.message);
+        throw err;
       }
-      return res;
     }
 
     async function apiFetchJson(url, options = {}) {
@@ -8837,10 +10256,12 @@ const INDEX_HTML = `<!DOCTYPE html>
       }
       currentWorkChapters = chaptersList;
 
-      const galleryCount = (Array.isArray(work.gallery) ? work.gallery.length : 0);
+      const cleanGallery = getCleanWorkGallery(work.gallery);
+      work.gallery = cleanGallery;
+      const galleryCount = cleanGallery.length;
       const cleanRjKey = normRj(work.rjCode);
       const currentWorkStage = (typeof singleWorkRefreshStages !== 'undefined') ? (singleWorkRefreshStages.get(cleanRjKey) || '') : '';
-      const refreshBtnContent = currentWorkStage ? ('<span class="spin">🔄</span> <span id="refreshStageText">' + currentWorkStage + '</span>') : '🔄 Refresh';
+      const refreshBtnContent = currentWorkStage ? ('<span class="spin">🔄</span> <span id="refreshStageText">' + currentWorkStage + '</span>') : '🔄 Refetch';
       const refreshBtnDisabled = currentWorkStage ? ' disabled' : '';
 
       const sampleTracks = (Array.isArray(work.sampleTracks) ? work.sampleTracks : []).filter(function(t) { return t && (t.rawUrl || t.streamUrl); });
@@ -8858,7 +10279,9 @@ const INDEX_HTML = `<!DOCTYPE html>
 
       // 1. Physical Audio Tracklist Section
       if (hasFullCommunityTracks) {
-        html += '<h3 style="font-size:1.2rem; font-weight:700; margin-top:24px; margin-bottom:12px; display:flex; align-items:center; gap:8px;"><span>🎵 Full Audio Tracks (' + fullCommunityTracks.length + ')</span></h3>';
+        const audioSource = getWorkAudioSource(work, fullCommunityTracks);
+        const audioSourceBadge = audioSource ? ('<span style="font-size:0.75rem; background:rgba(255,122,0,0.15); color:var(--accent); border:1px solid var(--accent-glow); padding:2px 8px; border-radius:4px; font-weight:700;">' + audioSource + '</span>') : '';
+        html += '<h3 style="font-size:1.2rem; font-weight:700; margin-top:24px; margin-bottom:12px; display:flex; align-items:center; gap:8px;"><span>🎵 Full Audio Tracks (' + fullCommunityTracks.length + ')</span>' + audioSourceBadge + '</h3>';
         html += '<table class="tracks-table audio-tracks-table"><thead><tr><th style="width: 40px;">#</th><th>Track Title</th><th style="width: 120px;">Stream Format</th><th style="width: 160px; text-align:right;">Action</th></tr></thead><tbody>';
 
         fullCommunityTracks.forEach(function(t, i) {
@@ -8871,8 +10294,7 @@ const INDEX_HTML = `<!DOCTYPE html>
             catBadge = '<span style="font-size:0.75rem; background:rgba(59,130,246,0.15); color:#60a5fa; border:1px solid rgba(96,165,250,0.3); padding:2px 8px; border-radius:4px; font-weight:700; margin-right:6px;">🎵 Main</span>';
           }
           const formatBadge = t.isHls ? '<span style="font-size:0.75rem; background:rgba(14,116,144,0.2); color:#38bdf8; border:1px solid rgba(56,189,248,0.3); padding:2px 8px; border-radius:4px; font-weight:700;">HLS Master</span>' : '<span style="font-size:0.75rem; background:rgba(255,255,255,0.06); color:#d1d5db; border:1px solid var(--border); padding:2px 8px; border-radius:4px; font-weight:700;">Direct MP3</span>';
-          const durStr = t.duration ? (' <span style="color:var(--text-muted); font-size:0.8rem; font-weight:normal; margin-left:6px;">(' + formatTime(t.duration) + ')</span>') : '';
-          html += '<tr class="track-row" id="track-row-' + i + '" data-idx="' + i + '" onclick="playTrack(parseInt(this.dataset.idx), true, currentWork)"><td>' + (t.id || (i + 1)) + '</td><td><div style="display:flex; align-items:center; flex-wrap:wrap; gap:4px;">' + catBadge + '<strong>' + t.title + '</strong>' + durStr + '</div></td><td>' + formatBadge + '</td><td style="text-align:right;"><div style="display:inline-flex; gap:6px;"><button class="btn-primary" style="padding: 4px 10px; font-size: 0.75rem;" data-idx="' + i + '" onclick="event.stopPropagation(); playTrack(parseInt(this.dataset.idx), true, currentWork)">▶ Play</button><button class="btn-outline" style="padding: 4px 10px; font-size: 0.75rem;" data-idx="' + i + '" onclick="event.stopPropagation(); addTrackToPlaylistAction(parseInt(this.dataset.idx))">➕ Playlist</button></div></td></tr>';
+          html += '<tr class="track-row" id="track-row-' + i + '" data-idx="' + i + '" onclick="playTrack(parseInt(this.dataset.idx), true, currentWork)"><td>' + (t.id || (i + 1)) + '</td><td><div style="display:flex; align-items:center; flex-wrap:wrap; gap:4px;">' + catBadge + '<strong>' + t.title + '</strong></div></td><td>' + formatBadge + '</td><td style="text-align:right;"><div style="display:inline-flex; gap:6px;"><button class="btn-primary" style="padding: 4px 10px; font-size: 0.75rem;" data-idx="' + i + '" onclick="event.stopPropagation(); playTrack(parseInt(this.dataset.idx), true, currentWork)">▶ Play</button><button class="btn-outline" style="padding: 4px 10px; font-size: 0.75rem;" data-idx="' + i + '" onclick="event.stopPropagation(); addTrackToPlaylistAction(parseInt(this.dataset.idx))">➕ Playlist</button></div></td></tr>';
         });
         html += '</tbody></table>';
       } else {
@@ -8882,11 +10304,10 @@ const INDEX_HTML = `<!DOCTYPE html>
       // 1.5. Official DLsite Preview Audio Section (DLsite Chobit)
       if (sampleTracks.length > 0 && previewAudioMode !== 'disabled') {
         html += '<h3 style="font-size:1.2rem; font-weight:700; margin-top:28px; margin-bottom:12px; display:flex; align-items:center; gap:8px;"><span>🎧 Official DLsite Preview Audio (' + sampleTracks.length + ')</span><span style="font-size:0.75rem; background:rgba(255,122,0,0.15); color:var(--accent); border:1px solid var(--accent-glow); padding:2px 8px; border-radius:4px; font-weight:700;">DLsite Chobit</span></h3>';
-        html += '<table class="tracks-table sample-tracks-table"><thead><tr><th style="width: 40px;">#</th><th>Sample Track Title</th><th style="width: 120px;">Playtime</th><th style="width: 160px; text-align:right;">Action</th></tr></thead><tbody>';
+        html += '<table class="tracks-table sample-tracks-table"><thead><tr><th style="width: 40px;">#</th><th>Sample Track Title</th><th style="width: 160px; text-align:right;">Action</th></tr></thead><tbody>';
         sampleTracks.forEach(function(st, sIdx) {
-          const sDurStr = st.formattedTime || formatTime(st.duration || 0);
           const stJson = JSON.stringify(st).replace(/"/g, '&quot;');
-          html += '<tr class="track-row" id="sample-track-row-' + sIdx + '" onclick="playDirectAudioTrack(' + stJson + ', ' + sIdx + ', currentWork)"><td>' + (sIdx + 1) + '</td><td><div style="display:flex; align-items:center; flex-wrap:wrap; gap:4px;"><strong>' + st.title + '</strong></div></td><td><span style="font-variant-numeric:tabular-nums; color:var(--text-muted); font-size:0.85rem;">⏱️ ' + sDurStr + '</span></td><td style="text-align:right;"><div style="display:inline-flex; gap:6px;"><button class="btn-primary" style="padding: 4px 10px; font-size: 0.75rem;" onclick="event.stopPropagation(); playDirectAudioTrack(' + stJson + ', ' + sIdx + ', currentWork)">▶ Play Sample</button><button class="btn-outline" style="padding: 4px 10px; font-size: 0.75rem;" onclick="event.stopPropagation(); addSampleTrackToPlaylistAction(' + stJson + ')">➕ Playlist</button></div></td></tr>';
+          html += '<tr class="track-row" id="sample-track-row-' + sIdx + '" onclick="playDirectAudioTrack(' + stJson + ', ' + sIdx + ', currentWork)"><td>' + (sIdx + 1) + '</td><td><div style="display:flex; align-items:center; flex-wrap:wrap; gap:4px;"><strong>' + st.title + '</strong></div></td><td style="text-align:right;"><div style="display:inline-flex; gap:6px;"><button class="btn-primary" style="padding: 4px 10px; font-size: 0.75rem;" onclick="event.stopPropagation(); playDirectAudioTrack(' + stJson + ', ' + sIdx + ', currentWork)">▶ Play Sample</button><button class="btn-outline" style="padding: 4px 10px; font-size: 0.75rem;" onclick="event.stopPropagation(); addSampleTrackToPlaylistAction(' + stJson + ')">➕ Playlist</button></div></td></tr>';
         });
         html += '</tbody></table>';
       }
@@ -9006,13 +10427,16 @@ const INDEX_HTML = `<!DOCTYPE html>
       // Track user visit for behavioral analytics
       recordWorkVisit(work);
 
-      // Retain existing chapters/gallery if currentWork already had them
+      // Retain existing chapters/gallery/sampleTracks if currentWork already had them
       if (currentWork && normRj(currentWork.rjCode) === normRj(work.rjCode)) {
         if (Array.isArray(currentWork.chapters) && currentWork.chapters.length > 0 && (!work.chapters || work.chapters.length <= 1)) {
           work.chapters = currentWork.chapters;
         }
         if (Array.isArray(currentWork.gallery) && currentWork.gallery.length > 0 && (!work.gallery || work.gallery.length === 0)) {
           work.gallery = currentWork.gallery;
+        }
+        if (Array.isArray(currentWork.sampleTracks) && currentWork.sampleTracks.length > 0 && (!work.sampleTracks || work.sampleTracks.length === 0)) {
+          work.sampleTracks = currentWork.sampleTracks;
         }
       }
 
@@ -9076,13 +10500,189 @@ const INDEX_HTML = `<!DOCTYPE html>
       grid.scrollBy({ left: direction * scrollAmount, behavior: 'smooth' });
     }
 
+    function getCanonicalDlsiteRj(rjCode) {
+      const clean = (rjCode || '').toUpperCase().trim();
+      const match = clean.match(/^(?:RJ|VJ|BJ)?(\d+)$/i);
+      if (!match) return clean;
+      const pref = (clean.match(/^(RJ|VJ|BJ)/i) || [])[1] || 'RJ';
+      const num = parseInt(match[1], 10);
+      if (isNaN(num) || num <= 0) return clean;
+      const targetLen = num >= 1000000 ? 8 : 6;
+      return pref.toUpperCase() + String(num).padStart(targetLen, '0');
+    }
+
+    function getDlsiteCoverBucket(rjCode) {
+      const clean = (rjCode || '').toUpperCase().trim();
+      const match = clean.match(/^(?:RJ|VJ|BJ)?(\d+)$/i);
+      if (!match) return clean;
+      const pref = (clean.match(/^(RJ|VJ|BJ)/i) || [])[1] || 'RJ';
+      const num = parseInt(match[1], 10);
+      if (isNaN(num) || num <= 0) return clean;
+      const bucketNum = Math.ceil(num / 1000) * 1000;
+      const targetLen = num >= 1000000 ? 8 : 6;
+      return pref.toUpperCase() + String(bucketNum).padStart(targetLen, '0');
+    }
+
+    function getSourceBadgeStyle(source) {
+      const s = (source || '').toLowerCase();
+      if (s.includes('dlsite')) {
+        return 'color:#38bdf8; background:rgba(56,189,248,0.15); border:1px solid rgba(56,189,248,0.35);'; // Sapphire Blue / Cyan
+      } else if (s.includes('asmr.one') || s.includes('asmr')) {
+        return 'color:#34d399; background:rgba(16,185,129,0.15); border:1px solid rgba(16,185,129,0.35);'; // Emerald Mint
+      } else if (s.includes('weeab') || s.includes('japaneseasmr')) {
+        return 'color:#c084fc; background:rgba(192,132,252,0.15); border:1px solid rgba(192,132,252,0.35);'; // Violet / Purple
+      } else if (s.includes('hentai')) {
+        return 'color:#f472b6; background:rgba(244,114,182,0.15); border:1px solid rgba(244,114,182,0.35);'; // Rose Pink
+      }
+      return 'color:#fb923c; background:rgba(251,146,60,0.15); border:1px solid rgba(251,146,60,0.35);'; // Amber Accent
+    }
+
+    function getWorkAudioSource(work, fullCommunityTracks) {
+      const tracks = (Array.isArray(fullCommunityTracks) && fullCommunityTracks.length > 0) ? fullCommunityTracks : (work && Array.isArray(work.tracks) ? work.tracks : []);
+      if (tracks.length === 0) return null;
+      
+      if (work && work.audioSource && typeof work.audioSource === 'string') {
+        const as = work.audioSource.toLowerCase();
+        if (as.includes('hentai')) return 'HentaiASMR';
+        if (as.includes('japaneseasmr') || as.includes('weeab')) return 'JapaneseASMR';
+      }
+      if (work && work.source && typeof work.source === 'string') {
+        const s = work.source.toLowerCase();
+        if (s.includes('hentai')) return 'HentaiASMR';
+        if (s.includes('japaneseasmr') || s.includes('weeab')) return 'JapaneseASMR';
+      }
+
+      for (const t of tracks) {
+        if (!t) continue;
+        if (t.source && typeof t.source === 'string') {
+          const s = t.source.toLowerCase();
+          if (s.includes('hentai')) return 'HentaiASMR';
+          if (s.includes('japaneseasmr') || s.includes('weeab')) return 'JapaneseASMR';
+        }
+        const checkStr = (String(t.rawUrl || '') + ' ' + String(t.streamUrl || '') + ' ' + String(t.referer || '') + ' ' + String(t.url || '')).toLowerCase();
+        if (checkStr.includes('hentaiasmr') || checkStr.includes('hentaiasmr.moe') || checkStr.includes('mp3.hentaiasmr.moe')) {
+          return 'HentaiASMR';
+        }
+        if (checkStr.includes('japaneseasmr') || checkStr.includes('weeab0o') || checkStr.includes('v.weeab0o.xyz')) {
+          return 'JapaneseASMR';
+        }
+      }
+      return 'JapaneseASMR';
+    }
+
+    function normalizeGalleryItem(g, idx = 0) {
+      if (!g) return null;
+      let url = '';
+      let title = '';
+      let source = '';
+      let role = '';
+
+      if (Array.isArray(g)) {
+        title = g[0] || '';
+        url = g[1] || '';
+        source = g[2] || '';
+        role = g[3] || '';
+      } else {
+        url = g.url || g.proxyUrl || '';
+        title = g.title || '';
+        source = g.source || '';
+        role = g.role || '';
+      }
+
+      if (url.startsWith('/image-proxy?url=')) {
+        try {
+          const rawParam = url.replace('/image-proxy?url=', '');
+          url = decodeURIComponent(rawParam);
+        } catch (e) {}
+      }
+
+      const sLower = (source || '').toLowerCase().trim();
+      if (!source || sLower === 'gallery' || sLower === 'artwork gallery' || sLower === 'artwork' || sLower === 'illustration preview' || sLower === 'sample') {
+        const u = (url || '').toLowerCase();
+        if (u.includes('dlsite') || u.includes('chobit')) source = 'DLsite Doujin';
+        else if (u.includes('weeabo0') || u.includes('weeab') || u.includes('japaneseasmr')) source = 'Weeab0o';
+        else if (u.includes('asmr')) source = 'ASMR.one';
+        else if (u.includes('hentai')) source = 'HentaiASMR';
+        else source = 'DLsite Doujin';
+      }
+
+      const smpMatch = url.match(/_img_smp(\d+)\./i) || url.match(/_smp(\d+)\./i);
+      const isMain = url.includes('_img_main.') || url.includes('_main.') || (!smpMatch && idx === 0);
+
+      if (isMain) {
+        role = role || 'main_cover';
+        if (!title || /^Illustration\s*#\d+$/i.test(title) || title === 'Artwork Gallery') {
+          title = 'Main Package Artwork';
+        }
+      } else if (smpMatch) {
+        const sNum = parseInt(smpMatch[1], 10);
+        role = role || ('sample_' + sNum);
+        if (!title || /^Illustration\s*#\d+$/i.test(title) || title === 'Artwork Gallery') {
+          title = (source.includes('DLsite') ? 'Sample Illustration #' : 'Sample Artwork #') + sNum;
+        }
+      } else {
+        role = role || ('sample_' + (idx + 1));
+        if (!title || /^Illustration\s*#\d+$/i.test(title) || title === 'Artwork Gallery') {
+          title = 'Sample Illustration #' + (idx + 1);
+        }
+      }
+
+      return {
+        id: idx + 1,
+        title: title,
+        url: url,
+        proxyUrl: '/image-proxy?url=' + encodeURIComponent(url),
+        source: source || 'DLsite Doujin',
+        role: role
+      };
+    }
+
+    function getCleanWorkGallery(rawGallery, rjCode = '') {
+      if (!rawGallery) return [];
+      let list = rawGallery;
+      if (!Array.isArray(rawGallery) && rawGallery && rawGallery._tpl === 'dlsite_seq') {
+        const cleanUpper = (rjCode || (currentWork && currentWork.rjCode) || '').toUpperCase().trim();
+        const canonicalRj = getCanonicalDlsiteRj(cleanUpper);
+        const bucket = rawGallery.bucket || getDlsiteCoverBucket(canonicalRj);
+        list = [];
+        if (rawGallery.hasMain) {
+          list.push({ title: 'Main Package Artwork', role: 'main_cover', source: 'DLsite Doujin', url: 'https://img.dlsite.jp/modpub/images2/work/doujin/' + bucket + '/' + canonicalRj + '_img_main.jpg' });
+        }
+        for (let i = 1; i <= (rawGallery.count || 0); i++) {
+          list.push({ title: 'Sample Illustration #' + i, role: 'sample_' + i, source: 'DLsite Doujin', url: 'https://img.dlsite.jp/modpub/images2/work/doujin/' + bucket + '/' + canonicalRj + '_img_smp' + i + '.jpg' });
+        }
+      }
+      if (!Array.isArray(list) || list.length === 0) return [];
+      const normalized = list.map((g, idx) => normalizeGalleryItem(g, idx)).filter(Boolean);
+      const hasDlsite = normalized.some(item => (item.source || '').includes('DLsite'));
+      const seenUrls = new Set();
+      const seenRoles = new Set();
+      const gallery = [];
+      for (const item of normalized) {
+        if (!item || !item.url) continue;
+        if (hasDlsite && (item.source === 'Weeab0o' || item.url.includes('weeabo0'))) continue;
+        const cleanUrl = item.url.toLowerCase();
+        if (seenUrls.has(cleanUrl)) continue;
+        if (item.role && seenRoles.has(item.role)) continue;
+        seenUrls.add(cleanUrl);
+        if (item.role) seenRoles.add(item.role);
+        gallery.push({ ...item, id: gallery.length + 1 });
+      }
+      return gallery;
+    }
+
     function openWorkGalleryModal() {
       const modal = document.getElementById('workGalleryModal');
       const grid = document.getElementById('workGalleryModalGrid');
       const title = document.getElementById('workGalleryModalTitle');
       if (!modal || !grid) return;
       
-      const gallery = (currentWork && Array.isArray(currentWork.gallery)) ? currentWork.gallery : [];
+      const rawGallery = (currentWork && currentWork.gallery) ? currentWork.gallery : [];
+      const gallery = getCleanWorkGallery(rawGallery, currentWork && currentWork.rjCode);
+
+      if (currentWork) {
+        currentWork.gallery = gallery;
+      }
       if (title && currentWork) {
         title.innerHTML = '🖼️ Gallery: ' + currentWork.title + ' (' + gallery.length + ')';
       }
@@ -9091,32 +10691,19 @@ const INDEX_HTML = `<!DOCTYPE html>
         galleryViewMode = 'strip';
       }
       updateGalleryViewModeUI();
-      
-      function getSourceBadgeStyle(source) {
-        const s = (source || '').toLowerCase();
-        if (s.includes('dlsite')) {
-          return 'color:#38bdf8; background:rgba(56,189,248,0.15); border:1px solid rgba(56,189,248,0.35);'; // Sapphire Blue / Cyan
-        } else if (s.includes('asmr.one') || s.includes('asmr')) {
-          return 'color:#34d399; background:rgba(16,185,129,0.15); border:1px solid rgba(16,185,129,0.35);'; // Emerald Mint
-        } else if (s.includes('weeab') || s.includes('japaneseasmr')) {
-          return 'color:#c084fc; background:rgba(192,132,252,0.15); border:1px solid rgba(192,132,252,0.35);'; // Violet / Purple
-        }
-        return 'color:#fb923c; background:rgba(251,146,60,0.15); border:1px solid rgba(251,146,60,0.35);'; // Amber Accent
-      }
 
       if (gallery.length === 0) {
         grid.innerHTML = '<div style="color:var(--text-muted); text-align:center; padding:30px; width:100%;">No illustrations or bonus artwork found for this work.</div>';
       } else {
         let html = '';
         gallery.forEach(function(g, gi) {
-          const cap = (g.title || ('Artwork #' + (gi + 1))).replace(/'/g, "\\'");
           const pUrl = g.proxyUrl || g.url;
-          const src = g.source || (g.url && g.url.includes('dlsite') ? 'DLsite' : (g.url && g.url.includes('weeabo0') ? 'Weeab0o' : 'ASMR.one'));
-          const label = g.title ? g.title : ('Page #' + (gi + 1));
+          const src = g.source || 'DLsite Doujin';
+          const label = g.title || ('Page #' + (gi + 1));
           const srcStyle = getSourceBadgeStyle(src);
           html += '<div class="gallery-card" data-idx="' + gi + '" onclick="openLightboxModal(null, null, null, parseInt(this.dataset.idx))">';
           html += '<div class="gallery-thumb-wrap"><img class="gallery-thumb" src="' + pUrl + '" loading="lazy" onerror="handleImgError(this)"></div>';
-          html += '<div class="gallery-card-title" title="' + (g.title || '') + '">' + label + '</div>';
+          html += '<div class="gallery-card-title" title="' + label + '">' + label + '</div>';
           html += '<div class="gallery-card-source" style="font-size:0.72rem; color:var(--text-muted); margin-top:3px; display:flex; justify-content:space-between; align-items:center; width:100%;"><span>#' + (gi + 1) + '</span><span style="font-weight:700; padding:1px 6px; border-radius:4px; font-size:0.68rem; ' + srcStyle + '">' + src + '</span></div>';
           html += '</div>';
         });
@@ -9143,6 +10730,9 @@ const INDEX_HTML = `<!DOCTYPE html>
     let initialPanY = 0;
     let touchInitialDist = 0;
     let touchStartZoom = 1.0;
+    let lightboxTouchStartX = 0;
+    let lightboxTouchStartY = 0;
+    let lightboxLastTapTime = 0;
 
     function updateLightboxTransform(animate = true) {
       const img = document.getElementById('lightboxImg');
@@ -9186,17 +10776,19 @@ const INDEX_HTML = `<!DOCTYPE html>
 
     function onLightboxMouseDown(e) {
       if (e.button !== 0) return; // Left mouse button only
-      isDraggingLightbox = true;
-      startDragX = e.clientX;
-      startDragY = e.clientY;
-      initialPanX = lightboxPanX;
-      initialPanY = lightboxPanY;
-      updateLightboxTransform(false);
-      e.preventDefault();
+      if (lightboxZoomLevel > 1.05) {
+        isDraggingLightbox = true;
+        startDragX = e.clientX;
+        startDragY = e.clientY;
+        initialPanX = lightboxPanX;
+        initialPanY = lightboxPanY;
+        updateLightboxTransform(false);
+        e.preventDefault();
+      }
     }
 
     function onLightboxMouseMove(e) {
-      if (!isDraggingLightbox) return;
+      if (!isDraggingLightbox || lightboxZoomLevel <= 1.05) return;
       const dx = e.clientX - startDragX;
       const dy = e.clientY - startDragY;
       lightboxPanX = initialPanX + dx;
@@ -9216,12 +10808,34 @@ const INDEX_HTML = `<!DOCTYPE html>
 
     function onLightboxTouchStart(e) {
       if (e.touches.length === 1) {
-        isDraggingLightbox = true;
-        startDragX = e.touches[0].clientX;
-        startDragY = e.touches[0].clientY;
-        initialPanX = lightboxPanX;
-        initialPanY = lightboxPanY;
-        updateLightboxTransform(false);
+        const now = Date.now();
+        const touch = e.touches[0];
+        lightboxTouchStartX = touch.clientX;
+        lightboxTouchStartY = touch.clientY;
+
+        // Double-tap to toggle zoom (300ms)
+        if (now - lightboxLastTapTime < 300) {
+          if (lightboxZoomLevel > 1.05) {
+            resetLightboxZoom();
+          } else {
+            lightboxZoomLevel = 2.2;
+            lightboxPanX = 0;
+            lightboxPanY = 0;
+            updateLightboxTransform(true);
+          }
+          lightboxLastTapTime = 0;
+          return;
+        }
+        lightboxLastTapTime = now;
+
+        if (lightboxZoomLevel > 1.05) {
+          isDraggingLightbox = true;
+          startDragX = touch.clientX;
+          startDragY = touch.clientY;
+          initialPanX = lightboxPanX;
+          initialPanY = lightboxPanY;
+          updateLightboxTransform(false);
+        }
       } else if (e.touches.length === 2) {
         isDraggingLightbox = false;
         const dx = e.touches[0].clientX - e.touches[1].clientX;
@@ -9232,7 +10846,7 @@ const INDEX_HTML = `<!DOCTYPE html>
     }
 
     function onLightboxTouchMove(e) {
-      if (e.touches.length === 1 && isDraggingLightbox) {
+      if (e.touches.length === 1 && isDraggingLightbox && lightboxZoomLevel > 1.05) {
         const dx = e.touches[0].clientX - startDragX;
         const dy = e.touches[0].clientY - startDragY;
         lightboxPanX = initialPanX + dx;
@@ -9252,10 +10866,23 @@ const INDEX_HTML = `<!DOCTYPE html>
 
     function onLightboxTouchEnd(e) {
       if (e.touches.length === 0) {
+        if (lightboxZoomLevel <= 1.05 && e.changedTouches && e.changedTouches.length > 0) {
+          const endX = e.changedTouches[0].clientX;
+          const endY = e.changedTouches[0].clientY;
+          const deltaX = endX - lightboxTouchStartX;
+          const deltaY = endY - lightboxTouchStartY;
+          if (Math.abs(deltaX) > 45 && Math.abs(deltaY) < 60) {
+            if (deltaX < 0) {
+              navLightbox(1); // Swipe left -> Next
+            } else {
+              navLightbox(-1); // Swipe right -> Prev
+            }
+          }
+        }
         isDraggingLightbox = false;
         touchInitialDist = 0;
         updateLightboxTransform(false);
-      } else if (e.touches.length === 1) {
+      } else if (e.touches.length === 1 && lightboxZoomLevel > 1.05) {
         startDragX = e.touches[0].clientX;
         startDragY = e.touches[0].clientY;
         initialPanX = lightboxPanX;
@@ -9268,19 +10895,23 @@ const INDEX_HTML = `<!DOCTYPE html>
       const modal = document.getElementById('imageLightboxModal');
       if (!modal) return;
 
+      let sourceList = null;
       if (Array.isArray(galleryList) && galleryList.length > 0) {
-        currentLightboxGallery = galleryList;
-        currentLightboxIndex = (index >= 0 && index < galleryList.length) ? index : 0;
+        sourceList = galleryList;
       } else if (currentWork && Array.isArray(currentWork.gallery) && currentWork.gallery.length > 0) {
-        currentLightboxGallery = currentWork.gallery;
+        sourceList = currentWork.gallery;
+      }
+
+      if (sourceList && sourceList.length > 0) {
+        currentLightboxGallery = getCleanWorkGallery(sourceList);
         if (imgUrl) {
           const foundIdx = currentLightboxGallery.findIndex(g => (g.proxyUrl === imgUrl || g.url === imgUrl));
-          currentLightboxIndex = foundIdx !== -1 ? foundIdx : 0;
+          currentLightboxIndex = foundIdx !== -1 ? foundIdx : (index >= 0 && index < currentLightboxGallery.length ? index : 0);
         } else {
           currentLightboxIndex = (index >= 0 && index < currentLightboxGallery.length) ? index : 0;
         }
       } else if (imgUrl) {
-        currentLightboxGallery = [{ url: imgUrl, proxyUrl: imgUrl, title: caption || '' }];
+        currentLightboxGallery = [normalizeGalleryItem({ url: imgUrl, proxyUrl: imgUrl, title: caption || 'Illustration Preview' }, 0)];
         currentLightboxIndex = 0;
       } else {
         return;
@@ -9288,6 +10919,7 @@ const INDEX_HTML = `<!DOCTYPE html>
 
       resetLightboxZoom();
       renderLightboxCurrent();
+      modal.style.zIndex = '10010';
       modal.style.display = 'flex';
       updateScrollWidgetVisibility();
     }
@@ -9306,8 +10938,8 @@ const INDEX_HTML = `<!DOCTYPE html>
       img.src = item.proxyUrl || item.url || '';
       const total = currentLightboxGallery.length;
       const titleText = item.title || ('Artwork #' + (currentLightboxIndex + 1));
-      const src = item.source || (item.url && item.url.includes('dlsite') ? 'DLsite' : (item.url && item.url.includes('weeabo0') ? 'Weeab0o' : 'ASMR.one'));
-      const srcStyle = (typeof getSourceBadgeStyle === 'function') ? getSourceBadgeStyle(src) : 'color:var(--accent); background:rgba(255,255,255,0.15); border:1px solid rgba(255,255,255,0.25);';
+      const src = item.source || (item.url && item.url.includes('dlsite') ? 'DLsite Doujin' : (item.url && item.url.includes('weeabo0') ? 'Weeab0o' : 'ASMR.one'));
+      const srcStyle = getSourceBadgeStyle(src);
       if (cap) {
         cap.innerHTML = (total > 1 ? '[' + (currentLightboxIndex + 1) + ' / ' + total + '] ' : '') + titleText + ' <span style="font-weight:700; margin-left:8px; font-size:0.78rem; padding:2px 8px; border-radius:4px; ' + srcStyle + '">' + src + '</span>';
       }
@@ -9981,7 +11613,7 @@ const INDEX_HTML = `<!DOCTYPE html>
         } else {
           const t1 = new Date(existing.playedAt || 0).getTime();
           const t2 = new Date(item.playedAt || 0).getTime();
-          if (t2 > t1) {
+          if (t2 >= t1) {
             map.set(key, { ...existing, ...item });
           } else {
             map.set(key, { ...item, ...existing });
@@ -9991,6 +11623,31 @@ const INDEX_HTML = `<!DOCTYPE html>
       const merged = Array.from(map.values());
       merged.sort((a, b) => new Date(b.playedAt || 0) - new Date(a.playedAt || 0));
       return merged.slice(0, 20);
+    }
+
+    async function syncHistoryInBackground() {
+      if (!isAdmin) return;
+      try {
+        let localHistory = [];
+        try {
+          localHistory = JSON.parse(localStorage.getItem('astreamer_play_history') || '[]');
+        } catch(e) { localHistory = []; }
+
+        const res = await apiFetch('/api/history');
+        if (!res.ok) return;
+        const remoteHistory = await res.json();
+        const merged = mergeHistoryLists(remoteHistory, localHistory);
+        try {
+          localStorage.setItem('astreamer_play_history', JSON.stringify(merged));
+        } catch(e) {}
+
+        if (merged.length > 0 && JSON.stringify(merged) !== JSON.stringify(remoteHistory)) {
+          apiFetch('/api/history', {
+            method: 'POST',
+            body: JSON.stringify({ history: merged })
+          }).catch(() => {});
+        }
+      } catch(e) {}
     }
 
     async function loadHistory() {
@@ -10019,11 +11676,11 @@ const INDEX_HTML = `<!DOCTYPE html>
         localStorage.setItem('astreamer_play_history', JSON.stringify(history));
       } catch(e) {}
 
-      // If local had newer items not in remote, sync top item to remote KV
-      if (history.length > 0 && remoteHistory.length > 0 && normRj(history[0].rjCode) !== normRj(remoteHistory[0].rjCode)) {
+      // If local had items not yet in remote, or if merged list differs from remote, push full merged list to KV
+      if (history.length > 0 && JSON.stringify(history) !== JSON.stringify(remoteHistory)) {
         apiFetch('/api/history', {
           method: 'POST',
-          body: JSON.stringify(history[0])
+          body: JSON.stringify({ history: history })
         }).catch(() => {});
       }
 
@@ -10075,7 +11732,7 @@ const INDEX_HTML = `<!DOCTYPE html>
         html += '<td class="w-col-cover"><a href="#/work/' + item.rjCode + '" data-rj="' + item.rjCode + '" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); navWork(this.dataset.rj); }"><img class="list-thumb" src="' + displayCover.coverUrl + '" data-rj="' + item.rjCode + '" onerror="handleImgError(this)"></a></td>';
         html += '<td class="w-col-rj"><a href="#/work/' + item.rjCode + '" data-rj="' + item.rjCode + '" class="card-rj" style="text-decoration:none; display:inline-block;" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); navWork(this.dataset.rj); }">' + item.rjCode + '</a></td>';
         html += '<td class="w-col-title"><a href="#/work/' + item.rjCode + '" data-rj="' + item.rjCode + '" style="color:inherit; text-decoration:none;" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); navWork(this.dataset.rj); }"><strong>' + item.title + '</strong>' + (item.trackTitle ? '<div style="font-size:0.75rem; color:var(--text-muted); margin-top:2px;">Track: ' + item.trackTitle + '</div>' : '') + '</a></td>';
-        html += '<td class="w-col-meta"><div class="w-meta-inner">' + metaLine + '<span style="color:var(--text-muted); font-size:0.72rem; margin-left:4px;" title="' + fullDate + '">🕒 ' + relTime + '</span></div></td>';
+        html += '<td class="w-col-meta"><div class="w-meta-inner">' + metaLine + '<span class="history-mobile-date" style="color:var(--text-muted); font-size:0.72rem; margin-left:4px;" title="' + fullDate + '"> • 🕒 ' + relTime + '</span></div></td>';
         html += '<td class="w-col-date" style="color:var(--text-muted); font-size:0.8rem;" title="' + fullDate + '">🕒 ' + relTime + '</td>';
         html += '<td class="w-col-actions" style="text-align:right;"><button class="btn-outline" style="padding:3px 8px; font-size:0.75rem;" data-rj="' + item.rjCode + '" onclick="event.stopPropagation(); playWorkDirectly(this.dataset.rj)">▶ Play</button></td>';
         html += '</tr>';
@@ -10140,6 +11797,14 @@ const INDEX_HTML = `<!DOCTYPE html>
 
       html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🔑 Admin Authentication Session</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Lock your session or switch admin credentials.</p>';
       html += '<button class="btn-outline" style="border-color: rgba(255,51,102,0.4); color: #ff3366;" onclick="toggleAdminModal()">🚪 Lock / Log Out Admin</button></div>';
+
+      // 🛠️ Developer Mode & Activity Diagnostics Log
+      const devModeActive = isDevModeEnabled();
+      html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🛠️ Developer Diagnostics &amp; Activity Log</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Log background scraper events, network requests, audio resolutions, and playback errors into a lightweight rolling local cache buffer.</p>';
+      html += '<div style="display:flex; flex-direction:column; gap:12px;">';
+      html += '<label style="display: flex; align-items: center; gap: 12px; cursor: pointer; user-select: none; background: rgba(255,255,255,0.04); padding: 12px 16px; border-radius: 10px; border: 1px solid var(--border);"><input type="checkbox" id="toggleDevMode" ' + (devModeActive ? 'checked' : '') + ' onchange="setDevMode(this.checked)" style="width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer;"><div><div style="font-weight: 700; font-size: 0.95rem; color: #fff;">Enable Dev Diagnostics Mode (Default On)</div><div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 2px;">Records rolling logs for the last 100 activities and errors without consuming server KV storage.</div></div></label>';
+      html += '<div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center;"><button class="btn-primary" onclick="openDevLogModal()">📋 Open Activity Log Viewer</button><button class="btn-outline" onclick="clearDevLogs()">🗑️ Clear Log Cache</button><button class="btn-outline" onclick="exportDevLogs()">💾 Download .log File</button></div>';
+      html += '</div></div>';
 
       html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🚀 aStreamer v2.0 Milestone Release</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Instant Batch Ingestion with Parallel Fast-Probing, On-Demand Lazy Audio Stream Extraction, Custom Accent Color Themes (Orange Default), and Streamlined Audio Controls.</p>';
       html += '<button class="btn-outline" onclick="openChangelogModal()">📜 View Version 2.0 Release Notes & Architecture</button></div>';
@@ -10360,9 +12025,10 @@ const INDEX_HTML = `<!DOCTYPE html>
             reqDur = Math.round(workItem.tracks[0].duration);
           }
         }
-        if (reqDur > 0) {
-          apiUrl += '?duration=' + reqDur;
-        }
+        const qParams = [];
+        if (force) qParams.push('force=true');
+        if (reqDur > 0) qParams.push('duration=' + reqDur);
+        if (qParams.length > 0) apiUrl += '?' + qParams.join('&');
         const res = await apiFetch(apiUrl);
         const data = await res.json();
         if (data && data.success) {
@@ -10418,6 +12084,25 @@ const INDEX_HTML = `<!DOCTYPE html>
                   playTrack(0, true, currentPlayingWork);
                 }
               }
+            } else {
+              const alignDurations = (workObj) => {
+                if (!workObj || !Array.isArray(workObj.tracks)) return;
+                data.audioTracks.forEach((gt, idx) => {
+                  if (gt.duration > 0 && workObj.tracks[idx]) {
+                    workObj.tracks[idx].duration = gt.duration;
+                    workObj.tracks[idx].formattedTime = formatTime(gt.duration);
+                  }
+                });
+              };
+              if (target) alignDurations(target);
+              if (currentWork && normRj(currentWork.rjCode) === normRj(rjCode)) {
+                alignDurations(currentWork);
+                updatedUI = true;
+              }
+              if (currentPlayingWork && normRj(currentPlayingWork.rjCode) === normRj(rjCode)) {
+                alignDurations(currentPlayingWork);
+                updatedUI = true;
+              }
             }
           } else {
             if (target && target.tracks && target.tracks.some(t => t.isLazy && !t.rawUrl)) {
@@ -10448,14 +12133,15 @@ const INDEX_HTML = `<!DOCTYPE html>
           }
 
           if (Array.isArray(data.gallery)) {
-            if (target) target.gallery = data.gallery;
+            const cleanGal = getCleanWorkGallery(data.gallery);
+            if (target) target.gallery = cleanGal;
             if (currentWork && normRj(currentWork.rjCode) === normRj(rjCode)) {
-              currentWork.gallery = data.gallery;
+              currentWork.gallery = cleanGal;
               const gBtn = document.getElementById('btnWorkGallery');
               const gCount = document.getElementById('btnWorkGalleryCount');
               if (gBtn && gCount) {
-                gCount.innerText = data.gallery.length;
-                gBtn.style.display = data.gallery.length > 0 ? 'inline-flex' : 'none';
+                gCount.innerText = cleanGal.length;
+                gBtn.style.display = cleanGal.length > 0 ? 'inline-flex' : 'none';
               }
               updatedUI = true;
             }
@@ -10726,7 +12412,8 @@ const INDEX_HTML = `<!DOCTYPE html>
     async function refreshSingleWork(rjCode, btnEl, isAuto = false) {
       const cleanRjKey = normRj(rjCode);
       workAutoRefreshedInSession.add(cleanRjKey);
-      const origHtml = '🔄 Refresh';
+      const origHtml = '🔄 Refetch';
+      devLog('INFO', 'REFETCH', 'Starting fresh refetch & audio probe for ' + rjCode + (isAuto ? ' (auto-visit)' : ' (manual)'));
 
       const updateStageText = (txt) => {
         singleWorkRefreshStages.set(cleanRjKey, txt);
@@ -10743,66 +12430,178 @@ const INDEX_HTML = `<!DOCTYPE html>
         chapterFetchCache.delete(rjCode);
         chapterFetchCache.delete(cleanRjKey);
 
+        const idx = allWorks.findIndex(w => normRj(w.rjCode) === cleanRjKey);
+        const existingWorkObj = idx !== -1 ? allWorks[idx] : currentWork;
+
         // -------------------------------------------------------------
-        // PHASE 1: 🎵 Fast Tracks Stream Fetch
+        // PHASE 1: 🎵 Fast Tracks & Chapters Stream Fetch (Always force fresh fetch on refetch)
         // -------------------------------------------------------------
         updateStageText('[1/4] 🎵 Tracks...');
-        showToast('🎵 [1/4] Resolving tracks for ' + rjCode + '...', 3000);
+        showToast('🎵 [1/4] Resolving tracks for ' + rjCode + '...', 2500);
+        devLog('INFO', 'REFETCH', '[Phase 1] Probing chapters & audio streams for ' + rjCode);
         const chapData = await fetchChaptersLazy(rjCode, true);
-        await new Promise(r => setTimeout(r, 220));
+        devLog('INFO', 'REFETCH', '[Phase 1] Probed tracks result for ' + rjCode, { audioTracks: chapData?.audioTracks?.length || 0, sampleTracks: chapData?.sampleTracks?.length || 0 });
 
         // -------------------------------------------------------------
         // PHASE 2: 🏷️ Tags, CV, Circle & Metadata Refresh
         // -------------------------------------------------------------
         updateStageText('[2/4] 🏷️ CV & Tags...');
-        showToast('🏷️ [2/4] Updating CV, Circle & Tags for ' + rjCode + '...', 3000);
-        const metaRes = await apiFetch('/api/library/refresh/' + encodeURIComponent(rjCode), { method: 'POST' });
-        const metaData = await metaRes.json();
+        showToast('🏷️ [2/4] Updating CV, Circle & Tags for ' + rjCode + '...', 2500);
+
+        // Assist backend with direct client-side probe (bypasses Cloudflare Worker datacenter IP block)
+        let clientMoeInfo = null;
+        try {
+          const rawLower = String(rjCode || '').toLowerCase().trim();
+          const cleanLower = cleanRjKey.toLowerCase();
+          const cleanUpper = cleanRjKey.toUpperCase();
+          const cleanNum = cleanRjKey.replace(/^(?:RJ|VJ|BJ)/i, '');
+          const strippedNum = cleanNum.replace(/^0+/, '');
+          
+          const slugCandidates = Array.from(new Set([
+            rawLower,
+            cleanLower,
+            'rj' + cleanNum,
+            'rj' + strippedNum,
+            cleanNum,
+            strippedNum
+          ])).filter(Boolean);
+
+          for (const s of slugCandidates) {
+            if (clientMoeInfo) break;
+            const clientWpUrl = 'https://hentaiasmr.moe/wp-json/wp/v2/posts?slug=' + encodeURIComponent(s) + '&_embed=1';
+            devLog('TRACE', 'CLIENT_PROBE', 'Client probing WP REST slug: ' + clientWpUrl);
+            try {
+              const cRes = await fetch(clientWpUrl, { headers: { 'Accept': 'application/json' } });
+              if (cRes.ok) {
+                const cPosts = await cRes.json();
+                if (Array.isArray(cPosts) && cPosts.length > 0 && cPosts[0].id) {
+                  const p = cPosts[0];
+                  clientMoeInfo = {
+                    postId: p.id,
+                    title: p.title?.rendered ? p.title.rendered.replace(/&#8211;|&#8212;/g, '-').replace(/&amp;/g, '&') : '',
+                    url: 'https://cdn.hentaiasmr.moe/mf/' + p.id + '/merge/' + cleanUpper + '.mp3',
+                    link: p.link || ('https://hentaiasmr.moe/' + rawLower + '.html')
+                  };
+                  devLog('INFO', 'CLIENT_PROBE', '✅ Client discovered Moe Post ID: ' + p.id + ' via slug (' + s + ') -> ' + clientMoeInfo.url);
+                  break;
+                }
+              }
+            } catch (e) {}
+          }
+
+          if (!clientMoeInfo) {
+            const searchUrl = 'https://hentaiasmr.moe/wp-json/wp/v2/posts?search=' + encodeURIComponent(cleanUpper) + '&per_page=5&_embed=1';
+            devLog('TRACE', 'CLIENT_PROBE', 'Client searching WP REST: ' + searchUrl);
+            try {
+              const sRes = await fetch(searchUrl, { headers: { 'Accept': 'application/json' } });
+              if (sRes.ok) {
+                const sPosts = await sRes.json();
+                if (Array.isArray(sPosts) && sPosts.length > 0) {
+                  const validSlugs = [rawLower, cleanLower, 'rj' + cleanNum, 'rj' + strippedNum, cleanNum, strippedNum];
+                  const p = sPosts.find(item => {
+                    const postSlug = (item.slug || '').toLowerCase();
+                    const postTitle = (item.title?.rendered || '').toLowerCase();
+                    const postLink = (item.link || '').toLowerCase();
+                    return validSlugs.some(v => postSlug === v || postSlug.includes(v) || postLink.includes(v) || postTitle.includes(v));
+                  }) || sPosts[0];
+                  if (p && p.id) {
+                    clientMoeInfo = {
+                      postId: p.id,
+                      title: p.title?.rendered ? p.title.rendered.replace(/&#8211;|&#8212;/g, '-').replace(/&amp;/g, '&') : '',
+                      url: 'https://cdn.hentaiasmr.moe/mf/' + p.id + '/merge/' + cleanUpper + '.mp3',
+                      link: p.link || ('https://hentaiasmr.moe/' + rawLower + '.html')
+                    };
+                    devLog('INFO', 'CLIENT_PROBE', '✅ Client discovered Moe Post ID: ' + p.id + ' via search -> ' + clientMoeInfo.url);
+                  }
+                }
+              }
+            } catch (e) {}
+          }
+        } catch (cpErr) {
+          devLog('TRACE', 'CLIENT_PROBE', 'Client WP REST probe error: ' + cpErr.message);
+        }
+
+        devLog('INFO', 'REFETCH', '[Phase 2] Requesting backend reprobe & metadata refresh for ' + rjCode);
+        let metaData = null;
+        try {
+          const refreshUrl = '/api/library/refresh/' + encodeURIComponent(rjCode) + '?force=true&reprobeAudio=true';
+          const metaRes = await apiFetch(refreshUrl, {
+            method: 'POST',
+            body: clientMoeInfo ? JSON.stringify({ clientMoe: clientMoeInfo }) : undefined
+          });
+          if (metaRes.ok) {
+            metaData = await metaRes.json();
+            devLog('INFO', 'REFETCH', '[Phase 2] Backend reprobe succeeded for ' + rjCode, { success: metaData.success, trackCount: metaData.work?.tracks?.length || 0 });
+          } else {
+            devLog('WARN', 'REFETCH', '[Phase 2] Backend refresh returned status ' + metaRes.status + ' for ' + rjCode);
+          }
+        } catch (mErr) {
+          devLog('ERROR', 'REFETCH', '[Phase 2] Backend refresh error for ' + rjCode + ': ' + mErr.message);
+        }
+
+        const freshWork = (metaData && metaData.work) || {};
+        const freshTracks = (freshWork.tracks && Array.isArray(freshWork.tracks) && freshWork.tracks.length > 0 && !freshWork.tracks[0].isLazy)
+          ? freshWork.tracks
+          : ((chapData && Array.isArray(chapData.audioTracks) && chapData.audioTracks.length > 0) ? chapData.audioTracks : (freshWork.tracks || existingWorkObj?.tracks || []));
+        const freshGallery = (chapData && Array.isArray(chapData.gallery) && chapData.gallery.length > 0) ? chapData.gallery : (freshWork.gallery || existingWorkObj?.gallery || []);
+        const freshChapters = (chapData && Array.isArray(chapData.chapters) && chapData.chapters.length > 0) ? chapData.chapters : (freshWork.chapters || existingWorkObj?.chapters || []);
+        const freshSamples = (chapData && Array.isArray(chapData.sampleTracks) && chapData.sampleTracks.length > 0) ? chapData.sampleTracks : (freshWork.sampleTracks || existingWorkObj?.sampleTracks || []);
+
+        const existingCover = (idx !== -1 && allWorks[idx].coverUrl) || (currentWork && currentWork.coverUrl) || '';
 
         if (metaData && metaData.success && metaData.work) {
-          const idx = allWorks.findIndex(w => normRj(w.rjCode) === cleanRjKey);
-          const existingCover = (idx !== -1 && allWorks[idx].coverUrl) || (currentWork && currentWork.coverUrl) || '';
           if (idx !== -1) {
             allWorks[idx] = Object.assign({}, allWorks[idx], metaData.work);
-            if ((!allWorks[idx].coverUrl || allWorks[idx].coverUrl.includes('placeholder')) && existingCover && !existingCover.includes('placeholder')) {
-              allWorks[idx].coverUrl = existingCover;
-            }
+          } else {
+            allWorks.unshift(metaData.work);
           }
           if (currentWork && normRj(currentWork.rjCode) === cleanRjKey) {
-            const curTracks = currentWork.tracks;
-            const curGallery = currentWork.gallery;
-            const curChapters = currentWork.chapters;
-            const curCover = currentWork.coverUrl || existingCover;
             currentWork = Object.assign({}, currentWork, metaData.work);
-            if (curTracks && curTracks.length > 1) currentWork.tracks = curTracks;
-            if (curGallery && curGallery.length > 0) currentWork.gallery = curGallery;
-            if (curChapters && curChapters.length > 0) currentWork.chapters = curChapters;
-            if ((!currentWork.coverUrl || currentWork.coverUrl.includes('placeholder')) && curCover && !curCover.includes('placeholder')) {
-              currentWork.coverUrl = curCover;
-            }
+          }
+          // Remove from wishlist if it was wishlisted
+          if (window.wishlist && Array.isArray(window.wishlist)) {
+            window.wishlist = window.wishlist.filter(w => normRj(w.rjCode) !== cleanRjKey);
+            updateWishlistBadge();
           }
         }
-        await new Promise(r => setTimeout(r, 220));
+
+        const targetIdx = allWorks.findIndex(w => normRj(w.rjCode) === cleanRjKey);
+        if (targetIdx !== -1) {
+          if (freshTracks && freshTracks.length > 0) allWorks[targetIdx].tracks = freshTracks;
+          if (freshGallery && freshGallery.length > 0) allWorks[targetIdx].gallery = freshGallery;
+          if (freshChapters && freshChapters.length > 0) allWorks[targetIdx].chapters = freshChapters;
+          if (freshSamples && freshSamples.length > 0) allWorks[targetIdx].sampleTracks = freshSamples;
+          if ((!allWorks[targetIdx].coverUrl || allWorks[targetIdx].coverUrl.includes('placeholder')) && existingCover && !existingCover.includes('placeholder')) {
+            allWorks[targetIdx].coverUrl = existingCover;
+          }
+        }
+        if (currentWork && normRj(currentWork.rjCode) === cleanRjKey) {
+          if (freshTracks && freshTracks.length > 0) currentWork.tracks = freshTracks;
+          if (freshGallery && freshGallery.length > 0) currentWork.gallery = freshGallery;
+          if (freshChapters && freshChapters.length > 0) currentWork.chapters = freshChapters;
+          if (freshSamples && freshSamples.length > 0) currentWork.sampleTracks = freshSamples;
+          if ((!currentWork.coverUrl || currentWork.coverUrl.includes('placeholder')) && existingCover && !existingCover.includes('placeholder')) {
+            currentWork.coverUrl = existingCover;
+          }
+        }
 
         // -------------------------------------------------------------
-        // PHASE 3: 📑 Chapters & Cue Alignment
+        // PHASE 3: 📑 Chapters & Cue Alignment (Skip if already scraped in this refetch pass)
         // -------------------------------------------------------------
-        updateStageText('[3/4] 📑 Chapters...');
-        showToast('📑 [3/4] Aligning chapters & timestamps...', 3000);
-        const chapsCount = (chapData && Array.isArray(chapData.chapters)) ? chapData.chapters.length : ((currentWork && Array.isArray(currentWork.chapters)) ? currentWork.chapters.length : 0);
-        await new Promise(r => setTimeout(r, 220));
+        const chapsCount = (freshChapters && Array.isArray(freshChapters)) ? freshChapters.length : 0;
+        if (chapsCount === 0) {
+          updateStageText('[3/4] 📑 Chapters...');
+        }
 
         // -------------------------------------------------------------
-        // PHASE 4: 🖼️ Artwork & Gallery Finalization
+        // PHASE 4: 🖼️ Artwork & Gallery Finalization (Skip if already scraped in this refetch pass)
         // -------------------------------------------------------------
-        updateStageText('[4/4] 🖼️ Artwork...');
-        showToast('🖼️ [4/4] Finalizing illustrations & artwork...', 3000);
-        const galleryCount = (chapData && Array.isArray(chapData.gallery)) ? chapData.gallery.length : ((currentWork && Array.isArray(currentWork.gallery)) ? currentWork.gallery.length : 0);
-        const tracksCount = (currentWork && Array.isArray(currentWork.tracks)) ? currentWork.tracks.length : 0;
+        const galleryCount = (freshGallery && Array.isArray(freshGallery)) ? freshGallery.length : 0;
+        const tracksCount = (freshTracks && Array.isArray(freshTracks)) ? freshTracks.length : 0;
         const tagsCount = (currentWork && Array.isArray(currentWork.tags)) ? currentWork.tags.length : 0;
-        await new Promise(r => setTimeout(r, 220));
 
         singleWorkRefreshStages.delete(cleanRjKey);
+        devLog('INFO', 'REFETCH', 'Refetch completed successfully for ' + rjCode, { tracks: tracksCount, chapters: chapsCount, gallery: galleryCount, tags: tagsCount });
 
         // Synchronize and render UI cleanly when all phases have completed
         if (currentView === 'work-detail' && currentWork && normRj(currentWork.rjCode) === cleanRjKey) {
@@ -10816,7 +12615,7 @@ const INDEX_HTML = `<!DOCTYPE html>
                 const b = document.getElementById('btnWorkRefresh');
                 if (b && b.dataset.rj && normRj(b.dataset.rj) === cleanRjKey) {
                   b.disabled = false;
-                  b.innerHTML = '🔄 Refresh';
+                  b.innerHTML = '🔄 Refetch';
                 }
               }
             }, 2000);
@@ -10833,6 +12632,7 @@ const INDEX_HTML = `<!DOCTYPE html>
         showToast('✨ ' + rjCode + ': Up-to-date' + asmrMsg, 4000);
       } catch (e) {
         singleWorkRefreshStages.delete(cleanRjKey);
+        devLog('ERROR', 'REFETCH', 'Refetch exception for ' + rjCode + ': ' + e.message);
         if (!isAuto && e.message !== 'Unauthorized') {
           showToast('❌ Refresh error: ' + (e.message || 'Unknown error'), 4000);
         }
@@ -11516,14 +13316,20 @@ const INDEX_HTML = `<!DOCTYPE html>
     }
 
     function normalizeStreamUrl(url, cleanRj = '', referer = '') {
-      if (!url && cleanRj) return '/stream?url=' + encodeURIComponent('https://v.weeab0o.xyz/' + cleanRj + '.m3u8') + '&referer=' + encodeURIComponent('https://japaneseasmr.com/');
+      if (!url && cleanRj) return '/stream?url=' + encodeURIComponent('https://v.weeab0o.xyz/' + cleanRj + '.m3u8') + '&referer=' + encodeURIComponent('https://japaneseasmr.com/') + '&rj=' + encodeURIComponent(cleanRj);
       if (!url) return '';
       let u = url.trim();
       if (u.startsWith('//')) u = 'https:' + u;
-      if (u.startsWith('/stream?url=') || u.startsWith('/stream-proxy?url=')) return u;
+      if (u.startsWith('/stream?url=') || u.startsWith('/stream-proxy?url=')) {
+        if (cleanRj && !u.includes('&rj=')) {
+          u += '&rj=' + encodeURIComponent(cleanRj);
+        }
+        return u;
+      }
       if (u.startsWith('http://') || u.startsWith('https://')) {
         let res = '/stream?url=' + encodeURIComponent(u);
         if (referer) res += '&referer=' + encodeURIComponent(referer);
+        if (cleanRj && !res.includes('&rj=')) res += '&rj=' + encodeURIComponent(cleanRj);
         return res;
       }
       return u;
@@ -11840,9 +13646,23 @@ const INDEX_HTML = `<!DOCTYPE html>
     audio.addEventListener('loadedmetadata', () => {
       const dur = audio.duration;
       if (dur && !isNaN(dur) && dur > 0 && currentPlayingWork) {
+        const roundedDur = Math.round(dur);
         if (currentPlayingWork.tracks && currentPlayingWork.tracks[currentTrackIndex]) {
-          currentPlayingWork.tracks[currentTrackIndex].duration = Math.round(dur);
-          currentPlayingWork.tracks[currentTrackIndex].formattedTime = formatTime(Math.round(dur));
+          currentPlayingWork.tracks[currentTrackIndex].duration = roundedDur;
+          currentPlayingWork.tracks[currentTrackIndex].formattedTime = formatTime(roundedDur);
+        }
+        if (currentWork && normRj(currentWork.rjCode) === normRj(currentPlayingWork.rjCode)) {
+          if (currentWork.tracks && currentWork.tracks[currentTrackIndex]) {
+            currentWork.tracks[currentTrackIndex].duration = roundedDur;
+            currentWork.tracks[currentTrackIndex].formattedTime = formatTime(roundedDur);
+          }
+          const rowEl = document.getElementById('track-row-' + currentTrackIndex);
+          if (rowEl) {
+            const badge = rowEl.querySelector('.track-dur-badge');
+            if (badge) {
+              badge.innerText = '(' + formatTime(roundedDur) + ')';
+            }
+          }
         }
         const numTracks = (currentPlayingWork.tracks) ? currentPlayingWork.tracks.length : 1;
         if (numTracks <= 1 && Array.isArray(currentPlayingWork.chapters) && currentPlayingWork.chapters.length > 0) {
