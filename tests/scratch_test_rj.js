@@ -1,23 +1,19 @@
-const { fetchDlsiteMetadata, fetchHentaiAsmrMetadata, resolveRjMetadataOnly } = require('./scraper');
+const { probeMediaCdn, fetchHentaiAsmrMetadata } = require('../scraper');
 
 async function test() {
-  for (const rj of ['RJ01706082', 'RJ01433932']) {
-    console.log(`\n========================================`);
-    console.log(`🔍 Probing ${rj}`);
-    console.log(`========================================`);
+  console.log('=== Testing RJ01189109 ===');
+  const res1 = await probeMediaCdn('RJ01189109');
+  console.log('Selected Source:', res1.source);
+  console.log('Track Count:', res1.tracks.length);
+  console.log('Tracks:');
+  res1.tracks.forEach(t => console.log(`  [${t.id}] ${t.title} (${t.formattedTime || t.duration + 's'}) [cat: ${t.category}]`));
 
-    console.log(`\n--- 1. DLsite Metadata ---`);
-    const dlsite = await fetchDlsiteMetadata(rj);
-    console.log(dlsite);
-
-    console.log(`\n--- 2. HentaiASMR Metadata ---`);
-    const moe = await fetchHentaiAsmrMetadata(rj);
-    console.log(moe);
-
-    console.log(`\n--- 3. resolveRjMetadataOnly ---`);
-    const resolved = await resolveRjMetadataOnly(rj);
-    console.log(resolved);
-  }
+  console.log('\n=== Testing RJ296130 ===');
+  const res2 = await probeMediaCdn('RJ296130');
+  console.log('Selected Source:', res2.source);
+  console.log('Track Count:', res2.tracks.length);
+  console.log('Tracks:');
+  res2.tracks.forEach(t => console.log(`  [${t.id}] ${t.title} (${t.formattedTime || t.duration + 's'}) [cat: ${t.category}]`));
 }
 
-test();
+test().catch(console.error);

@@ -22,7 +22,7 @@ const http = require('http');
 const https = require('https');
 
 const db = require('./db');
-const { resolveAndSaveWork, resolveRjMetadataOnly, batchImport, fetchChaptersForRj, fetchChaptersAndGallery, resolveLazyWorkAudio, isWorkMetadataChanged } = require('./scraper');
+const { resolveAndSaveWork, resolveRjMetadataOnly, batchImport, fetchChaptersForRj, fetchChaptersAndGallery, resolveLazyWorkAudio, isWorkMetadataChanged, normalizeReleaseDate } = require('./scraper');
 
 const httpAgent = new http.Agent({ family: 4 });
 const httpsAgent = new https.Agent({ family: 4 });
@@ -1454,13 +1454,13 @@ const INDEX_HTML = `<!DOCTYPE html>
       box-shadow: 0 0 10px rgba(255, 122, 0, 0.25);
     }
     .mobile-search-bar.tags-bar input {
-      border-color: rgba(167, 139, 250, 0.45);
-      color: #ddd6fe;
+      border-color: var(--border);
+      color: #fff;
       cursor: pointer;
     }
     .mobile-search-bar.tags-bar input:focus {
-      border-color: rgba(167, 139, 250, 0.8);
-      box-shadow: 0 0 10px rgba(167, 139, 250, 0.3);
+      border-color: var(--accent);
+      box-shadow: 0 0 10px var(--accent-glow);
     }
     .mobile-pill {
       display: inline-flex;
@@ -1479,6 +1479,22 @@ const INDEX_HTML = `<!DOCTYPE html>
     }
     .mobile-pill:hover { color: #fff; }
     .mobile-pill.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .mobile-import-banner {
+      display: none;
+      position: fixed;
+      top: 94px;
+      left: 0;
+      right: 0;
+      height: 38px;
+      padding: 0 12px;
+      background: rgba(14, 17, 26, 0.96);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-bottom: 1px solid rgba(56, 189, 248, 0.4);
+      box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+      z-index: 58;
+      align-items: center;
+    }
 
     /* Main Container */
     .app-main { margin-left: var(--sidebar-w); flex: 1; padding: 84px 36px 120px; min-height: 100vh; }
@@ -1542,7 +1558,7 @@ const INDEX_HTML = `<!DOCTYPE html>
       background: rgba(18, 22, 36, 0.96);
       border: 1px solid rgba(255, 255, 255, 0.15);
       border-radius: 16px;
-      box-shadow: 0 30px 90px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.05), 0 0 30px rgba(124, 92, 252, 0.15);
+      box-shadow: 0 30px 90px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.05), 0 0 30px var(--accent-glow);
       overflow: hidden;
       display: flex;
       flex-direction: column;
@@ -2333,6 +2349,12 @@ const INDEX_HTML = `<!DOCTYPE html>
         max-height: 380px;
         object-fit: cover;
         border-radius: 12px;
+        cursor: pointer;
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+      }
+      .detail-cover:active {
+        transform: scale(0.97);
+        box-shadow: 0 0 16px rgba(255, 51, 102, 0.4);
       }
       .detail-info {
         width: 100%;
@@ -3273,10 +3295,7 @@ const INDEX_HTML = `<!DOCTYPE html>
       <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; flex-shrink: 0;">
         <div style="display: flex; align-items: center; gap: 10px;">
           <div style="font-size: 1.6rem;">📑</div>
-          <div>
-            <h3 class="modal-title" style="margin: 0; font-size: 1.25rem; color: #fff;">Visual Page Import</h3>
-            <div style="font-size: 0.8rem; color: #94a3b8; margin-top: 2px;">Paste raw webpage text (Ctrl+A / Ctrl+C), preview works in carousel, and choose which ones to import.</div>
-          </div>
+          <h3 class="modal-title" style="margin: 0; font-size: 1.25rem; color: #fff;">Visual Page Import</h3>
         </div>
         <button class="btn-outline" style="padding: 4px 10px;" onclick="closePageImportModal()">✖</button>
       </div>
@@ -3286,12 +3305,11 @@ const INDEX_HTML = `<!DOCTYPE html>
         <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 10px;">Paste copied catalog text from Japanese ASMR, DLsite, or any webpage containing RJ codes:</p>
         <textarea id="pageImportTextarea" class="modal-textarea" style="flex: 1; min-height: 220px; height: auto;" placeholder="Paste raw page text here (e.g. copied from Japanese ASMR tag page, ranking, or author page)...&#10;&#10;Example:&#10;[260603][にゃんにゃんぼいす] 【密着淫語囁き】Wバニー... [RJ01609839]&#10;CV: 雲八はち, Minase Suzuka"></textarea>
         <div style="margin-top: 12px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
-          <div style="display: flex; align-items: center; gap: 10px;">
-            <input type="file" id="pageImportFileInput" accept=".txt" style="font-size: 0.82rem; color: var(--text-muted);" onchange="handlePageImportFileUpload(event)">
-            <button class="btn-outline" type="button" onclick="clearPageImportText()" style="padding: 4px 10px; font-size: 0.82rem; color: #f87171; border-color: rgba(248,113,113,0.35);" title="Clear pasted text">🗑️ Clear</button>
+          <div style="display: flex; align-items: center; gap: 10px; flex: 1; min-width: 180px;">
+            <input type="file" id="pageImportFileInput" accept=".txt" style="font-size: 0.82rem; color: var(--text-muted); max-width: 100%;" onchange="handlePageImportFileUpload(event)">
           </div>
-          <div style="display: flex; gap: 10px;">
-            <button class="btn-outline" onclick="closePageImportModal()">Cancel</button>
+          <div style="display: flex; gap: 10px; align-items: center;">
+            <button class="btn-outline" type="button" onclick="clearPageImportText()" style="padding: 7px 14px; font-size: 0.85rem; color: #f87171; border-color: rgba(248,113,113,0.4);" title="Clear pasted text">🗑️ Clear</button>
             <button class="btn-primary" onclick="parseAndShowPagePreview()">🔍 Parse &amp; Preview Works</button>
           </div>
         </div>
@@ -3590,8 +3608,8 @@ const INDEX_HTML = `<!DOCTYPE html>
 
   <!-- Mobile Horizontal Nav Pills (Row 2: Category Tabs + Settings + Admin) -->
   <nav class="mobile-nav-pills">
-    <a href="#/library" class="mobile-pill active" data-view="library" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); switchView('library'); }">📚 Library</a>
     <a href="#/lucky" class="mobile-pill" data-view="lucky" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); switchView('lucky'); }">🍀 Lucky</a>
+    <a href="#/library" class="mobile-pill active" data-view="library" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); switchView('library'); }">📚 Library</a>
     <a href="#/playlists" class="mobile-pill" data-view="playlists" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); switchView('playlists'); }">📜 Playlists</a>
     <a href="#/history" class="mobile-pill" data-view="history" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); switchView('history'); }">🕒 History</a>
     <a href="#/wishlist" class="mobile-pill" data-view="wishlist" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); switchView('wishlist'); }">📋 Wishlist</a>
@@ -3606,21 +3624,21 @@ const INDEX_HTML = `<!DOCTYPE html>
     <button class="mobile-pill" id="mobileAdminBtn" onclick="toggleAdminModal()">🔓 Admin</button>
   </nav>
 
-  <!-- Mobile Background Ingestion Banner -->
-  <div id="mobileImportBanner" style="display: none; margin: 8px 12px; padding: 10px 14px; background: rgba(14, 17, 26, 0.95); border: 1px solid rgba(56, 189, 248, 0.4); border-radius: 10px; box-shadow: 0 6px 20px rgba(0,0,0,0.8); backdrop-filter: blur(10px);">
-    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;">
-      <div style="display: flex; align-items: center; gap: 6px; font-size: 0.82rem; font-weight: 700; color: #fff;">
+  <!-- Mobile Background Ingestion Banner (Fixed Row 3 under nav pills on mobile) -->
+  <div id="mobileImportBanner" class="mobile-import-banner">
+    <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%;">
+      <div style="display: flex; align-items: center; gap: 6px; font-size: 0.8rem; font-weight: 700; color: #fff; flex-shrink: 0;">
         <span>📥</span>
-        <span>Batch Importing</span>
+        <span>Importing</span>
         <span id="mobileImportPct" style="color: #38bdf8; font-size: 0.78rem; font-weight: 800;">0%</span>
       </div>
-      <div style="display: flex; gap: 5px;">
-        <button class="btn-outline" style="padding: 2px 8px; font-size: 0.72rem; color: #38bdf8; border-color: rgba(56,189,248,0.4);" onclick="expandImportFromDock()">🔍 Logs</button>
-        <button class="btn-outline" id="mobileBtnStop" style="padding: 2px 8px; font-size: 0.72rem; color: #ef4444; border-color: rgba(239,68,68,0.4);" onclick="stopImportFromDock()">⏹️ Stop</button>
+      <div id="mobileImportStatus" style="font-size: 0.72rem; color: #94a3b8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0;">Importing...</div>
+      <div style="display: flex; gap: 4px; flex-shrink: 0;">
+        <button class="btn-outline" style="padding: 2px 7px; font-size: 0.7rem; color: #38bdf8; border-color: rgba(56,189,248,0.4);" onclick="expandImportFromDock()">🔍 Logs</button>
+        <button class="btn-outline" id="mobileBtnStop" style="padding: 2px 7px; font-size: 0.7rem; color: #ef4444; border-color: rgba(239,68,68,0.4);" onclick="stopImportFromDock()">⏹️ Stop</button>
       </div>
     </div>
-    <div id="mobileImportStatus" style="font-size: 0.74rem; color: #94a3b8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 5px;">Importing...</div>
-    <div style="width: 100%; height: 4px; background: rgba(255,255,255,0.1); border-radius: 2px; overflow: hidden;">
+    <div style="position: absolute; bottom: 0; left: 0; right: 0; height: 3px; background: rgba(255,255,255,0.1);">
       <div id="mobileImportProgressBar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #ff3366, #38bdf8); transition: width 0.2s;"></div>
     </div>
   </div>
@@ -3659,8 +3677,8 @@ const INDEX_HTML = `<!DOCTYPE html>
 
     <nav class="nav-section">
       <div class="nav-title">Menu</div>
-      <a href="#/library" class="nav-item active" data-view="library" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); switchView('library'); }">📚 Library</a>
       <a href="#/lucky" class="nav-item" data-view="lucky" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); switchView('lucky'); }">🍀 Lucky Insights</a>
+      <a href="#/library" class="nav-item active" data-view="library" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); switchView('library'); }">📚 Library</a>
       <a href="#/playlists" class="nav-item" data-view="playlists" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); switchView('playlists'); }">📜 Playlists</a>
       <a href="#/history" class="nav-item" data-view="history" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); switchView('history'); }">🕒 History</a>
       <a href="#/wishlist" class="nav-item" data-view="wishlist" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); switchView('wishlist'); }">
@@ -4033,6 +4051,72 @@ const INDEX_HTML = `<!DOCTYPE html>
       }
 
       return Array.from(new Set(results)).join(', ');
+    }
+
+    function normalizeReleaseDate(dateInput) {
+      if (!dateInput) return '';
+      const str = String(dateInput).trim();
+      if (!str) return '';
+
+      // 1. ISO format: 2024-09-14
+      const isoMatch = str.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+      if (isoMatch) {
+        const y = isoMatch[1];
+        const m = isoMatch[2].padStart(2, '0');
+        const d = isoMatch[3].padStart(2, '0');
+        return y + '-' + m + '-' + d;
+      }
+
+      // 2. Japanese format: 2024年09月14日
+      const jaMatch = str.match(/(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/);
+      if (jaMatch) {
+        const y = jaMatch[1];
+        const m = jaMatch[2].padStart(2, '0');
+        const d = jaMatch[3].padStart(2, '0');
+        return y + '-' + m + '-' + d;
+      }
+
+      // 3. Month Name format: Sep/14/2024, Sep 14, 2024
+      const monthMap = {
+        jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
+        jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12'
+      };
+      const monthNameMatch = str.match(/([a-zA-Z]{3,9})[\s/.-]+(\d{1,2})[\s/.,-]+(\d{4})/);
+      if (monthNameMatch) {
+        const mKey = monthNameMatch[1].slice(0, 3).toLowerCase();
+        if (monthMap[mKey]) {
+          const m = monthMap[mKey];
+          const d = monthNameMatch[2].padStart(2, '0');
+          const y = monthNameMatch[3];
+          return y + '-' + m + '-' + d;
+        }
+      }
+
+      // 4. Day first Month Name: 14 Sep 2024
+      const dayFirstMatch = str.match(/(\d{1,2})[\s/.-]+([a-zA-Z]{3,9})[\s/.,-]+(\d{4})/);
+      if (dayFirstMatch) {
+        const mKey = dayFirstMatch[2].slice(0, 3).toLowerCase();
+        if (monthMap[mKey]) {
+          const d = dayFirstMatch[1].padStart(2, '0');
+          const m = monthMap[mKey];
+          const y = dayFirstMatch[3];
+          return y + '-' + m + '-' + d;
+        }
+      }
+
+      // 5. Fallback Date.parse
+      const ts = Date.parse(str);
+      if (!isNaN(ts) && ts > 0) {
+        const dt = new Date(ts);
+        const y = dt.getUTCFullYear();
+        const m = String(dt.getUTCMonth() + 1).padStart(2, '0');
+        const d = String(dt.getUTCDate()).padStart(2, '0');
+        if (y >= 1990 && y <= 2099) {
+          return y + '-' + m + '-' + d;
+        }
+      }
+
+      return '';
     }
 
     function resolveTagPass2Client(rawTag) {
@@ -5765,7 +5849,8 @@ const INDEX_HTML = `<!DOCTYPE html>
 
       const getReleaseTs = (w) => {
         if (!w || !w.releaseDate) return 0;
-        const t = new Date(w.releaseDate).getTime();
+        const norm = normalizeReleaseDate(w.releaseDate) || w.releaseDate;
+        const t = new Date(norm.includes('T') ? norm : (norm + 'T00:00:00Z')).getTime();
         return isNaN(t) ? 0 : t;
       };
 
@@ -5940,7 +6025,6 @@ const INDEX_HTML = `<!DOCTYPE html>
       toolbarHtml += '<option value="0" ' + (libraryPerPage === 0 ? 'selected' : '') + '>All (' + totalCount + ')</option>';
       toolbarHtml += '</select></div>';
       toolbarHtml += '<button class="btn-outline" style="padding:5px 12px; font-size:0.8rem;" onclick="navFavs()">❤️ Favorites</button>';
-      toolbarHtml += '<button class="btn-outline" style="padding:5px 12px; font-size:0.8rem;" onclick="navAll()">' + (shuffledLibraryWorks ? 'Original Order' : 'All Works') + '</button>';
       toolbarHtml += '</div></div>';
 
       const shuffleBadge = shuffledLibraryWorks ? '<span style="background:rgba(255,51,102,0.18); color:var(--accent); font-size:0.75rem; font-weight:700; padding:2px 8px; border-radius:4px; margin-left:8px; border:1px solid rgba(255,51,102,0.3);">🎲 Shuffled Order</span>' : '';
@@ -6086,6 +6170,10 @@ const INDEX_HTML = `<!DOCTYPE html>
       const circlePill = work.circle && work.circle !== 'N/A'
         ? '<a href="#/circle/' + encodeURIComponent(work.circle) + '" class="tag-pill" style="display:inline-flex; align-items:center; gap:4px; background:rgba(255,255,255,0.06); border:1px solid var(--border); font-weight:700; text-decoration:none; color:inherit;" data-circle="' + work.circle.replace(/"/g, '&quot;') + '" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); navCircle(this.dataset.circle); }">🏢 ' + work.circle + '</a>'
         : '<span style="color:var(--text-muted);">N/A</span>';
+
+      const releasePill = work.releaseDate
+        ? '<span class="tag-pill" style="display:inline-flex; align-items:center; gap:4px; background:rgba(255,255,255,0.06); border:1px solid var(--border); font-weight:700;">📅 ' + work.releaseDate + '</span>'
+        : '';
 
       const filteredTags = (work.tags || []).filter(function(t) {
         const clean = (t || '').trim();
@@ -6245,7 +6333,7 @@ const INDEX_HTML = `<!DOCTYPE html>
       const playAllBtnText = hasFullCommunityTracks ? '▶ Play All' : (sampleTracks.length > 0 ? '▶ Play Preview' : '▶ Play All');
       const playAllAction = hasFullCommunityTracks ? 'playTrack(0, true, currentWork)' : (sampleTracks.length > 0 ? 'playDirectAudioTrack(window._currentSampleTracks[0], 0, currentWork)' : 'playTrack(0, true, currentWork)');
 
-      let html = '<div class="work-detail-banner"><div class="detail-cover-col" style="display:flex; flex-direction:column; align-items:stretch; gap:10px; flex-shrink:0;"><img class="detail-cover" src="' + display.coverUrl + '" data-rj="' + work.rjCode + '" onerror="handleImgError(this)"><button class="btn-outline btn-remove" style="width:100%; justify-content:center; padding:6px 12px; font-size:0.82rem;" data-rj="' + work.rjCode + '" onclick="deleteWorkItem(this.dataset.rj)">🗑️ Remove</button></div><div class="detail-info"><div style="display:flex; gap:8px; margin-bottom:8px;"><span class="card-rj">' + work.rjCode + '</span><span style="background:#0e7490; color:#fff; font-size:0.75rem; font-weight:700; padding:2px 8px; border-radius:4px;">' + (work.hasHls ? 'HLS Chapters' : (hasFullCommunityTracks ? 'Multi-Track' : 'Official Preview Only')) + '</span></div><h1 class="detail-title">' + work.title + '</h1><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Voice Actor (CV):</strong> ' + cvPills + '</div><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Circle:</strong> ' + circlePill + '</div><div class="tags-container" style="margin-top:14px; display:flex; flex-direction:column; align-items:flex-start;"><div id="workDetailTagsRow" class="tags-row tags-row-clamped" style="margin-top:0;">' + tagPills + '</div><button id="btnToggleMoreTags" class="tag-pill" onclick="toggleWorkDetailTags()" style="display:none; margin-top:6px; background:rgba(255,255,255,0.08); border:1px dashed var(--accent); color:var(--accent); font-weight:700; cursor:pointer; align-items:center; gap:4px; font-size:0.76rem;"><span>+ Show more (' + filteredTags.length + ' tags)</span></button></div><div style="margin-top:auto; padding-top:16px; display:flex; flex-wrap:wrap; gap:10px;"><button class="btn-primary" onclick="' + playAllAction + '">' + playAllBtnText + '</button><button class="btn-outline btn-gallery" id="btnWorkGallery" data-rj="' + work.rjCode + '" onclick="openWorkGalleryModal()" style="display:' + (galleryCount > 0 ? 'inline-flex' : 'none') + ';">🖼️ Gallery (<span id="btnWorkGalleryCount">' + galleryCount + '</span>)</button><button class="btn-outline" data-rj="' + work.rjCode + '" onclick="addWorkToPlaylistAction(this.dataset.rj)">➕ Playlist</button><button class="btn-outline" id="btnWorkRefresh"' + refreshBtnDisabled + ' data-rj="' + work.rjCode + '" onclick="refreshSingleWork(this.dataset.rj, this)">' + refreshBtnContent + '</button><button class="btn-outline" onclick="navBack()">← Back</button></div></div></div>';
+      let html = '<div class="work-detail-banner"><div class="detail-cover-col" style="display:flex; flex-direction:column; align-items:stretch; gap:10px; flex-shrink:0;"><img class="detail-cover" src="' + display.coverUrl + '" data-rj="' + work.rjCode + '" onerror="handleImgError(this)" onclick="if(window.innerWidth <= 768){ ' + playAllAction + '; }" title="Tap to Play All"><div style="display:flex; gap:6px; width:100%;"><span class="card-rj" style="flex:1; display:flex; align-items:center; justify-content:center; padding:6px 8px; font-size:0.82rem; border-radius:8px;">' + work.rjCode + '</span><button class="btn-outline btn-remove" style="flex:1; justify-content:center; padding:6px 8px; font-size:0.82rem; border-radius:8px;" data-rj="' + work.rjCode + '" onclick="deleteWorkItem(this.dataset.rj)">🗑️ Remove</button></div></div><div class="detail-info"><h1 class="detail-title">' + work.title + '</h1><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Voice Actor (CV):</strong> ' + cvPills + '</div><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Circle:</strong> ' + circlePill + '</div>' + (releasePill ? '<div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Release:</strong> ' + releasePill + '</div>' : '') + '<div class="tags-container" style="margin-top:14px; display:flex; flex-direction:column; align-items:flex-start;"><div id="workDetailTagsRow" class="tags-row tags-row-clamped" style="margin-top:0;">' + tagPills + '</div><button id="btnToggleMoreTags" class="tag-pill" onclick="toggleWorkDetailTags()" style="display:none; margin-top:6px; background:rgba(255,255,255,0.08); border:1px dashed var(--accent); color:var(--accent); font-weight:700; cursor:pointer; align-items:center; gap:4px; font-size:0.76rem;"><span>+ Show more (' + filteredTags.length + ' tags)</span></button></div><div style="margin-top:auto; padding-top:16px; display:flex; flex-wrap:wrap; gap:10px;"><button class="btn-primary" onclick="' + playAllAction + '">' + playAllBtnText + '</button><button class="btn-outline btn-gallery" id="btnWorkGallery" data-rj="' + work.rjCode + '" onclick="openWorkGalleryModal()" style="display:' + (galleryCount > 0 ? 'inline-flex' : 'none') + ';">🖼️ Gallery (<span id="btnWorkGalleryCount">' + galleryCount + '</span>)</button><button class="btn-outline" data-rj="' + work.rjCode + '" onclick="addWorkToPlaylistAction(this.dataset.rj)">➕ Playlist</button><button class="btn-outline" id="btnWorkRefresh"' + refreshBtnDisabled + ' data-rj="' + work.rjCode + '" onclick="refreshSingleWork(this.dataset.rj, this)">' + refreshBtnContent + '</button><button class="btn-outline" onclick="navBack()">← Back</button></div></div></div>';
 
       // 1. Physical Audio Tracklist Section
       if (hasFullCommunityTracks) {
@@ -6273,7 +6361,7 @@ const INDEX_HTML = `<!DOCTYPE html>
 
       // 1.5. Official DLsite Preview Audio Section (DLsite Chobit)
       if (sampleTracks.length > 0 && previewAudioMode !== 'disabled') {
-        html += '<h3 style="font-size:1.2rem; font-weight:700; margin-top:28px; margin-bottom:12px; display:flex; align-items:center; gap:8px;"><span>🎧 Official DLsite Preview Audio (' + sampleTracks.length + ')</span><span style="font-size:0.75rem; background:rgba(255,122,0,0.15); color:var(--accent); border:1px solid var(--accent-glow); padding:2px 8px; border-radius:4px; font-weight:700;">DLsite Chobit</span></h3>';
+        html += '<h3 style="font-size:1.2rem; font-weight:700; margin-top:28px; margin-bottom:12px; display:flex; align-items:center; gap:8px;"><span>🎧 Preview Audio (' + sampleTracks.length + ')</span><span style="font-size:0.75rem; background:rgba(255,122,0,0.15); color:var(--accent); border:1px solid var(--accent-glow); padding:2px 8px; border-radius:4px; font-weight:700;">DLsite Chobit</span></h3>';
         html += '<table class="tracks-table sample-tracks-table"><thead><tr><th style="width: 40px;">#</th><th>Sample Track Title</th><th style="width: 160px; text-align:right;">Action</th></tr></thead><tbody>';
         sampleTracks.forEach(function(st, sIdx) {
           const stJson = JSON.stringify(st).replace(/"/g, '&quot;');
@@ -10529,7 +10617,7 @@ const INDEX_HTML = `<!DOCTYPE html>
 
       if (hasActive && !isModalVisible) {
         if (isMobile) {
-          if (mBanner) mBanner.style.display = 'block';
+          if (mBanner) mBanner.style.display = 'flex';
           if (sWidget) sWidget.style.display = 'none';
         } else {
           if (sWidget) sWidget.style.display = 'block';
@@ -10565,7 +10653,7 @@ const INDEX_HTML = `<!DOCTYPE html>
 
       if (isQueueRunnerActive || importBatchQueue.some(j => j.status === 'running' || j.status === 'queued')) {
         if (isMobile) {
-          if (mBanner) mBanner.style.display = 'block';
+          if (mBanner) mBanner.style.display = 'flex';
           if (sWidget) sWidget.style.display = 'none';
         } else {
           if (sWidget) sWidget.style.display = 'block';
