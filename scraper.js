@@ -334,11 +334,44 @@ async function fetchHentaiAsmrMetadata(cleanRj, options = {}) {
     }
   }
 
-  // Cover image
+  // Cover image & parent RJ extraction
   let coverUrl = '';
+  let parentRj = '';
   if (post._embedded && post._embedded['wp:featuredmedia'] && post._embedded['wp:featuredmedia'][0]) {
     const media = post._embedded['wp:featuredmedia'][0];
     coverUrl = media.source_url || media.media_details?.sizes?.full?.source_url || '';
+    const mMatch = (coverUrl + ' ' + (media.slug || '') + ' ' + (media.title?.rendered || '')).match(/(?:RJ|VJ|BJ)\d{6,8}/i);
+    if (mMatch) {
+      const candRj = mMatch[0].toUpperCase();
+      if (candRj !== cleanUpper) parentRj = candRj;
+    }
+  }
+  if (!parentRj) {
+    const pMatch = (post.slug + ' ' + (post.title?.rendered || '') + ' ' + (post.content?.rendered || '')).match(/(?:RJ|VJ|BJ)\d{6,8}/gi);
+    if (pMatch) {
+      for (const m of pMatch) {
+        const c = m.toUpperCase();
+        if (c !== cleanUpper) { parentRj = c; break; }
+      }
+    }
+  }
+
+  // If parent RJ found, try to pull unwatermarked master cover from ASMR.one
+  if (parentRj) {
+    const pNum = parentRj.replace(/\D/g, '').replace(/^0+/, '');
+    const asmrHosts = ['https://api.asmr-200.com', 'https://api.asmr-300.com', 'https://api.asmr.one'];
+    for (const h of asmrHosts) {
+      try {
+        const pRes = await axios.get(`${h}/api/work/${pNum}`, {
+          headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json', 'Referer': 'https://www.asmr.one/' },
+          timeout: 2500
+        });
+        if (pRes.data && (pRes.data.mainCoverUrl || pRes.data.samCoverUrl)) {
+          coverUrl = pRes.data.mainCoverUrl || pRes.data.samCoverUrl;
+          break;
+        }
+      } catch(e) {}
+    }
   }
 
   // Terms: tags, actors, categories, circles
@@ -348,42 +381,104 @@ async function fetchHentaiAsmrMetadata(cleanRj, options = {}) {
   let cvJa = '';
   let cvRomaji = '';
 
+  const nonCvKeywords = /^(?:18禁|\d+|巨乳|爆乳|催眠|中出し|ニーソックス|学校|学園|制服|処女|男性向け|女性向け|逆レイプ|ボイスコミック|DLボイコミ|バイノーラル|オナニー|フェラチオ|ラブラブ|手コキ|ささやき|耳舐め|淫語|言葉責め|同人|単体作品|おねだり|主従|調教|コスプレ|近親相姦|痴女|ツンデレ|ヤンデレ|アナル|潮吹き|お漏らし|おもらし|足コキ|パイズリ|クスコ|母乳|妊娠|出産|百合|BL|女装|男の娘|ふたなり|モンスター|獣耳|ケモ耳|ファンタジー|日常|ASMR|全年齢|成人向け|R-18|R18)/i;
+
+  const rawTermsToProcess = [];
+
   if (post._embedded && Array.isArray(post._embedded['wp:term'])) {
     for (const group of post._embedded['wp:term']) {
       if (!Array.isArray(group)) continue;
       for (const term of group) {
         if (!term || !term.name) continue;
-        const tName = term.name.trim();
-        const taxonomy = (term.taxonomy || '').toLowerCase();
-        
-        let rawSlug = term.slug || '';
-        try { rawSlug = decodeURIComponent(rawSlug); } catch (e) {}
+        rawTermsToProcess.push({
+          name: term.name.trim(),
+          taxonomy: (term.taxonomy || '').toLowerCase(),
+          slug: term.slug || ''
+        });
+      }
+    }
+  }
 
-        if (taxonomy === 'circle' || taxonomy === 'maker' || taxonomy === 'developer' || taxonomy === 'brand' || taxonomy === 'publisher' || taxonomy === 'group') {
-          if (tName && !extractedCircle) {
-            extractedCircle = tName;
-          }
-        } else if (taxonomy === 'actors' || taxonomy === 'cv') {
-          tName.split(/[,、/&＋+;・]/).forEach(c => {
-            const cleanC = c.replace(/様|さん|氏|他|'/g, '').trim();
-            if (cleanC && cleanC.length >= 2 && !cvList.includes(cleanC)) {
-              cvList.push(cleanC);
-            }
-          });
-          if (!cvJa && cvList.length > 0) cvJa = cvList[0];
-          if (rawSlug && /[a-zA-Z]/.test(rawSlug)) {
-            const rom = normalizeCVRomaji(tName, rawSlug.replace(/-/g, ' '));
-            if (!cvRomaji) cvRomaji = rom;
-            tagTranslations[tName] = { romaji: rom, isCV: true };
-            if (db.BASE_TAG_DICT) {
-              db.BASE_TAG_DICT[tName] = { romaji: rom, isCV: true };
-            }
-          }
-        } else if (taxonomy === 'post_tag' || taxonomy === 'category') {
-          if (tName && !tags.includes(tName) && !['NSFW', 'SFW', 'Uncategorized'].includes(tName)) {
-            tags.push(tName);
-          }
+  // Also parse tags and actors from post HTML text / meta if _embedded is missing or partial
+  const combinedHtmlSource = (post.content?.rendered || '') + ' ' + (post.yoast_head || '');
+  const metaTagMatches = combinedHtmlSource.matchAll(/<meta\s+property=["']article:tag["']\s+content=["']([^"']+)["']/gi);
+  for (const m of metaTagMatches) {
+    if (m[1] && !rawTermsToProcess.some(t => t.name === m[1].trim())) {
+      rawTermsToProcess.push({ name: m[1].trim(), taxonomy: 'post_tag', slug: '' });
+    }
+  }
+  const actorLinkMatches = combinedHtmlSource.matchAll(/<a\s+[^>]*href=["'][^"']*\/actors\/([^"\/]+)\/?["'][^>]*>([^<]+)<\/a>/gi);
+  for (const m of actorLinkMatches) {
+    if (m[2] && !rawTermsToProcess.some(t => t.name === m[2].trim())) {
+      rawTermsToProcess.push({ name: m[2].trim(), taxonomy: 'actors', slug: m[1] || '' });
+    }
+  }
+  const tagLinkMatches = combinedHtmlSource.matchAll(/<a\s+[^>]*href=["'][^"']*\/tag\/([^"\/]+)\/?["'][^>]*>([^<]+)<\/a>/gi);
+  for (const m of tagLinkMatches) {
+    if (m[2] && !rawTermsToProcess.some(t => t.name === m[2].trim())) {
+      rawTermsToProcess.push({ name: m[2].trim(), taxonomy: 'post_tag', slug: m[1] || '' });
+    }
+  }
+
+  // Also check explicit "Actors: Name" or "🎙️ Actors: Name" in post text
+  const actorsTextMatch = combinedHtmlSource.match(/(?:🎙️\s*)?Actors[\s:：]+([^\n<🏷️]+)/i);
+  if (actorsTextMatch && actorsTextMatch[1]) {
+    actorsTextMatch[1].split(/[,、/&＋+;・\n]/).forEach(a => {
+      const cleanA = a.replace(/<[^>]+>/g, '').trim();
+      if (cleanA && cleanA.length >= 2 && cleanA.length <= 30 && !rawTermsToProcess.some(t => t.name === cleanA)) {
+        rawTermsToProcess.push({ name: cleanA, taxonomy: 'actors', slug: '' });
+      }
+    });
+  }
+
+  for (const term of rawTermsToProcess) {
+    const tName = term.name;
+    const taxonomy = term.taxonomy;
+    let rawSlug = term.slug;
+    try { rawSlug = decodeURIComponent(rawSlug); } catch (e) {}
+
+    if (taxonomy === 'circle' || taxonomy === 'maker' || taxonomy === 'developer' || taxonomy === 'brand' || taxonomy === 'publisher' || taxonomy === 'group') {
+      if (tName && !extractedCircle) {
+        extractedCircle = tName;
+      }
+    } else if (taxonomy === 'actors' || taxonomy === 'cv') {
+      tName.split(/[,、/&＋+;・]/).forEach(c => {
+        const cleanC = c.replace(/様|さん|氏|他|'/g, '').trim();
+        if (cleanC && cleanC.length >= 2 && !cvList.includes(cleanC)) {
+          cvList.push(cleanC);
         }
+      });
+      if (!cvJa && cvList.length > 0) cvJa = cvList[0];
+      if (rawSlug && /[a-zA-Z]/.test(rawSlug)) {
+        const rom = normalizeCVRomaji(tName, rawSlug.replace(/-/g, ' '));
+        if (!cvRomaji) cvRomaji = rom;
+        tagTranslations[tName] = { romaji: rom, isCV: true };
+        if (db.BASE_TAG_DICT) {
+          db.BASE_TAG_DICT[tName] = { romaji: rom, isCV: true };
+        }
+      }
+    } else if (taxonomy === 'post_tag' || taxonomy === 'category') {
+      // Check if tag is formatted as "Romaji Name 【Kanji Name】" (HentaiASMR Moe CV format)
+      const bracketMatch = tName.match(/^([A-Za-z\s\.\-']+)\s*【([^】]+)】$/) || tName.match(/^【([^】]+)】\s*([A-Za-z\s\.\-']+)$/);
+      if (bracketMatch) {
+        const romajiCandidate = (bracketMatch[1] || '').trim();
+        const kanjiCandidate = (bracketMatch[2] || '').trim();
+        if (kanjiCandidate && !nonCvKeywords.test(kanjiCandidate) && kanjiCandidate.length >= 2 && kanjiCandidate.length <= 20) {
+          if (!cvList.includes(kanjiCandidate)) {
+            cvList.push(kanjiCandidate);
+          }
+          if (romajiCandidate) {
+            tagTranslations[kanjiCandidate] = { romaji: romajiCandidate, isCV: true };
+            if (db.BASE_TAG_DICT) {
+              db.BASE_TAG_DICT[kanjiCandidate] = { romaji: romajiCandidate, isCV: true };
+            }
+          }
+          continue; // Handled as CV, skip adding raw bracket string to general tags
+        }
+      }
+
+      if (tName && !tags.includes(tName) && !['NSFW', 'SFW', 'Uncategorized'].includes(tName)) {
+        tags.push(tName);
       }
     }
   }
@@ -703,6 +798,7 @@ async function fetchHentaiAsmrMetadata(cleanRj, options = {}) {
     tags,
     tagTranslations,
     rawCoverUrl: coverUrl,
+    parentRj: parentRj || '',
     audioTracks,
     foundPattern,
     diagnostic,
@@ -720,52 +816,52 @@ async function fetchDlsiteMetadata(rjCode) {
   const divisions = ['maniax', 'home', 'girls', 'pro', 'books', 'comic', 'soft', 'bl', 'touch', 'gay', 'eng'];
   let dlsiteMeta = null;
 
-  // Strategy 0: ASMR.one Public API across multiple hosts
-  const asmrHosts = ['https://api.asmr-200.com', 'https://api.asmr-300.com', 'https://api.asmr.one', 'https://api.asmr-100.com'];
-  const idsToTry = Array.from(new Set([strippedNum, cleanNum, cleanRj, canonicalRj])).filter(Boolean);
-  for (const tid of idsToTry) {
-    for (const host of asmrHosts) {
+  // Strategy 0: ASMR.one Public API across multiple mirror hosts in parallel
+  const asmrHosts = ['https://api.asmr-200.com', 'https://api.asmr-300.com', 'https://api.asmr.one'];
+  try {
+    const asmrPromises = asmrHosts.map(async (host) => {
       try {
-        const asmrRes = await axios.get(`${host}/api/work/${tid}`, {
+        const asmrRes = await axios.get(`${host}/api/work/${cleanNum}`, {
           headers: { 'User-Agent': BROWSER_HEADERS['User-Agent'] },
           timeout: 2500
         });
-        if (asmrRes.data && asmrRes.data.title) {
-          const data = asmrRes.data;
-          const cv = Array.isArray(data.vas) && data.vas.length > 0 ? data.vas.map(v => v.name).join(', ') : '';
-          const tags = [];
-          const tagTranslations = {};
-          if (Array.isArray(data.tags)) {
-            data.tags.forEach(t => {
-              const name = t.name || (typeof t === 'string' ? t : '');
-              if (name && !tags.includes(name)) tags.push(name);
-              const en = t.i18n?.['en-us']?.name || t.i18n?.['en']?.name || (db.BASE_TAG_DICT && db.BASE_TAG_DICT[name]) || '';
-              if (name && en && name !== en) {
-                tagTranslations[name] = en;
-              }
-            });
+        if (asmrRes.data && asmrRes.data.title) return asmrRes.data;
+      } catch (e) {}
+      return null;
+    });
+    const results = await Promise.all(asmrPromises);
+    const data = results.find(d => d && d.title);
+    if (data) {
+      const cv = Array.isArray(data.vas) && data.vas.length > 0 ? data.vas.map(v => (v && (v.name || (typeof v === 'string' ? v : '')))).filter(Boolean).join(', ') : '';
+      const tags = [];
+      const tagTranslations = {};
+      if (Array.isArray(data.tags)) {
+        data.tags.forEach(t => {
+          const name = t.name || (typeof t === 'string' ? t : '');
+          if (name && !tags.includes(name)) tags.push(name);
+          const en = t.i18n?.['en-us']?.name || t.i18n?.['en']?.name || (db.BASE_TAG_DICT && db.BASE_TAG_DICT[name]) || '';
+          if (name && en && name !== en) {
+            tagTranslations[name] = en;
           }
-          let imgUrl = data.mainCoverUrl || data.thumbnailCoverUrl || data.samCoverUrl || '';
-          if (imgUrl.startsWith('//')) imgUrl = 'https:' + imgUrl;
+        });
+      }
+      let imgUrl = data.mainCoverUrl || data.thumbnailCoverUrl || data.samCoverUrl || '';
+      if (imgUrl.startsWith('//')) imgUrl = 'https:' + imgUrl;
 
-          const isAdult = (data.age_category === 1 || data.age_category_string === 'general' || data.rating === 'general') ? false : true;
+      const isAdult = (data.age_category === 1 || data.age_category_string === 'general' || data.rating === 'general') ? false : true;
 
-          dlsiteMeta = {
-            title: data.title,
-            circle: data.circle?.name || '',
-            cv: cv || 'N/A',
-            releaseDate: normalizeReleaseDate(data.release || data.release_date || data.regist_date || ''),
-            rawCoverUrl: imgUrl,
-            tags: tags,
-            tagTranslations: tagTranslations,
-            isNsfw: isAdult ?? true
-          };
-          break;
-        }
-      } catch (err) {}
+      dlsiteMeta = {
+        title: data.title,
+        circle: data.circle?.name || '',
+        cv: cv || 'N/A',
+        releaseDate: normalizeReleaseDate(data.release || data.release_date || data.regist_date || ''),
+        rawCoverUrl: imgUrl,
+        tags: tags,
+        tagTranslations: tagTranslations,
+        isNsfw: isAdult ?? true
+      };
     }
-    if (dlsiteMeta && dlsiteMeta.title) break;
-  }
+  } catch (err) {}
 
   // Strategy A: JSON APIs across divisions in parallel
   try {
@@ -2176,6 +2272,24 @@ async function probeDlsiteAndWeeabGallery(cleanRj) {
     });
   }
 
+  // 2. ASMR.one High-res cover mirror
+  candidates.push({
+    title: 'Source Artwork',
+    role: 'main_cover',
+    source: 'ASMR.one',
+    url: `https://api.asmr-200.com/api/cover/${cleanNum}.jpg?type=main`,
+    proxyUrl: `/image-proxy?url=${encodeURIComponent(`https://api.asmr-200.com/api/cover/${cleanNum}.jpg?type=main`)}`
+  });
+
+  // 3. Weeab0o mirror
+  candidates.push({
+    title: 'Alternative Mirror Artwork',
+    role: 'main_cover',
+    source: 'Weeab0o',
+    url: `https://pic.weeabo0.xyz/${canonicalRj}_img_main.jpg`,
+    proxyUrl: `/image-proxy?url=${encodeURIComponent(`https://pic.weeabo0.xyz/${canonicalRj}_img_main.jpg`)}`
+  });
+
   try {
     let validList = [];
     const chunkSize = 4;
@@ -2650,7 +2764,7 @@ async function resolveRjMetadataOnly(cleanRj, oldWork) {
   let releaseDate = oldWork?.releaseDate || '';
 
   // 1. Step 1: DLsite API (Fastest & most authoritative)
-  if (isPlaceholderTitle(title, cleanUpper) || isPlaceholderCircle(circle) || tags.length < 3) {
+  if (isPlaceholderTitle(title, cleanUpper) || isPlaceholderCircle(circle) || isPlaceholderCv(cv) || tags.length < 3 || !releaseDate) {
     try {
       const dlsiteMeta = await fetchDlsiteMetadata(cleanUpper);
       if (dlsiteMeta) {
@@ -2669,59 +2783,63 @@ async function resolveRjMetadataOnly(cleanRj, oldWork) {
     } catch (e) {}
   }
 
-  // Early skip check after DLsite
-  if (!isPlaceholderTitle(title, cleanUpper) && !isPlaceholderCircle(circle) && tags.length >= 3) {
+  // Early skip check after DLsite: only skip if ALL essential fields are populated
+  if (!isPlaceholderTitle(title, cleanUpper) && !isPlaceholderCircle(circle) && !isPlaceholderCv(cv) && tags.length >= 3 && releaseDate) {
     return assembleMetadataResult();
   }
 
-  // 2. Step 2: ASMR.one Public API Mirror
-  if (isPlaceholderTitle(title, cleanUpper) || isPlaceholderCircle(circle) || tags.length < 3) {
-    const asmrHosts = ['https://api.asmr.one', 'https://api.asmr-200.com', 'https://api.asmr-300.com'];
-    for (const host of asmrHosts) {
-      try {
-        const asmrRes = await axios.get(`${host}/api/work/${cleanNum}`, {
-          headers: {
-            'User-Agent': BROWSER_HEADERS['User-Agent'],
-            'Accept': 'application/json, text/plain, */*',
-            'Referer': 'https://www.asmr.one/'
-          },
-          httpsAgent,
-          httpAgent,
-          timeout: 4000
-        });
-        if (asmrRes.status === 200 && asmrRes.data) {
-          const data = asmrRes.data;
-          if (data.title && isPlaceholderTitle(title, cleanUpper)) title = data.title;
-          if (data.circle?.name && isPlaceholderCircle(circle)) circle = data.circle.name;
-          if (data.series?.name && !series) series = data.series.name;
-          if (data.release && !releaseDate) releaseDate = data.release;
-          if (data.mainCoverUrl && (!coverUrl || coverUrl.includes('placeholder'))) coverUrl = data.mainCoverUrl;
-          if (Array.isArray(data.vas) && data.vas.length > 0 && isPlaceholderCv(cv)) {
-            cv = data.vas.map(v => (v.name || v)).filter(Boolean).join(', ');
-          }
-          if (Array.isArray(data.tags)) {
-            data.tags.forEach(t => {
-              const name = t.name || t;
-              if (name && !tags.includes(name)) tags.push(name);
-            });
-          }
-          if (data.tag_translations && typeof data.tag_translations === 'object') {
-            Object.assign(tagTranslations, data.tag_translations);
-          }
-          if (data.age_category === 1 || data.rating === 'general') isAdult = false;
-          break;
+  // 2. Step 2: ASMR.one Public API Mirror (Crucial for Voice Actors / vas and tags)
+  if (isPlaceholderTitle(title, cleanUpper) || isPlaceholderCircle(circle) || isPlaceholderCv(cv) || tags.length < 3 || !releaseDate) {
+    const asmrHosts = ['https://api.asmr-200.com', 'https://api.asmr-300.com', 'https://api.asmr.one'];
+    try {
+      const asmrPromises = asmrHosts.map(async (host) => {
+        try {
+          const asmrRes = await axios.get(`${host}/api/work/${cleanNum}`, {
+            headers: {
+              'User-Agent': BROWSER_HEADERS['User-Agent'],
+              'Accept': 'application/json, text/plain, */*',
+              'Referer': 'https://www.asmr.one/'
+            },
+            httpsAgent,
+            httpAgent,
+            timeout: 2500
+          });
+          if (asmrRes.status === 200 && asmrRes.data) return asmrRes.data;
+        } catch (e) {}
+        return null;
+      });
+      const results = await Promise.all(asmrPromises);
+      const data = results.find(d => d && d.title);
+      if (data) {
+        if (data.title && isPlaceholderTitle(title, cleanUpper)) title = data.title;
+        if (data.circle?.name && isPlaceholderCircle(circle)) circle = data.circle.name;
+        if (data.series?.name && !series) series = data.series.name;
+        if (data.release && !releaseDate) releaseDate = normalizeReleaseDate(data.release);
+        if (data.mainCoverUrl && (!coverUrl || coverUrl.includes('placeholder'))) coverUrl = data.mainCoverUrl;
+        if (Array.isArray(data.vas) && data.vas.length > 0 && isPlaceholderCv(cv)) {
+          cv = data.vas.map(v => (v && (v.name || (typeof v === 'string' ? v : '')))).filter(Boolean).join(', ');
         }
-      } catch (e) {}
-    }
+        if (Array.isArray(data.tags)) {
+          data.tags.forEach(t => {
+            const name = t.name || t;
+            if (name && !tags.includes(name)) tags.push(name);
+          });
+        }
+        if (data.tag_translations && typeof data.tag_translations === 'object') {
+          Object.assign(tagTranslations, data.tag_translations);
+        }
+        if (data.age_category === 1 || data.rating === 'general') isAdult = false;
+      }
+    } catch (e) {}
   }
 
-  // Early skip check after ASMR.one
-  if (!isPlaceholderTitle(title, cleanUpper) && !isPlaceholderCircle(circle) && tags.length >= 3) {
+  // Early skip check after ASMR.one: only skip if ALL essential fields are populated
+  if (!isPlaceholderTitle(title, cleanUpper) && !isPlaceholderCircle(circle) && !isPlaceholderCv(cv) && tags.length >= 3 && releaseDate) {
     return assembleMetadataResult();
   }
 
   // 3. Step 3: HentaiASMR Moe REST API (Zero audio probe)
-  if (isPlaceholderTitle(title, cleanUpper) || isPlaceholderCircle(circle) || isPlaceholderCv(cv) || tags.length < 3) {
+  if (isPlaceholderTitle(title, cleanUpper) || isPlaceholderCircle(circle) || isPlaceholderCv(cv) || tags.length < 3 || !releaseDate) {
     try {
       const moeMeta = await fetchHentaiAsmrMetadata(cleanUpper, { skipAudioProbe: true });
       if (moeMeta) {
@@ -2743,6 +2861,14 @@ async function resolveRjMetadataOnly(cleanRj, oldWork) {
     if (!coverUrl || coverUrl.includes('placeholder')) {
       coverUrl = `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${canonicalRj}_img_main.jpg`;
     }
+
+    if (isPlaceholderCv(cv) && oldWork && !isPlaceholderCv(oldWork.cv)) {
+      cv = oldWork.cv;
+    }
+    if (!releaseDate && oldWork && oldWork.releaseDate) {
+      releaseDate = oldWork.releaseDate;
+    }
+    cv = cv || 'N/A';
 
     // Filter CV names from tags
     const rawCvForDedupe = cv || (oldWork && oldWork.cv) || '';

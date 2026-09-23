@@ -34,6 +34,11 @@ app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
+app.use('/icon', express.static(path.join(__dirname, 'icon')));
+app.get('/logo.png', (req, res) => res.sendFile(path.join(__dirname, 'icon', 'logo_425.png')));
+app.get('/favicon.ico', (req, res) => res.sendFile(path.join(__dirname, 'icon', 'logo_425.png')));
+app.get('/icon/logo_425.png', (req, res) => res.sendFile(path.join(__dirname, 'icon', 'logo_425.png')));
+
 const ADMIN_PASSCODE = (process.env.ADMIN_PASSCODE || '').trim();
 
 const parseCookies = (req) => {
@@ -159,13 +164,6 @@ function getCoverCandidates(targetUrl, rjCode) {
     const digits = cleanRj.replace(/\D/g, '');
 
     const list = [
-      `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${canonicalRj}_img_main.jpg`,
-      `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${canonicalRj}_img_main_240x240.jpg`,
-      `https://img.dlsite.jp/modpub/images2/work/pro/${bucket}/${canonicalRj}_img_main.jpg`,
-      `https://img.dlsite.jp/modpub/images2/work/books/${bucket}/${canonicalRj}_img_main.jpg`,
-      `https://img.dlsite.jp/modpub/images2/work/girls/${bucket}/${canonicalRj}_img_main.jpg`,
-      `https://img.dlsite.jp/modpub/images2/work/bl/${bucket}/${canonicalRj}_img_main.jpg`,
-      `https://img.dlsite.jp/modpub/images2/work/ai/${bucket}/${canonicalRj}_img_main.jpg`,
       `https://api.asmr-200.com/api/cover/${cleanNum}.jpg?type=main`,
       `https://api.asmr-200.com/api/cover/${cleanNum}.jpg`,
       `https://api.asmr-300.com/api/cover/${cleanNum}.jpg?type=main`,
@@ -176,6 +174,13 @@ function getCoverCandidates(targetUrl, rjCode) {
       `https://api.asmr-200.com/api/cover/${digits}.jpg`,
       `https://pic.weeabo0.xyz/${canonicalRj}_img_main.jpg`,
       `https://pic.weeabo0.xyz/${canonicalRj}_img_main.webp`,
+      `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${canonicalRj}_img_main.jpg`,
+      `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${canonicalRj}_img_main_240x240.jpg`,
+      `https://img.dlsite.jp/modpub/images2/work/pro/${bucket}/${canonicalRj}_img_main.jpg`,
+      `https://img.dlsite.jp/modpub/images2/work/books/${bucket}/${canonicalRj}_img_main.jpg`,
+      `https://img.dlsite.jp/modpub/images2/work/girls/${bucket}/${canonicalRj}_img_main.jpg`,
+      `https://img.dlsite.jp/modpub/images2/work/bl/${bucket}/${canonicalRj}_img_main.jpg`,
+      `https://img.dlsite.jp/modpub/images2/work/ai/${bucket}/${canonicalRj}_img_main.jpg`,
       `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${canonicalRj}_img_sam.jpg`,
       `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${canonicalRj}_img_smp1.jpg`,
       `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${canonicalRj}_smp1.jpg`
@@ -567,6 +572,26 @@ app.post('/api/library/save-batch-works', checkAuth, (req, res) => {
     return res.json({ success: true, count, savedToKv: true });
   }
   res.json({ success: true, count: 0, savedToKv: false });
+});
+
+// Update Work Cover (Manual HD / Custom Selection)
+app.post('/api/library/update-cover', (req, res) => {
+  const { rjCode, manualCoverUrl, hdCoverUrl } = req.body || {};
+  const chosenUrl = manualCoverUrl || hdCoverUrl || '';
+  if (!rjCode) return res.status(400).json({ error: 'Missing rjCode' });
+
+  try {
+    const existing = db.getWorkByRj(rjCode);
+    if (existing) {
+      existing.manualCoverUrl = chosenUrl;
+      existing.hdCoverUrl = chosenUrl;
+      db.saveWork(existing);
+      return res.json({ success: true, rjCode, manualCoverUrl: chosenUrl, savedToDb: true });
+    }
+    return res.json({ success: true, rjCode, manualCoverUrl: chosenUrl, savedToDb: false });
+  } catch(e) {
+    return res.status(500).json({ error: e.message });
+  }
 });
 
 // Refresh All Works (Writes ONLY if changes detected)
@@ -1325,7 +1350,8 @@ const INDEX_HTML = `<!DOCTYPE html>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>aStreamer | Your one hub streaming services</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🐧</text></svg>">
+  <link rel="icon" type="image/png" href="/icon/logo_425.png">
+  <link rel="apple-touch-icon" href="/icon/logo_425.png">
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
   <style>
@@ -1371,7 +1397,8 @@ const INDEX_HTML = `<!DOCTYPE html>
       z-index: 50;
     }
     .logo-area { display: flex; align-items: center; gap: 10px; padding: 0 10px; margin-bottom: 32px; cursor: pointer; }
-    .logo-icon { width: 38px; height: 38px; background: var(--accent-gradient, linear-gradient(135deg, #ff7a00, #ff9500)); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 1.35rem; box-shadow: 0 0 16px var(--accent-glow); flex-shrink: 0; }
+    .logo-icon { width: 38px; height: 38px; background: transparent; border-radius: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .logo-icon img { width: 100%; height: 100%; object-fit: contain; filter: drop-shadow(0 0 10px rgba(56, 189, 248, 0.45)); }
     .logo-title { font-weight: 800; font-size: 1.25rem; letter-spacing: -0.02em; background: linear-gradient(90deg, #fff, #94a3b8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
     .nav-section { display: flex; flex-direction: column; gap: 4px; }
     .nav-title { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); padding: 12px 10px 6px; font-weight: 700; }
@@ -1992,9 +2019,36 @@ const INDEX_HTML = `<!DOCTYPE html>
 
     /* Work Detail */
     .work-detail-banner { display: flex; gap: 28px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px; padding: 24px; margin-bottom: 2rem; }
-    .detail-cover { width: 220px; min-width: 220px; height: 300px; border-radius: 12px; object-fit: cover; background: #0c0d12; }
+    .detail-cover-wrapper { position: relative; display: inline-block; width: 220px; flex-shrink: 0; }
+    .detail-cover { width: 220px; min-width: 220px; height: 300px; border-radius: 12px; object-fit: cover; background: #0c0d12; cursor: pointer; transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.22s ease, filter 0.22s ease; }
+    .detail-cover:hover { transform: translateY(-2px) scale(1.015); box-shadow: 0 10px 24px rgba(0, 0, 0, 0.5), 0 0 16px rgba(255, 122, 0, 0.25); filter: brightness(1.04); }
+    .detail-cover:active { transform: scale(0.985); }
+    .hd-cover-badge {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      background: rgba(12, 13, 18, 0.70);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border: 1.5px solid rgba(56, 189, 248, 0.55);
+      font-size: 0.95rem;
+      padding: 4px 7px;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6), 0 0 10px rgba(56, 189, 248, 0.25);
+      pointer-events: none;
+      z-index: 3;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1;
+    }
     .detail-info { flex: 1; display: flex; flex-direction: column; }
-    .detail-title { font-size: 1.6rem; font-weight: 800; margin-bottom: 12px; line-height: 1.3; }
+    .detail-title-wrapper { position: relative; display: flex; flex-direction: column; align-items: flex-start; margin-bottom: 10px; width: 100%; }
+    .detail-title { font-size: 1.6rem; font-weight: 800; margin-bottom: 0; line-height: 1.35; word-break: break-word; }
+    .detail-title.title-clamped { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+    .btn-title-expand { display: none; background: rgba(255,255,255,0.06); border: 1px solid var(--border); color: var(--text-muted); font-size: 0.72rem; font-weight: 700; padding: 2px 8px; border-radius: 6px; cursor: pointer; margin-top: 4px; transition: 0.15s; }
+    .btn-title-expand:hover { background: var(--bg-card-hover); color: #fff; border-color: var(--accent); }
+    .detail-circle-pill { display: inline-flex; align-items: center; gap: 4px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: rgba(255,255,255,0.06); border: 1px solid var(--border); font-weight: 700; text-decoration: none; color: inherit; vertical-align: middle; }
     .detail-meta { font-size: 0.95rem; color: var(--text-muted); margin-bottom: 8px; }
     .tags-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
     .tags-row.tags-row-clamped { max-height: 64px; overflow: hidden; position: relative; transition: max-height 0.25s ease-out; }
@@ -2336,17 +2390,20 @@ const INDEX_HTML = `<!DOCTYPE html>
       }
       .detail-cover-col {
         width: 100%;
-        max-width: 280px;
-        margin: 0 auto;
-        align-items: center;
+        max-width: 100%;
+        margin: 0;
+        align-items: stretch;
+      }
+      .detail-cover-wrapper {
+        width: 100%;
       }
       .detail-cover {
         width: 100%;
-        max-width: 280px;
+        max-width: 100%;
         min-width: 0;
         height: auto;
         aspect-ratio: 1 / 1.38;
-        max-height: 380px;
+        max-height: 460px;
         object-fit: cover;
         border-radius: 12px;
         cursor: pointer;
@@ -2364,7 +2421,10 @@ const INDEX_HTML = `<!DOCTYPE html>
       .detail-title {
         font-size: 1.25rem;
         text-align: left;
-        margin-bottom: 8px;
+        margin-bottom: 0;
+      }
+      .detail-circle-pill {
+        max-width: 190px;
       }
       .detail-meta {
         justify-content: flex-start;
@@ -2732,12 +2792,30 @@ const INDEX_HTML = `<!DOCTYPE html>
         color: var(--text-muted) !important;
       }
       #imageLightboxModal > div {
-        max-width: 96vw !important;
-        max-height: 90vh !important;
+        max-width: 98vw !important;
+        max-height: 94vh !important;
+        width: 100% !important;
+      }
+      .lightbox-toolbar {
+        position: static !important;
+        transform: none !important;
+        width: auto !important;
+        max-width: 95vw !important;
+        margin: 0 auto 8px !important;
+        padding: 4px 8px !important;
+        gap: 6px !important;
+        flex-wrap: wrap !important;
+        justify-content: center !important;
+      }
+      .lightbox-close-btn {
+        top: -8px !important;
+        right: 4px !important;
+        width: 32px !important;
+        height: 32px !important;
       }
       #lightboxImg {
-        max-width: 94vw !important;
-        max-height: 75vh !important;
+        max-width: 95vw !important;
+        max-height: 68vh !important;
         object-fit: contain !important;
       }
       #lightboxPrevBtn {
@@ -3103,11 +3181,12 @@ const INDEX_HTML = `<!DOCTYPE html>
 
   <!-- Image Lightbox Modal -->
   <div id="imageLightboxModal" class="modal-overlay" style="display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.92); z-index: 9999;" onclick="closeLightboxModal()">
-    <div style="position: relative; max-width: 94vw; max-height: 94vh; display: flex; flex-direction: column; align-items: center; justify-content: center;" onclick="event.stopPropagation()">
-      <button class="btn-outline" onclick="closeLightboxModal()" style="position: absolute; top: -14px; right: -14px; background: #1e293b; color: #fff; width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--border); font-size: 1.1rem; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; z-index: 20;" title="Close (Esc)">✕</button>
+    <div class="lightbox-modal-content" style="position: relative; max-width: 94vw; max-height: 94vh; display: flex; flex-direction: column; align-items: center; justify-content: center;" onclick="event.stopPropagation()">
+      <button class="btn-outline lightbox-close-btn" onclick="closeLightboxModal()" style="position: absolute; top: -14px; right: -14px; background: #1e293b; color: #fff; width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--border); font-size: 1.1rem; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; z-index: 25;" title="Close (Esc)">✕</button>
 
-      <!-- Zoom Floating Toolbar -->
-      <div style="position: absolute; top: -14px; left: 50%; transform: translateX(-50%); background: rgba(15, 23, 42, 0.9); backdrop-filter: blur(8px); border: 1px solid var(--border); border-radius: 20px; padding: 3px 12px; display: flex; align-items: center; gap: 8px; z-index: 20; box-shadow: 0 4px 16px rgba(0,0,0,0.6);">
+      <!-- Lightbox Header / Toolbar Row (Dedicated Row) -->
+      <div id="lightboxToolbar" class="lightbox-toolbar" style="background: rgba(15, 23, 42, 0.9); backdrop-filter: blur(8px); border: 1px solid var(--border); border-radius: 20px; padding: 4px 12px; display: flex; align-items: center; justify-content: center; gap: 8px; z-index: 20; box-shadow: 0 4px 16px rgba(0,0,0,0.6); margin-bottom: 8px;">
+        <button id="lightboxSetCoverBtn" onclick="setCoverFromLightbox()" class="btn-outline" style="padding: 2px 10px; font-size: 0.78rem; height: 26px; border-radius: 13px; color: #38bdf8; border-color: rgba(56,189,248,0.4); display: inline-flex; align-items: center; gap: 4px; font-weight: 700;" title="Set this illustration as the HD Work Cover">💎 Set Cover</button>
         <button onclick="zoomLightbox(-0.25)" class="btn-outline" style="padding: 2px 8px; font-size: 0.85rem; height: 26px; border-radius: 13px;" title="Zoom Out (-)">🔍−</button>
         <span id="lightboxZoomLevelText" onclick="resetLightboxZoom()" style="font-size: 0.78rem; font-weight: 700; color: #94a3b8; cursor: pointer; min-width: 42px; text-align: center;" title="Click to reset zoom">100%</span>
         <button onclick="zoomLightbox(0.25)" class="btn-outline" style="padding: 2px 8px; font-size: 0.85rem; height: 26px; border-radius: 13px;" title="Zoom In (+)">🔍+</button>
@@ -3117,8 +3196,8 @@ const INDEX_HTML = `<!DOCTYPE html>
       <button id="lightboxPrevBtn" onclick="navLightbox(-1)" style="position: absolute; left: -24px; top: 50%; transform: translateY(-50%); background: rgba(15, 23, 42, 0.85); color: #fff; width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--border); font-size: 1.4rem; cursor: pointer; display: flex; align-items: center; justify-content: center; z-index: 20; box-shadow: 0 4px 14px rgba(0,0,0,0.6); transition: all 0.2s;" title="Previous (Left Arrow)">‹</button>
       <button id="lightboxNextBtn" onclick="navLightbox(1)" style="position: absolute; right: -24px; top: 50%; transform: translateY(-50%); background: rgba(15, 23, 42, 0.85); color: #fff; width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--border); font-size: 1.4rem; cursor: pointer; display: flex; align-items: center; justify-content: center; z-index: 20; box-shadow: 0 4px 14px rgba(0,0,0,0.6); transition: all 0.2s;" title="Next (Right Arrow)">›</button>
 
-      <div id="lightboxImgContainer" style="overflow: hidden; max-width: 90vw; max-height: 78vh; display: flex; align-items: center; justify-content: center; border-radius: 8px; user-select: none; touch-action: none;" onwheel="handleLightboxWheel(event)" onmousedown="onLightboxMouseDown(event)" ontouchstart="onLightboxTouchStart(event)" ontouchmove="onLightboxTouchMove(event)" ontouchend="onLightboxTouchEnd(event)">
-        <img id="lightboxImg" src="" draggable="false" style="max-width: 90vw; max-height: 78vh; border-radius: 8px; object-fit: contain; box-shadow: 0 10px 30px rgba(0,0,0,0.8); transition: transform 0.15s ease-out; transform-origin: center center; user-select: none; -webkit-user-drag: none; pointer-events: auto;" onerror="handleImgError(this)">
+      <div id="lightboxImgContainer" style="overflow: hidden; max-width: 90vw; max-height: 74vh; display: flex; align-items: center; justify-content: center; border-radius: 8px; user-select: none; touch-action: none;" onwheel="handleLightboxWheel(event)" onmousedown="onLightboxMouseDown(event)" ontouchstart="onLightboxTouchStart(event)" ontouchmove="onLightboxTouchMove(event)" ontouchend="onLightboxTouchEnd(event)">
+        <img id="lightboxImg" src="" draggable="false" style="max-width: 90vw; max-height: 74vh; border-radius: 8px; object-fit: contain; box-shadow: 0 10px 30px rgba(0,0,0,0.8); transition: transform 0.15s ease-out; transform-origin: center center; user-select: none; -webkit-user-drag: none; pointer-events: auto;" onerror="handleImgError(this)">
       </div>
 
       <div id="lightboxCaption" style="color: #f1f5f9; font-weight: 700; margin-top: 10px; font-size: 0.95rem; text-align: center; max-width: 80vw; text-shadow: 0 2px 4px rgba(0,0,0,0.8);"></div>
@@ -3589,7 +3668,7 @@ const INDEX_HTML = `<!DOCTYPE html>
   <!-- App Topbar Header (Universal Header: Responsive on Mobile & Desktop) -->
   <header class="mobile-topbar app-topbar">
     <a href="#/library" class="logo-area topbar-logo" style="margin-bottom: 0; padding: 0; text-decoration: none; color: inherit; flex-shrink: 0; gap: 4px;" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); switchView('library'); }">
-      <div class="logo-icon" style="width: 32px; height: 32px; font-size: 1.1rem; border-radius: 8px;">🐧</div>
+      <div class="logo-icon" style="width: 32px; height: 32px; border-radius: 8px;"><img src="/icon/logo_425.png" alt="streASMR"></div>
       <div class="logo-title" style="font-size: 1rem; display: none;">aStreamer</div>
     </a>
     <div style="display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0;">
@@ -3646,7 +3725,7 @@ const INDEX_HTML = `<!DOCTYPE html>
   <!-- Desktop Sidebar -->
   <aside class="app-sidebar">
     <a href="#/library" class="logo-area" style="text-decoration: none; color: inherit;" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); switchView('library'); }">
-      <div class="logo-icon">🐧</div>
+      <div class="logo-icon"><img src="/icon/logo_425.png" alt="streASMR"></div>
       <div>
         <div class="logo-title">aStreamer</div>
         <span id="appVersionTag" style="font-size: 0.65rem; color: var(--accent); font-weight: 700; background: var(--accent-glow); padding: 1px 6px; border-radius: 4px; border: 1px solid var(--accent);">v2.1 Official</span>
@@ -4386,6 +4465,10 @@ const INDEX_HTML = `<!DOCTYPE html>
     function handleImgError(el) {
       if (!el) return;
       el.onerror = null;
+      if (el.id === 'workDetailCoverImg') {
+        const badge = document.getElementById('workDetailHdBadge');
+        if (badge) badge.style.display = 'none';
+      }
       let rj = el.getAttribute('data-rj') || (el.dataset ? el.dataset.rj : '');
       if (!rj && currentWork && currentWork.rjCode) {
         rj = currentWork.rjCode;
@@ -4413,7 +4496,7 @@ const INDEX_HTML = `<!DOCTYPE html>
         title: work.title,
         trackTitle: track ? track.title : '',
         trackIndex: trackIndex,
-        coverUrl: work.coverUrl,
+        coverUrl: getDisplayCover(work).coverUrl || work.coverUrl,
         cv: work.cv || '',
         circle: work.circle || '',
         isNsfw: work.isNsfw,
@@ -4436,6 +4519,307 @@ const INDEX_HTML = `<!DOCTYPE html>
         method: 'POST',
         body: JSON.stringify(entry)
       }).catch(() => {});
+    }
+
+    function getCoverQualitySetting() {
+      return localStorage.getItem('astreamer_cover_quality') || 'standard';
+    }
+
+    function setCoverQualitySetting(val) {
+      const quality = val === 'hd' ? 'hd' : 'standard';
+      localStorage.setItem('astreamer_cover_quality', quality);
+      if (typeof showToast === 'function') {
+        showToast(quality === 'hd' ? '💎 HD Master Cover Art enabled (Work Detail)' : '⚡ Standard Cover Art enabled');
+      }
+      if (typeof devLog === 'function') {
+        devLog('INFO', 'CONFIG', 'Work detail cover quality set to ' + quality);
+      }
+    }
+
+    function getHdDebugLogSetting() {
+      return localStorage.getItem('astreamer_hd_debug_log') === 'true';
+    }
+
+    function setHdDebugLogSetting(val) {
+      localStorage.setItem('astreamer_hd_debug_log', val ? 'true' : 'false');
+      if (typeof showToast === 'function') {
+        showToast(val ? '🔍 HD Cover Debug Info & Gallery Ratios enabled' : '🔍 HD Cover Debug Info disabled');
+      }
+    }
+
+    function getManualCover(rjCode) {
+      if (!rjCode) return null;
+      try {
+        const map = JSON.parse(localStorage.getItem('astreamer_manual_covers') || '{}');
+        return map[normRj(rjCode)] || null;
+      } catch(e) {
+        return null;
+      }
+    }
+
+    function saveManualCover(rjCode, url) {
+      if (!rjCode || !url) return;
+      try {
+        const map = JSON.parse(localStorage.getItem('astreamer_manual_covers') || '{}');
+        map[normRj(rjCode)] = url;
+        localStorage.setItem('astreamer_manual_covers', JSON.stringify(map));
+      } catch(e) {}
+    }
+
+    function getCachedHdCover(rjCode) { return getManualCover(rjCode); }
+    function saveCachedHdCover(rjCode, url) { return saveManualCover(rjCode, url); }
+
+    function getGalleryCandidateObjects(work) {
+      if (!work) return [];
+      let cleanGal = typeof getCleanWorkGallery === 'function' ? getCleanWorkGallery(work.gallery, work.rjCode) : (Array.isArray(work.gallery) ? work.gallery : []);
+      
+      if ((!Array.isArray(cleanGal) || cleanGal.length === 0) && work.rjCode) {
+        const cleanRj = String(work.rjCode).toUpperCase().trim();
+        const canonicalRj = typeof getCanonicalDlsiteRj === 'function' ? getCanonicalDlsiteRj(cleanRj) : cleanRj;
+        const bucket = typeof getDlsiteCoverBucket === 'function' ? getDlsiteCoverBucket(canonicalRj) : cleanRj;
+        const cleanNum = cleanRj.replace(/^(?:RJ|VJ|BJ)/i, '');
+        cleanGal = [
+          { title: 'Main Package Artwork', role: 'main_cover', source: 'DLsite Doujin', url: 'https://img.dlsite.jp/modpub/images2/work/doujin/' + bucket + '/' + canonicalRj + '_img_main.jpg' },
+          { title: 'Source Artwork', role: 'main_cover', source: 'ASMR.one', url: 'https://api.asmr-200.com/api/cover/' + cleanNum + '.jpg?type=main' },
+          { title: 'Alternative Mirror Artwork', role: 'main_cover', source: 'Weeab0o', url: 'https://pic.weeabo0.xyz/' + canonicalRj + '_img_main.jpg' }
+        ];
+        for (let i = 1; i <= 8; i++) {
+          cleanGal.push({ title: 'Sample Illustration #' + i, role: 'sample_' + i, source: 'DLsite Doujin', url: 'https://img.dlsite.jp/modpub/images2/work/doujin/' + bucket + '/' + canonicalRj + '_img_smp' + i + '.jpg' });
+        }
+      }
+
+      const items = [];
+
+      // If work has an active/original rawCoverUrl, always include it as a high-priority candidate
+      if (work.rawCoverUrl && typeof work.rawCoverUrl === 'string' && !work.rawCoverUrl.includes('placeholder')) {
+        let rawU = work.rawCoverUrl;
+        if (rawU.startsWith('/image-proxy?url=')) {
+          try { rawU = decodeURIComponent(rawU.replace('/image-proxy?url=', '')); } catch(e) {}
+        }
+        if (rawU.startsWith('http')) {
+          items.push({ title: 'Original Source Artwork', url: rawU, role: 'main_cover', index: 0 });
+        }
+      }
+
+      if (Array.isArray(cleanGal)) {
+        for (let i = 0; i < cleanGal.length; i++) {
+          const item = cleanGal[i];
+          if (!item) continue;
+          let url = '';
+          let title = '';
+          let role = '';
+
+          if (Array.isArray(item)) {
+            title = String(item[0] || ('Page #' + (i + 1)));
+            url = String(item[1] || item[2] || '');
+            role = String(item[3] || '');
+          } else if (typeof item === 'object') {
+            title = String(item.title || item.name || ('Page #' + (i + 1)));
+            url = String(item.url || item.proxyUrl || item.source || '');
+            role = String(item.role || '');
+          }
+
+          if (url.startsWith('/image-proxy?url=')) {
+            try {
+              url = decodeURIComponent(url.replace('/image-proxy?url=', ''));
+            } catch(e) {}
+          }
+
+          if (!url || (!url.startsWith('http') && !url.startsWith('/'))) continue;
+          if (!items.some(it => it.url === url)) {
+            items.push({ title: title, url: url, role: role, index: items.length });
+          }
+        }
+      }
+      return items;
+    }
+
+    function getGalleryCandidateUrls(work) {
+      return getGalleryCandidateObjects(work).map(function(o) { return o.url; });
+    }
+
+    function findHdCoverCandidate(work) {
+      if (!work) return null;
+      // Only return if a manual lock is set
+      return work.manualCoverUrl || getManualCover(work.rjCode) || null;
+    }
+
+    function upgradeWorkDetailCoverToHd(work) {
+      if (!work) return;
+      if (typeof getDisplayCover === 'function') {
+        const display = getDisplayCover(work);
+        if (display && display.isDisguised) return; // Respect SFW/PSFW disguise mode
+      }
+
+      const imgEl = document.getElementById('workDetailCoverImg');
+      if (!imgEl) return;
+
+      const isHdDebug = getHdDebugLogSetting();
+      const debugBar = document.getElementById('workDetailHdDebugBar');
+
+      // 0. Check for user manual locked cover (from manual gallery selection or KV)
+      const manualLock = work.manualCoverUrl || getManualCover(work.rjCode);
+      if (manualLock) {
+        if (imgEl && imgEl.src !== manualLock) {
+          imgEl.src = manualLock;
+        }
+        const rjBadge = document.getElementById('workDetailRjBadge');
+        if (rjBadge) {
+          rjBadge.style.background = 'rgba(56, 189, 248, 0.18)';
+          rjBadge.style.borderColor = 'rgba(56, 189, 248, 0.55)';
+          rjBadge.style.color = '#38bdf8';
+          rjBadge.title = '💎 HD Master Artwork Active (🔒 User Locked)';
+        }
+        if (debugBar && isHdDebug) {
+          debugBar.style.display = 'block';
+          debugBar.innerHTML = '<div style="font-weight:800; font-size:0.8rem; margin-bottom:4px; color:#38bdf8;">🔍 HD Cover Debug Overlay</div><div>• <b>Status:</b> <span style="color:#38bdf8; font-weight:700;">🔒 Locked by User Selection</span> (' + manualLock + ')</div>';
+        }
+        return; // User explicitly selected this cover; do not run auto-evaluation
+      }
+
+      const candidates = getGalleryCandidateObjects(work);
+
+      if (candidates.length === 0) {
+        if (debugBar && isHdDebug) {
+          debugBar.style.display = 'block';
+          debugBar.innerHTML = '<div style="font-weight:800; font-size:0.8rem; margin-bottom:4px; color:#38bdf8;">🔍 HD Cover Debug Overlay</div><div>• <b>Status:</b> <span style="color:#f87171;">No gallery candidate assets found in work.gallery (0 candidates).</span></div>';
+        }
+        return;
+      }
+
+      const refProbe = new Image();
+      refProbe.onload = function() {
+        runEvaluation(refProbe.naturalWidth || imgEl.naturalWidth || 560, refProbe.naturalHeight || imgEl.naturalHeight || 770);
+      };
+      refProbe.onerror = function() {
+        runEvaluation(imgEl.naturalWidth || 560, imgEl.naturalHeight || 770);
+      };
+      refProbe.src = imgEl.src;
+
+      function runEvaluation(refW, refH) {
+        const refNorm = Math.min(refW, refH) / Math.max(refW, refH);
+        const refIsPortrait = refH >= refW;
+
+        let bestMatch = null;
+        let pendingCount = candidates.length;
+        const candidateLogs = [];
+
+        function updateDebugUI() {
+          const bar = document.getElementById('workDetailHdDebugBar');
+          if (!bar) return;
+          if (!isHdDebug) {
+            bar.style.display = 'none';
+            return;
+          }
+          bar.style.display = 'block';
+          let txt = '<div style="font-weight:800; font-size:0.8rem; margin-bottom:4px; color:#38bdf8;">🔍 HD Cover Debug Overlay</div>';
+          txt += '<div>• <b>Standard Cover Ref:</b> ' + refW + '×' + refH + ' (norm ratio <b>' + refNorm.toFixed(3) + '</b>, ' + (refIsPortrait ? 'Portrait' : 'Landscape') + ')</div>';
+          if (bestMatch) {
+            txt += '<div>• <b>Auto-Matched HD Candidate:</b> <span style="color:#4ade80; font-weight:700;">' + bestMatch.title + '</span> (' + bestMatch.width + '×' + bestMatch.height + ', norm <b>' + bestMatch.candNorm.toFixed(3) + '</b>, diff ' + (bestMatch.aspectDiff * 100).toFixed(1) + '%)</div>';
+          } else {
+            txt += '<div>• <b>Auto-Matched HD Candidate:</b> <span style="color:#f87171; font-weight:700;">None (Fallback to Standard Cover)</span></div>';
+          }
+          txt += '<div style="margin-top:4px;">• <b>Evaluated Candidates (' + candidateLogs.length + '):</b></div>';
+          candidateLogs.forEach(function(cl) {
+            const isSel = bestMatch && bestMatch.url === cl.url;
+            const mark = cl.resemblesCover ? '✅' : '❌';
+            const selTag = isSel ? '<b style="color:#4ade80;">[SELECTED]</b> ' : '';
+            txt += '<div style="padding-left:8px; opacity:' + (cl.resemblesCover ? '1' : '0.65') + ';">' + mark + ' ' + selTag + cl.title + ' (' + cl.width + '×' + cl.height + ', norm <b>' + cl.candNorm.toFixed(3) + '</b>, diff ' + (cl.aspectDiff * 100).toFixed(1) + '%)</div>';
+          });
+          bar.innerHTML = txt;
+        }
+
+        function applyBestMatch() {
+          updateDebugUI();
+          if (currentView === 'work-detail' && currentWork && normRj(currentWork.rjCode) === normRj(work.rjCode)) {
+            const targetImg = document.getElementById('workDetailCoverImg');
+            const rjBadge = document.getElementById('workDetailRjBadge');
+            if (bestMatch) {
+              if (targetImg && targetImg.src !== bestMatch.url) {
+                targetImg.src = bestMatch.url;
+              }
+              if (rjBadge) {
+                rjBadge.style.background = 'rgba(56, 189, 248, 0.18)';
+                rjBadge.style.borderColor = 'rgba(56, 189, 248, 0.55)';
+                rjBadge.style.color = '#38bdf8';
+                rjBadge.title = '💎 HD Master Artwork Active (Auto Matched)';
+              }
+            } else {
+              if (rjBadge) {
+                rjBadge.style.background = 'rgba(234, 179, 8, 0.15)';
+                rjBadge.style.borderColor = 'rgba(234, 179, 8, 0.5)';
+                rjBadge.style.color = '#facc15';
+                rjBadge.title = 'Standard Cover Active';
+              }
+            }
+          }
+        }
+
+        candidates.forEach(function(candObj) {
+          const url = candObj.url;
+          const candTitle = candObj.title || url.split('/').pop().split('?')[0];
+
+          const testImg = new Image();
+          testImg.onload = function() {
+            const w = testImg.naturalWidth || 0;
+            const h = testImg.naturalHeight || 0;
+            if (w >= 200 && h >= 200) {
+              const candNorm = Math.min(w, h) / Math.max(w, h);
+              const candIsPortrait = h >= w;
+
+              const aspectDiff = Math.abs(candNorm - refNorm) / refNorm;
+              const sameOrientation = refIsPortrait === candIsPortrait;
+
+              let resemblesCover = false;
+              if (sameOrientation && aspectDiff <= 0.22) {
+                resemblesCover = true;
+              } else if (!sameOrientation && aspectDiff <= 0.08) {
+                resemblesCover = true;
+              }
+
+              const uLower = url.toLowerCase();
+              const isJacket = (candObj.role === 'main_cover') || uLower.includes('main') || uLower.includes('smp1') || uLower.includes('jacket') || uLower.includes('cover') || candObj.index === 0;
+              const area = w * h;
+              const score = area * (isJacket ? 1.15 : 1.0);
+
+              candidateLogs.push({
+                title: candTitle,
+                url: url,
+                width: w,
+                height: h,
+                candNorm: candNorm,
+                aspectDiff: aspectDiff,
+                score: score,
+                resemblesCover: resemblesCover
+              });
+
+              if (resemblesCover) {
+                if (!bestMatch || score > bestMatch.score) {
+                  bestMatch = { url: url, title: candTitle, width: w, height: h, candNorm: candNorm, aspectDiff: aspectDiff, score: score, area: area };
+                }
+              }
+            }
+            pendingCount--;
+            if (pendingCount <= 0) {
+              applyBestMatch();
+            }
+          };
+          testImg.onerror = function() {
+            pendingCount--;
+            if (pendingCount <= 0) {
+              applyBestMatch();
+            }
+          };
+          testImg.src = url;
+        });
+
+        updateDebugUI();
+
+        setTimeout(function() {
+          if (bestMatch) applyBestMatch();
+          else updateDebugUI();
+        }, 600);
+      }
     }
 
     function isAutoRefreshOnVisitEnabled() {
@@ -5057,7 +5441,10 @@ const INDEX_HTML = `<!DOCTYPE html>
 
     function getDisplayCover(work) {
       if (!work) return { coverUrl: '', isDisguised: false };
-      let rawCover = work.coverUrl || work.poster || '';
+      const cleanRjKey = normRj(work.rjCode);
+      const manualLock = (typeof getManualCover === 'function' && cleanRjKey) ? getManualCover(cleanRjKey) : null;
+      let rawCover = work.manualCoverUrl || manualLock || work.coverUrl || work.poster || '';
+
       if ((contentMode === 'PSFW' || contentMode === 'SFW') && isWorkNsfw(work)) {
         const rj = (work.rjCode || work.id || 'RJ000000').toUpperCase();
         let hash = 0;
@@ -5065,6 +5452,7 @@ const INDEX_HTML = `<!DOCTYPE html>
         const sfwRj = SFW_DISGUISE_LIST[hash % SFW_DISGUISE_LIST.length];
         return { coverUrl: '/image-proxy?url=' + encodeURIComponent('https://pic.weeabo0.xyz/' + sfwRj + '_img_main.jpg'), isDisguised: true };
       }
+
       while (rawCover && (rawCover.startsWith('/image-proxy?url=') || (rawCover.startsWith('http') && rawCover.includes('/image-proxy?url=')))) {
         const match = rawCover.match(/[?&]url=([^&]+)/);
         if (match) {
@@ -5079,9 +5467,33 @@ const INDEX_HTML = `<!DOCTYPE html>
           break;
         }
       }
-      if (!rawCover || rawCover.includes('placeholder') || rawCover.includes('no-image')) {
+
+      // If cover is missing or pointing to generic DLsite fallback / placeholder, check for parentRj or gallery ASMR.one / Moe / Weeab0o covers
+      if (!rawCover || rawCover.includes('placeholder') || rawCover.includes('no-image') || rawCover.includes('img.dlsite.jp')) {
+        if (work.parentRj) {
+          const pNum = work.parentRj.replace(/\D/g, '').replace(/^0+/, '');
+          if (pNum) {
+            return { coverUrl: '/image-proxy?url=' + encodeURIComponent('https://api.asmr-200.com/api/cover/' + pNum + '.jpg?type=main') + (work.rjCode ? '&rj=' + encodeURIComponent(work.rjCode) : ''), isDisguised: false };
+          }
+        }
+        if (Array.isArray(work.gallery) && work.gallery.length > 0) {
+          const asmrItem = work.gallery.find(g => {
+            const u = (g.url || g.proxyUrl || (Array.isArray(g) ? g[1] : '') || '').toLowerCase();
+            return (u.includes('asmr') || u.includes('hentaiasmr') || u.includes('weeabo0')) && !u.includes('placeholder');
+          });
+          if (asmrItem) {
+            let u = asmrItem.url || asmrItem.proxyUrl || (Array.isArray(asmrItem) ? asmrItem[1] : '');
+            if (u.startsWith('/image-proxy?url=')) {
+              try { u = decodeURIComponent(u.replace('/image-proxy?url=', '')); } catch(e) {}
+            }
+            if (u.startsWith('http')) {
+              return { coverUrl: '/image-proxy?url=' + encodeURIComponent(u) + (work.rjCode ? '&rj=' + encodeURIComponent(work.rjCode) : ''), isDisguised: false };
+            }
+          }
+        }
         if (work.rjCode) return { coverUrl: '/image-proxy?rj=' + encodeURIComponent(work.rjCode), isDisguised: false };
       }
+
       if (rawCover && rawCover.startsWith('http')) {
         return { coverUrl: '/image-proxy?url=' + encodeURIComponent(rawCover) + (work.rjCode ? '&rj=' + encodeURIComponent(work.rjCode) : ''), isDisguised: false };
       }
@@ -6168,11 +6580,11 @@ const INDEX_HTML = `<!DOCTYPE html>
         : '<span style="color:var(--text-muted);">N/A</span>';
 
       const circlePill = work.circle && work.circle !== 'N/A'
-        ? '<a href="#/circle/' + encodeURIComponent(work.circle) + '" class="tag-pill" style="display:inline-flex; align-items:center; gap:4px; background:rgba(255,255,255,0.06); border:1px solid var(--border); font-weight:700; text-decoration:none; color:inherit;" data-circle="' + work.circle.replace(/"/g, '&quot;') + '" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); navCircle(this.dataset.circle); }">🏢 ' + work.circle + '</a>'
+        ? '<a href="#/circle/' + encodeURIComponent(work.circle) + '" class="tag-pill detail-circle-pill" title="' + work.circle.replace(/"/g, '&quot;') + '" data-circle="' + work.circle.replace(/"/g, '&quot;') + '" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); navCircle(this.dataset.circle); }"><span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">🏢 ' + work.circle + '</span></a>'
         : '<span style="color:var(--text-muted);">N/A</span>';
 
       const releasePill = work.releaseDate
-        ? '<span class="tag-pill" style="display:inline-flex; align-items:center; gap:4px; background:rgba(255,255,255,0.06); border:1px solid var(--border); font-weight:700;">📅 ' + work.releaseDate + '</span>'
+        ? '<span class="tag-pill" style="display:inline-flex; align-items:center; gap:4px; background:rgba(255,255,255,0.06); border:1px solid var(--border); font-weight:700;">' + work.releaseDate + '</span>'
         : '';
 
       const filteredTags = (work.tags || []).filter(function(t) {
@@ -6314,7 +6726,7 @@ const INDEX_HTML = `<!DOCTYPE html>
       }
       currentWorkChapters = chaptersList;
 
-      const cleanGallery = getCleanWorkGallery(work.gallery);
+      const cleanGallery = getCleanWorkGallery(work.gallery, work.rjCode);
       work.gallery = cleanGallery;
       const galleryCount = cleanGallery.length;
       const cleanRjKey = normRj(work.rjCode);
@@ -6333,7 +6745,16 @@ const INDEX_HTML = `<!DOCTYPE html>
       const playAllBtnText = hasFullCommunityTracks ? '▶ Play All' : (sampleTracks.length > 0 ? '▶ Play Preview' : '▶ Play All');
       const playAllAction = hasFullCommunityTracks ? 'playTrack(0, true, currentWork)' : (sampleTracks.length > 0 ? 'playDirectAudioTrack(window._currentSampleTracks[0], 0, currentWork)' : 'playTrack(0, true, currentWork)');
 
-      let html = '<div class="work-detail-banner"><div class="detail-cover-col" style="display:flex; flex-direction:column; align-items:stretch; gap:10px; flex-shrink:0;"><img class="detail-cover" src="' + display.coverUrl + '" data-rj="' + work.rjCode + '" onerror="handleImgError(this)" onclick="if(window.innerWidth <= 768){ ' + playAllAction + '; }" title="Tap to Play All"><div style="display:flex; gap:6px; width:100%;"><span class="card-rj" style="flex:1; display:flex; align-items:center; justify-content:center; padding:6px 8px; font-size:0.82rem; border-radius:8px;">' + work.rjCode + '</span><button class="btn-outline btn-remove" style="flex:1; justify-content:center; padding:6px 8px; font-size:0.82rem; border-radius:8px;" data-rj="' + work.rjCode + '" onclick="deleteWorkItem(this.dataset.rj)">🗑️ Remove</button></div></div><div class="detail-info"><h1 class="detail-title">' + work.title + '</h1><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Voice Actor (CV):</strong> ' + cvPills + '</div><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Circle:</strong> ' + circlePill + '</div>' + (releasePill ? '<div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Release:</strong> ' + releasePill + '</div>' : '') + '<div class="tags-container" style="margin-top:14px; display:flex; flex-direction:column; align-items:flex-start;"><div id="workDetailTagsRow" class="tags-row tags-row-clamped" style="margin-top:0;">' + tagPills + '</div><button id="btnToggleMoreTags" class="tag-pill" onclick="toggleWorkDetailTags()" style="display:none; margin-top:6px; background:rgba(255,255,255,0.08); border:1px dashed var(--accent); color:var(--accent); font-weight:700; cursor:pointer; align-items:center; gap:4px; font-size:0.76rem;"><span>+ Show more (' + filteredTags.length + ' tags)</span></button></div><div style="margin-top:auto; padding-top:16px; display:flex; flex-wrap:wrap; gap:10px;"><button class="btn-primary" onclick="' + playAllAction + '">' + playAllBtnText + '</button><button class="btn-outline btn-gallery" id="btnWorkGallery" data-rj="' + work.rjCode + '" onclick="openWorkGalleryModal()" style="display:' + (galleryCount > 0 ? 'inline-flex' : 'none') + ';">🖼️ Gallery (<span id="btnWorkGalleryCount">' + galleryCount + '</span>)</button><button class="btn-outline" data-rj="' + work.rjCode + '" onclick="addWorkToPlaylistAction(this.dataset.rj)">➕ Playlist</button><button class="btn-outline" id="btnWorkRefresh"' + refreshBtnDisabled + ' data-rj="' + work.rjCode + '" onclick="refreshSingleWork(this.dataset.rj, this)">' + refreshBtnContent + '</button><button class="btn-outline" onclick="navBack()">← Back</button></div></div></div>';
+      const isHdQuality = getCoverQualitySetting() === 'hd' && !display.isDisguised;
+      const manualCover = isHdQuality ? (work.manualCoverUrl || getManualCover(work.rjCode)) : null;
+      const initialCoverSrc = manualCover || display.coverUrl;
+      const isInitialHd = Boolean(manualCover && isHdQuality);
+      const rjBadgeStyle = isInitialHd
+        ? 'background:rgba(56,189,248,0.18); border:1px solid rgba(56,189,248,0.55); color:#38bdf8;'
+        : 'background:rgba(234,179,8,0.15); border:1px solid rgba(234,179,8,0.5); color:#facc15;';
+
+      let html = '<div id="workDetailHdDebugBar" class="hd-debug-bar" style="display:' + (getHdDebugLogSetting() ? 'block' : 'none') + '; width:100%; margin-bottom:12px; background:rgba(15,23,42,0.92); border:1px solid rgba(56,189,248,0.4); color:#38bdf8; font-family:monospace; font-size:0.75rem; padding:10px 16px; border-radius:10px; line-height:1.45; word-break:break-all;">🔍 HD Debug: Evaluating candidates...</div>';
+      html += '<div class="work-detail-banner"><div class="detail-cover-col" style="display:flex; flex-direction:column; align-items:stretch; gap:10px; flex-shrink:0;"><div class="detail-cover-wrapper" style="position:relative; width:100%;"><img class="detail-cover" id="workDetailCoverImg" src="' + initialCoverSrc + '" data-rj="' + work.rjCode + '" onerror="handleImgError(this)" onclick="' + playAllAction + '" title="Click to Play All"></div><div style="display:flex; gap:6px; width:100%;"><span id="workDetailRjBadge" class="card-rj" style="flex:1; display:flex; align-items:center; justify-content:center; padding:6px 8px; font-size:0.82rem; font-weight:700; border-radius:8px; ' + rjBadgeStyle + '">' + work.rjCode + '</span><button class="btn-outline btn-remove" style="flex:1; justify-content:center; padding:6px 8px; font-size:0.82rem; border-radius:8px;" data-rj="' + work.rjCode + '" onclick="deleteWorkItem(this.dataset.rj)">🗑️ Remove</button></div></div><div class="detail-info"><div class="detail-title-wrapper"><h1 class="detail-title title-clamped" id="workDetailTitle" onclick="toggleWorkDetailTitle()" title="' + (work.title || '').replace(/"/g, '&quot;') + '">' + work.title + '</h1><button id="btnToggleTitleExpand" class="btn-title-expand" onclick="toggleWorkDetailTitle()" title="Toggle full title">...</button></div><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Voice Actor (CV):</strong> ' + cvPills + '</div><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:8px 16px;"><div style="display:inline-flex; align-items:center; gap:6px; min-width:0;"><strong>Circle:</strong> ' + circlePill + '</div>' + (releasePill ? '<div style="display:inline-flex; align-items:center; gap:6px; min-width:0;"><strong>Release:</strong> ' + releasePill + '</div>' : '') + '</div><div class="tags-container" style="margin-top:14px; display:flex; flex-direction:column; align-items:flex-start;"><div id="workDetailTagsRow" class="tags-row tags-row-clamped" style="margin-top:0;">' + tagPills + '</div><button id="btnToggleMoreTags" class="tag-pill" onclick="toggleWorkDetailTags()" style="display:none; margin-top:6px; background:rgba(255,255,255,0.08); border:1px dashed var(--accent); color:var(--accent); font-weight:700; cursor:pointer; align-items:center; gap:4px; font-size:0.76rem;"><span>+ Show more (' + filteredTags.length + ' tags)</span></button></div><div style="margin-top:auto; padding-top:16px; display:flex; flex-wrap:wrap; gap:10px;"><button class="btn-primary" onclick="' + playAllAction + '">' + playAllBtnText + '</button><button class="btn-outline btn-gallery" id="btnWorkGallery" data-rj="' + work.rjCode + '" onclick="openWorkGalleryModal()" style="display:' + (galleryCount > 0 ? 'inline-flex' : 'none') + ';">🖼️ Gallery (<span id="btnWorkGalleryCount">' + galleryCount + '</span>)</button><button class="btn-outline" data-rj="' + work.rjCode + '" onclick="addWorkToPlaylistAction(this.dataset.rj)">➕ Playlist</button><button class="btn-outline" id="btnWorkRefresh"' + refreshBtnDisabled + ' data-rj="' + work.rjCode + '" onclick="refreshSingleWork(this.dataset.rj, this)">' + refreshBtnContent + '</button><button class="btn-outline" onclick="navBack()">← Back</button></div></div></div>';
 
       // 1. Physical Audio Tracklist Section
       if (hasFullCommunityTracks) {
@@ -6416,8 +6837,22 @@ const INDEX_HTML = `<!DOCTYPE html>
 
       container.innerHTML = html;
 
-      // Check tags row overflow for 2-row clamp
+      if (getCoverQualitySetting() === 'hd') {
+        upgradeWorkDetailCoverToHd(work);
+      }
+
+      // Check title and tags row overflow
       setTimeout(function() {
+        const titleEl = document.getElementById('workDetailTitle');
+        const titleBtn = document.getElementById('btnToggleTitleExpand');
+        if (titleEl && titleBtn) {
+          if (titleEl.scrollHeight > titleEl.clientHeight + 4) {
+            titleBtn.style.display = 'inline-flex';
+          } else {
+            titleBtn.style.display = 'none';
+          }
+        }
+
         const tRow = document.getElementById('workDetailTagsRow');
         const tBtn = document.getElementById('btnToggleMoreTags');
         if (tRow && tBtn) {
@@ -6429,6 +6864,25 @@ const INDEX_HTML = `<!DOCTYPE html>
         }
       }, 50);
     }
+
+    window.toggleWorkDetailTitle = function() {
+      const el = document.getElementById('workDetailTitle');
+      const btn = document.getElementById('btnToggleTitleExpand');
+      if (!el || !btn) return;
+      if (el.classList.contains('title-clamped')) {
+        el.classList.remove('title-clamped');
+        btn.textContent = '▲ Show less';
+        btn.style.display = 'inline-flex';
+      } else {
+        el.classList.add('title-clamped');
+        btn.textContent = '...';
+        if (el.scrollHeight > el.clientHeight + 4) {
+          btn.style.display = 'inline-flex';
+        } else {
+          btn.style.display = 'none';
+        }
+      }
+    };
 
     window.toggleWorkDetailTags = function() {
       const row = document.getElementById('workDetailTagsRow');
@@ -6555,7 +7009,15 @@ const INDEX_HTML = `<!DOCTYPE html>
       if (!grid) return;
       const card = grid.querySelector('.gallery-card');
       const scrollAmount = card ? (card.offsetWidth + 14) : 320;
-      grid.scrollBy({ left: direction * scrollAmount, behavior: 'smooth' });
+      const maxScrollLeft = grid.scrollWidth - grid.clientWidth;
+
+      if (direction > 0 && grid.scrollLeft >= maxScrollLeft - 15) {
+        grid.scrollTo({ left: 0, behavior: 'smooth' });
+      } else if (direction < 0 && grid.scrollLeft <= 15) {
+        grid.scrollTo({ left: maxScrollLeft, behavior: 'smooth' });
+      } else {
+        grid.scrollBy({ left: direction * scrollAmount, behavior: 'smooth' });
+      }
     }
 
     function getCanonicalDlsiteRj(rjCode) {
@@ -6696,12 +7158,14 @@ const INDEX_HTML = `<!DOCTYPE html>
     }
 
     function getCleanWorkGallery(rawGallery, rjCode = '') {
-      if (!rawGallery) return [];
+      if (!rawGallery && !rjCode) return [];
       let list = rawGallery;
+      const cleanUpper = (rjCode || (currentWork && currentWork.rjCode) || '').toUpperCase().trim();
+      const canonicalRj = typeof getCanonicalDlsiteRj === 'function' ? getCanonicalDlsiteRj(cleanUpper) : cleanUpper;
+      const bucket = typeof getDlsiteCoverBucket === 'function' ? getDlsiteCoverBucket(canonicalRj) : cleanUpper;
+      const cleanNum = cleanUpper.replace(/^(?:RJ|VJ|BJ)/i, '');
+
       if (!Array.isArray(rawGallery) && rawGallery && rawGallery._tpl === 'dlsite_seq') {
-        const cleanUpper = (rjCode || (currentWork && currentWork.rjCode) || '').toUpperCase().trim();
-        const canonicalRj = getCanonicalDlsiteRj(cleanUpper);
-        const bucket = rawGallery.bucket || getDlsiteCoverBucket(canonicalRj);
         list = [];
         if (rawGallery.hasMain) {
           list.push({ title: 'Main Package Artwork', role: 'main_cover', source: 'DLsite Doujin', url: 'https://img.dlsite.jp/modpub/images2/work/doujin/' + bucket + '/' + canonicalRj + '_img_main.jpg' });
@@ -6710,20 +7174,45 @@ const INDEX_HTML = `<!DOCTYPE html>
           list.push({ title: 'Sample Illustration #' + i, role: 'sample_' + i, source: 'DLsite Doujin', url: 'https://img.dlsite.jp/modpub/images2/work/doujin/' + bucket + '/' + canonicalRj + '_img_smp' + i + '.jpg' });
         }
       }
+
+      if ((!Array.isArray(list) || list.length === 0) && cleanUpper) {
+        list = [
+          { title: 'Main Package Artwork', role: 'main_cover', source: 'DLsite Doujin', url: 'https://img.dlsite.jp/modpub/images2/work/doujin/' + bucket + '/' + canonicalRj + '_img_main.jpg' },
+          { title: 'Source Artwork', role: 'main_cover', source: 'ASMR.one', url: 'https://api.asmr-200.com/api/cover/' + cleanNum + '.jpg?type=main' },
+          { title: 'Alternative Mirror Artwork', role: 'main_cover', source: 'Weeab0o', url: 'https://pic.weeabo0.xyz/' + canonicalRj + '_img_main.jpg' }
+        ];
+        for (let i = 1; i <= 8; i++) {
+          list.push({ title: 'Sample Illustration #' + i, role: 'sample_' + i, source: 'DLsite Doujin', url: 'https://img.dlsite.jp/modpub/images2/work/doujin/' + bucket + '/' + canonicalRj + '_img_smp' + i + '.jpg' });
+        }
+      }
+
       if (!Array.isArray(list) || list.length === 0) return [];
       const normalized = list.map((g, idx) => normalizeGalleryItem(g, idx)).filter(Boolean);
-      const hasDlsite = normalized.some(item => (item.source || '').includes('DLsite'));
+
+      // If currentWork has a valid original rawCoverUrl (e.g. from HentaiASMR Moe / ASMR.one), prepend it
+      const targetWork = (currentWork && normRj(currentWork.rjCode) === normRj(cleanUpper)) ? currentWork : null;
+      if (targetWork && targetWork.rawCoverUrl && typeof targetWork.rawCoverUrl === 'string' && !targetWork.rawCoverUrl.includes('placeholder')) {
+        let rCover = targetWork.rawCoverUrl;
+        if (rCover.startsWith('/image-proxy?url=')) {
+          try { rCover = decodeURIComponent(rCover.replace('/image-proxy?url=', '')); } catch(e) {}
+        }
+        if (rCover.startsWith('http')) {
+          normalized.unshift(normalizeGalleryItem({
+            title: 'Original Source Cover Artwork',
+            source: rCover.includes('hentaiasmr') ? 'HentaiASMR' : (rCover.includes('asmr') ? 'ASMR.one' : 'Source Artwork'),
+            role: 'main_cover',
+            url: rCover
+          }, 0));
+        }
+      }
+
       const seenUrls = new Set();
-      const seenRoles = new Set();
       const gallery = [];
       for (const item of normalized) {
         if (!item || !item.url) continue;
-        if (hasDlsite && (item.source === 'Weeab0o' || item.url.includes('weeabo0'))) continue;
         const cleanUrl = item.url.toLowerCase();
         if (seenUrls.has(cleanUrl)) continue;
-        if (item.role && seenRoles.has(item.role)) continue;
         seenUrls.add(cleanUrl);
-        if (item.role) seenRoles.add(item.role);
         gallery.push({ ...item, id: gallery.length + 1 });
       }
       return gallery;
@@ -6760,7 +7249,7 @@ const INDEX_HTML = `<!DOCTYPE html>
           const label = g.title || ('Page #' + (gi + 1));
           const srcStyle = getSourceBadgeStyle(src);
           html += '<div class="gallery-card" data-idx="' + gi + '" onclick="openLightboxModal(null, null, null, parseInt(this.dataset.idx))">';
-          html += '<div class="gallery-thumb-wrap"><img class="gallery-thumb" src="' + pUrl + '" loading="lazy" onerror="handleImgError(this)"></div>';
+          html += '<div class="gallery-thumb-wrap"><img class="gallery-thumb" src="' + pUrl + '" loading="lazy" onerror="handleImgError(this)" onload="updateGalleryCardDebugRatio(this)"></div>';
           html += '<div class="gallery-card-title" title="' + label + '">' + label + '</div>';
           html += '<div class="gallery-card-source" style="font-size:0.72rem; color:var(--text-muted); margin-top:3px; display:flex; justify-content:space-between; align-items:center; width:100%;"><span>#' + (gi + 1) + '</span><span style="font-weight:700; padding:1px 6px; border-radius:4px; font-size:0.68rem; ' + srcStyle + '">' + src + '</span></div>';
           html += '</div>';
@@ -6770,6 +7259,21 @@ const INDEX_HTML = `<!DOCTYPE html>
       }
       modal.style.display = 'flex';
       updateScrollWidgetVisibility();
+    }
+
+    function updateGalleryCardDebugRatio(imgEl) {
+      if (!getHdDebugLogSetting() || !imgEl || !imgEl.naturalWidth || !imgEl.naturalHeight) return;
+      const w = imgEl.naturalWidth;
+      const h = imgEl.naturalHeight;
+      const ratio = (w / h).toFixed(3);
+      const card = imgEl.closest('.gallery-card');
+      if (card) {
+        const titleEl = card.querySelector('.gallery-card-title');
+        if (titleEl && !titleEl.dataset.hasRatio) {
+          titleEl.dataset.hasRatio = 'true';
+          titleEl.innerHTML += ' <span style="color:#38bdf8; font-weight:700;">(' + w + '×' + h + ', ratio ' + ratio + ')</span>';
+        }
+      }
     }
 
     function closeWorkGalleryModal() {
@@ -6982,11 +7486,73 @@ const INDEX_HTML = `<!DOCTYPE html>
       updateScrollWidgetVisibility();
     }
 
+    function setCoverFromLightbox() {
+      if (!currentLightboxGallery || currentLightboxGallery.length === 0) return;
+      const item = currentLightboxGallery[currentLightboxIndex];
+      if (!item) return;
+
+      let chosenUrl = item.url || item.proxyUrl || '';
+      if (chosenUrl.startsWith('/image-proxy?url=')) {
+        try {
+          chosenUrl = decodeURIComponent(chosenUrl.replace('/image-proxy?url=', ''));
+        } catch(e) {}
+      }
+      if (!chosenUrl) return;
+
+      const targetWork = (currentView === 'work-detail' && currentWork) ? currentWork : (currentPlayingWork || currentWork);
+      if (targetWork && targetWork.rjCode) {
+        targetWork.manualCoverUrl = chosenUrl;
+        targetWork.hdCoverUrl = chosenUrl;
+        saveManualCover(targetWork.rjCode, chosenUrl);
+
+        if (currentView === 'work-detail') {
+          const detailImg = document.getElementById('workDetailCoverImg');
+          if (detailImg) detailImg.src = chosenUrl;
+
+          const rjBadge = document.getElementById('workDetailRjBadge');
+          if (rjBadge) {
+            rjBadge.style.background = 'rgba(56, 189, 248, 0.18)';
+            rjBadge.style.borderColor = 'rgba(56, 189, 248, 0.55)';
+            rjBadge.style.color = '#38bdf8';
+            rjBadge.title = '💎 HD Master Artwork Active (🔒 User Locked)';
+          }
+
+          const debugBar = document.getElementById('workDetailHdDebugBar');
+          if (debugBar) {
+            debugBar.innerHTML = '<div style="font-weight:800; font-size:0.8rem; margin-bottom:4px; color:#38bdf8;">🔍 HD Cover Debug Overlay</div><div>• <b>Status:</b> <span style="color:#38bdf8; font-weight:700;">🔒 Locked by User Selection</span> (' + chosenUrl + ')</div>';
+          }
+        }
+
+        const setCoverBtn = document.getElementById('lightboxSetCoverBtn');
+        if (setCoverBtn) {
+          setCoverBtn.innerHTML = '✅ Active Cover';
+          setCoverBtn.style.color = '#4ade80';
+          setCoverBtn.style.borderColor = 'rgba(74, 222, 128, 0.5)';
+        }
+
+        // Persist to Backend DB / Cloudflare KV
+        fetch('/api/library/update-cover', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ rjCode: targetWork.rjCode, manualCoverUrl: chosenUrl })
+        }).then(function(r) { return r.json(); }).then(function(res) {
+          if (res && (res.savedToKv || res.savedToDb)) {
+            showToast('💎 Cover updated & saved to Database!');
+          } else {
+            showToast('💎 Set as HD Cover Art!');
+          }
+        }).catch(function() {
+          showToast('💎 Set as HD Cover Art!');
+        });
+      }
+    }
+
     function renderLightboxCurrent() {
       const img = document.getElementById('lightboxImg');
       const cap = document.getElementById('lightboxCaption');
       const prevBtn = document.getElementById('lightboxPrevBtn');
       const nextBtn = document.getElementById('lightboxNextBtn');
+      const setCoverBtn = document.getElementById('lightboxSetCoverBtn');
       if (!img || currentLightboxGallery.length === 0) return;
 
       const item = currentLightboxGallery[currentLightboxIndex];
@@ -7001,6 +7567,24 @@ const INDEX_HTML = `<!DOCTYPE html>
       if (cap) {
         cap.innerHTML = (total > 1 ? '[' + (currentLightboxIndex + 1) + ' / ' + total + '] ' : '') + titleText + ' <span style="font-weight:700; margin-left:8px; font-size:0.78rem; padding:2px 8px; border-radius:4px; ' + srcStyle + '">' + src + '</span>';
       }
+
+      if (setCoverBtn) {
+        const targetWork = (currentView === 'work-detail' && currentWork) ? currentWork : (currentPlayingWork || currentWork);
+        if (targetWork) {
+          const activeCover = targetWork.manualCoverUrl || getManualCover(targetWork.rjCode) || targetWork.coverUrl;
+          const isThisActive = (item.url === activeCover || item.proxyUrl === activeCover);
+          if (isThisActive) {
+            setCoverBtn.innerHTML = '✅ Active Cover';
+            setCoverBtn.style.color = '#4ade80';
+            setCoverBtn.style.borderColor = 'rgba(74, 222, 128, 0.5)';
+          } else {
+            setCoverBtn.innerHTML = '💎 Set Cover';
+            setCoverBtn.style.color = '#38bdf8';
+            setCoverBtn.style.borderColor = 'rgba(56, 189, 248, 0.4)';
+          }
+        }
+      }
+
       if (prevBtn) prevBtn.style.display = total > 1 ? 'flex' : 'none';
       if (nextBtn) nextBtn.style.display = total > 1 ? 'flex' : 'none';
     }
@@ -7826,6 +8410,15 @@ const INDEX_HTML = `<!DOCTYPE html>
       html += '<div class="settings-option ' + (contentMode === 'SFW' ? 'selected' : '') + '" data-mode="SFW" onclick="setContentMode(this.dataset.mode)"><input type="radio" name="contentMode" value="SFW" class="settings-radio" ' + (contentMode === 'SFW' ? 'checked' : '') + '><div><div class="settings-label">🛡️ SFW (Strict Safe For Work)</div><div class="settings-desc">Hide adult works and NSFW tags from the library and tag cloud, while automatically disguising covers in playlists, history, and the music player.</div></div></div>';
       html += '</div>';
 
+      // 🖼️ Work Detail Cover Art Quality
+      const coverQuality = getCoverQualitySetting();
+      html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🖼️ Work Detail Cover Quality</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 18px;">Configure the image resolution displayed on the work detail page. Library cards, search, and playlists remain high-speed standard.</p>';
+      html += '<div class="settings-option ' + (coverQuality === 'standard' ? 'selected' : '') + '" data-quality="standard" onclick="setCoverQualitySetting(this.dataset.quality); loadSettings();"><input type="radio" name="coverQuality" value="standard" class="settings-radio" ' + (coverQuality === 'standard' ? 'checked' : '') + '><div><div class="settings-label">⚡ Standard (Fast & Lightweight - Default)</div><div class="settings-desc">Loads the standard-resolution compressed catalog artwork for maximum speed and minimal data usage.</div></div></div>';
+      html += '<div class="settings-option ' + (coverQuality === 'hd' ? 'selected' : '') + '" data-quality="hd" onclick="setCoverQualitySetting(this.dataset.quality); loadSettings();"><input type="radio" name="coverQuality" value="hd" class="settings-radio" ' + (coverQuality === 'hd' ? 'checked' : '') + '><div><div class="settings-label">💎 HD Master (High Resolution Album Jacket)</div><div class="settings-desc">Searches package gallery assets on the work detail page to display the crystal-clear master cover artwork if available.</div></div></div>';
+      const isHdDebug = getHdDebugLogSetting();
+      html += '<div style="margin-top:12px; padding:12px 14px; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08); border-radius:10px; display:flex; align-items:center; justify-content:space-between;"><div><div style="font-size:0.88rem; font-weight:700; color:var(--text-main);">🔍 HD Cover Debug Info & Gallery Ratios</div><div style="font-size:0.78rem; color:var(--text-muted); margin-top:2px;">Displays candidate evaluation log above the cover and appends aspect ratios (ratio X.XXX) in brackets in the gallery modal.</div></div><label style="display:flex; align-items:center; cursor:pointer;"><input type="checkbox" id="chkHdDebugLog" ' + (isHdDebug ? 'checked' : '') + ' onchange="setHdDebugLogSetting(this.checked); loadSettings();" style="width:18px; height:18px; accent-color:var(--accent); cursor:pointer;"></label></div>';
+      html += '</div>';
+
       // 🎧 Official Preview Audio (DLsite Chobit)
       html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🎧 Official Preview Audio Mode (DLsite Chobit)</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 18px;">Configure how official preview / sample audio clips from DLsite Chobit are fetched and displayed.</p>';
       html += '<div class="settings-option ' + (previewAudioMode === 'always' ? 'selected' : '') + '" data-mode="always" onclick="setPreviewAudioMode(this.dataset.mode)"><input type="radio" name="previewAudioMode" value="always" class="settings-radio" ' + (previewAudioMode === 'always' ? 'checked' : '') + '><div><div class="settings-label">✨ Always Show (Additional Source - Recommended)</div><div class="settings-desc">Always probe and display official DLsite preview audio alongside full community tracks for every work.</div></div></div>';
@@ -8201,6 +8794,9 @@ const INDEX_HTML = `<!DOCTYPE html>
                 gCount.innerText = cleanGal.length;
                 gBtn.style.display = cleanGal.length > 0 ? 'inline-flex' : 'none';
               }
+              if (getCoverQualitySetting() === 'hd') {
+                upgradeWorkDetailCoverToHd(currentWork);
+              }
               updatedUI = true;
             }
             if (data.gallery.length > 0) {
@@ -8234,6 +8830,8 @@ const INDEX_HTML = `<!DOCTYPE html>
             if (currentPlayingWork && normRj(currentPlayingWork.rjCode) === normRj(rjCode)) {
               updatePopupPlayerUI();
             }
+          } else if (getCoverQualitySetting() === 'hd' && currentView === 'work-detail' && currentWork && normRj(currentWork.rjCode) === normRj(rjCode)) {
+            upgradeWorkDetailCoverToHd(currentWork);
           }
           return data;
         }
@@ -8489,6 +9087,8 @@ const INDEX_HTML = `<!DOCTYPE html>
 
         const idx = allWorks.findIndex(w => normRj(w.rjCode) === cleanRjKey);
         const existingWorkObj = idx !== -1 ? allWorks[idx] : currentWork;
+        if (existingWorkObj) delete existingWorkObj.hdCoverUrl;
+        saveCachedHdCover(cleanRjKey, '');
 
         // -------------------------------------------------------------
         // PHASE 1: 🎵 Fast Tracks & Chapters Stream Fetch (Always force fresh fetch on refetch)
@@ -8533,13 +9133,23 @@ const INDEX_HTML = `<!DOCTYPE html>
                 const cPosts = await cRes.json();
                 if (Array.isArray(cPosts) && cPosts.length > 0 && cPosts[0].id) {
                   const p = cPosts[0];
+                  let mCover = p._embedded && p._embedded['wp:featuredmedia'] && p._embedded['wp:featuredmedia'][0] ? (p._embedded['wp:featuredmedia'][0].source_url || '') : '';
+                  let pParentRj = '';
+                  const mMatches = (mCover + ' ' + (p.slug || '') + ' ' + (p.title?.rendered || '')).match(/(?:RJ|VJ|BJ)\d{6,8}/gi);
+                  if (mMatches) {
+                    for (const m of mMatches) {
+                      if (m.toUpperCase() !== cleanUpper) { pParentRj = m.toUpperCase(); break; }
+                    }
+                  }
                   clientMoeInfo = {
                     postId: p.id,
                     title: p.title?.rendered ? p.title.rendered.replace(/&#8211;|&#8212;/g, '-').replace(/&amp;/g, '&') : '',
                     url: 'https://cdn.hentaiasmr.moe/mf/' + p.id + '/merge/' + cleanUpper + '.mp3',
-                    link: p.link || ('https://hentaiasmr.moe/' + rawLower + '.html')
+                    link: p.link || ('https://hentaiasmr.moe/' + rawLower + '.html'),
+                    parentRj: pParentRj,
+                    rawCoverUrl: mCover
                   };
-                  devLog('INFO', 'CLIENT_PROBE', '✅ Client discovered Moe Post ID: ' + p.id + ' via slug (' + s + ') -> ' + clientMoeInfo.url);
+                  devLog('INFO', 'CLIENT_PROBE', '✅ Client discovered Moe Post ID: ' + p.id + ' (parent: ' + (pParentRj || 'none') + ') via slug (' + s + ') -> ' + clientMoeInfo.url);
                   break;
                 }
               }
@@ -8562,13 +9172,23 @@ const INDEX_HTML = `<!DOCTYPE html>
                     return validSlugs.some(v => postSlug === v || postSlug.includes(v) || postLink.includes(v) || postTitle.includes(v));
                   }) || sPosts[0];
                   if (p && p.id) {
+                    let mCover = p._embedded && p._embedded['wp:featuredmedia'] && p._embedded['wp:featuredmedia'][0] ? (p._embedded['wp:featuredmedia'][0].source_url || '') : '';
+                    let pParentRj = '';
+                    const mMatches = (mCover + ' ' + (p.slug || '') + ' ' + (p.title?.rendered || '')).match(/(?:RJ|VJ|BJ)\d{6,8}/gi);
+                    if (mMatches) {
+                      for (const m of mMatches) {
+                        if (m.toUpperCase() !== cleanUpper) { pParentRj = m.toUpperCase(); break; }
+                      }
+                    }
                     clientMoeInfo = {
                       postId: p.id,
                       title: p.title?.rendered ? p.title.rendered.replace(/&#8211;|&#8212;/g, '-').replace(/&amp;/g, '&') : '',
                       url: 'https://cdn.hentaiasmr.moe/mf/' + p.id + '/merge/' + cleanUpper + '.mp3',
-                      link: p.link || ('https://hentaiasmr.moe/' + rawLower + '.html')
+                      link: p.link || ('https://hentaiasmr.moe/' + rawLower + '.html'),
+                      parentRj: pParentRj,
+                      rawCoverUrl: mCover
                     };
-                    devLog('INFO', 'CLIENT_PROBE', '✅ Client discovered Moe Post ID: ' + p.id + ' via search -> ' + clientMoeInfo.url);
+                    devLog('INFO', 'CLIENT_PROBE', '✅ Client discovered Moe Post ID: ' + p.id + ' (parent: ' + (pParentRj || 'none') + ') via search -> ' + clientMoeInfo.url);
                   }
                 }
               }
@@ -8663,6 +9283,9 @@ const INDEX_HTML = `<!DOCTYPE html>
         // Synchronize and render UI cleanly when all phases have completed
         if (currentView === 'work-detail' && currentWork && normRj(currentWork.rjCode) === cleanRjKey) {
           renderWorkDetailUI(currentWork);
+          if (getCoverQualitySetting() === 'hd') {
+            upgradeWorkDetailCoverToHd(currentWork);
+          }
           const updatedBtn = document.getElementById('btnWorkRefresh');
           if (updatedBtn && updatedBtn.dataset.rj && normRj(updatedBtn.dataset.rj) === cleanRjKey) {
             updatedBtn.disabled = true;
