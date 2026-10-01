@@ -197,14 +197,13 @@ async function fetchHentaiAsmrMetadata(cleanRj, options = {}) {
         const match = posts.find(p => {
           const pSlug = decodeURIComponent(p.slug || '').toLowerCase();
           const pTitle = (p.title?.rendered || '').toUpperCase();
-          const pContent = (p.content?.rendered || '').toUpperCase();
           const pLink = decodeURIComponent(p.link || '').toLowerCase();
-          const validSlugs = [cleanLower, strippedLower, cleanNum, strippedNum];
-          const validCodes = [cleanUpper, strippedUpper, cleanNum, strippedNum];
+          const validSlugs = [cleanLower, strippedLower];
+          const validCodes = [cleanUpper, strippedUpper];
           if (validSlugs.some(s => pSlug === s || pSlug.includes(s) || pLink.includes(s))) return true;
-          if (validCodes.some(c => pTitle.includes(c) || pContent.includes(c))) return true;
+          if (validCodes.some(c => pTitle.includes(c))) return true;
           return false;
-        }) || (url.includes('search=') ? posts[0] : null);
+        });
         if (match) {
           post = match;
           break;
@@ -238,7 +237,8 @@ async function fetchHentaiAsmrMetadata(cleanRj, options = {}) {
           const htmlText = pRes.data;
           // If search results page, find first matching post link and fetch it
           if (pUrl.includes('?s=')) {
-            const postLinkMatch = htmlText.match(/href="(https:\/\/hentaiasmr\.moe\/[^"]*rj[^"]*\.html)"/i) || htmlText.match(/href="(https:\/\/hentaiasmr\.moe\/\?p=\d+)"/i) || htmlText.match(/href="(https:\/\/hentaiasmr\.moe\/[a-zA-Z0-9_-]+\.html)"/i);
+            const postLinkRegex = new RegExp(`href="(https://hentaiasmr\\.moe/[^"]*(?:${cleanLower}|${strippedLower})[^"]*\\.html)"`, 'i');
+            const postLinkMatch = htmlText.match(postLinkRegex);
             if (postLinkMatch) {
               const targetPostUrl = postLinkMatch[1];
               try {
@@ -297,6 +297,9 @@ async function fetchHentaiAsmrMetadata(cleanRj, options = {}) {
   }
 
   if (!post || !post.id) return null;
+  const postText = (post.slug + ' ' + (post.link || '') + ' ' + (post.title?.rendered || '') + ' ' + (post.content?.rendered || '')).toUpperCase();
+  const isAuthenticMatch = postText.includes(cleanUpper) || postText.includes(strippedUpper) || postText.includes(cleanNum);
+  if (!isAuthenticMatch) return null;
 
   const postId = post.id;
   let cleanTitle = (post.title?.rendered || '')
@@ -1320,6 +1323,12 @@ async function probeMediaCdn(rjCode, dlsiteMeta) {
         } catch (e) {}
       }));
 
+      // Filter out dead/broken tracks (size === 0 or failed probe) when at least one valid track was found
+      const validProbedTracks = moeMeta.audioTracks.filter(t => (t._size && t._size > 0));
+      if (validProbedTracks.length > 0 && validProbedTracks.length < moeMeta.audioTracks.length) {
+        moeMeta.audioTracks = validProbedTracks;
+      }
+
       // Detect duplicate combined/all-in-one track in Moe playlist
       let maxTrackSize = 0;
       let maxTrackIdx = -1;
@@ -1413,8 +1422,15 @@ async function probeMediaCdn(rjCode, dlsiteMeta) {
         }
       }
 
-      // Post-processing deduplication for mirror CDN links
+      // Post-processing deduplication for mirror CDN links and dead tracks
       if (moeTracks.length > 1) {
+        const nonZeroTracks = moeTracks.filter(t => (t.size > 0 || t.duration > 0));
+        if (nonZeroTracks.length > 0 && nonZeroTracks.length < moeTracks.length) {
+          nonZeroTracks.forEach((t, i) => { t.id = i + 1; });
+          moeTracks.length = 0;
+          moeTracks.push(...nonZeroTracks);
+        }
+
         const distinctKeys = new Set(moeTracks.map(t => (t.rawUrl || '').replace(/^https?:\/\/[^\/]+/i, '').replace(/[#?].*$/, '').toLowerCase().trim()));
         if (distinctKeys.size === 1) {
           moeTracks.splice(1);
@@ -1443,37 +1459,70 @@ async function probeMediaCdn(rjCode, dlsiteMeta) {
     poster: `/image-proxy?url=${encodeURIComponent(coverUrl)}`
   }));
 
-  // 4. Source Selection: Multi-track JapaneseASMR > Multi-track Moe > Multi-track ASMR.one > Single-track JapaneseASMR > Single-track Moe > Single-track ASMR.one > Chobit Preview
+  // 4. Source Selection: Intelligently pick the highest-quality, most complete source
   let tracks = [];
   let selectedSource = '';
   let hasLazyAudio = false;
 
-  if (japTracks.length > 1) {
+  const getCandidateStats = (candTracks) => {
+    if (!Array.isArray(candTracks) || candTracks.length === 0) return { count: 0, totalDuration: 0, totalSize: 0, isHls: false };
+    let totalDur = 0;
+    let totalSz = 0;
+    candTracks.forEach(t => {
+      totalDur += (t.duration || 0);
+      totalSz += (t.size || t._size || 0);
+    });
+    return {
+      count: candTracks.length,
+      totalDuration: totalDur,
+      totalSize: totalSz,
+      isHls: Boolean(candTracks[0]?.isHls)
+    };
+  };
+
+  const japStats = getCandidateStats(japTracks);
+  const moeStats = getCandidateStats(moeTracks);
+  const asmrStats = getCandidateStats(asmrTracks);
+
+  // Group 1: Discrete multi-track audio candidates (count > 1)
+  if (japStats.count > 1 && japStats.totalDuration >= (moeStats.totalDuration * 0.85)) {
     tracks = japTracks;
     selectedSource = (tracks[0] && tracks[0].isHls) ? 'JapaneseASMR (HLS Stream)' : 'JapaneseASMR (Multi-Track MP3)';
     hasLazyAudio = false;
-  } else if (moeTracks.length > 1) {
+  } else if (moeStats.count > 1 && moeStats.totalDuration >= (japStats.totalDuration * 0.85)) {
     tracks = moeTracks;
     selectedSource = 'HentaiASMR Moe (Multi-Track MP3)';
     hasLazyAudio = false;
     hasHls = false;
-  } else if (asmrTracks.length > 1) {
+  } else if (asmrStats.count > 1 && asmrStats.totalDuration >= (moeStats.totalDuration * 0.85)) {
     tracks = asmrTracks;
     selectedSource = 'ASMR.one (Multi-Track Audio Stream)';
     hasLazyAudio = false;
     hasHls = false;
-  } else if (japTracks.length === 1) {
-    tracks = japTracks;
-    selectedSource = (tracks[0] && tracks[0].isHls) ? 'JapaneseASMR (HLS Stream)' : 'JapaneseASMR (Discrete MP3 track)';
-    hasLazyAudio = false;
-  } else if (moeTracks.length === 1) {
+  }
+  // Group 2: Single-track / Merged audio (or fallback when multi-track was truncated)
+  else if (moeStats.count >= 1 && moeStats.totalDuration > (japStats.totalDuration + 120)) {
+    // Moe has significantly longer/fuller audio (e.g. 3h vs 2.5h on Weeab0o)
     tracks = moeTracks;
-    selectedSource = 'HentaiASMR Moe (Discrete MP3 track)';
+    selectedSource = moeStats.count > 1 ? 'HentaiASMR Moe (Multi-Track MP3)' : 'HentaiASMR Moe (Full Audio Stream)';
     hasLazyAudio = false;
     hasHls = false;
-  } else if (asmrTracks.length === 1) {
+  } else if (japStats.count >= 1 && japStats.totalDuration > (moeStats.totalDuration + 120)) {
+    tracks = japTracks;
+    selectedSource = (tracks[0] && tracks[0].isHls) ? 'JapaneseASMR (HLS Stream)' : (japStats.count > 1 ? 'JapaneseASMR (Multi-Track MP3)' : 'JapaneseASMR (Discrete MP3 track)');
+    hasLazyAudio = false;
+  } else if (japStats.count > 0) {
+    tracks = japTracks;
+    selectedSource = (tracks[0] && tracks[0].isHls) ? 'JapaneseASMR (HLS Stream)' : (japStats.count > 1 ? 'JapaneseASMR (Multi-Track MP3)' : 'JapaneseASMR (Discrete MP3 track)');
+    hasLazyAudio = false;
+  } else if (moeStats.count > 0) {
+    tracks = moeTracks;
+    selectedSource = moeStats.count > 1 ? 'HentaiASMR Moe (Multi-Track MP3)' : 'HentaiASMR Moe (Discrete MP3 track)';
+    hasLazyAudio = false;
+    hasHls = false;
+  } else if (asmrStats.count > 0) {
     tracks = asmrTracks;
-    selectedSource = 'ASMR.one (Discrete Audio Stream)';
+    selectedSource = asmrStats.count > 1 ? 'ASMR.one (Multi-Track Audio Stream)' : 'ASMR.one (Discrete Audio Stream)';
     hasLazyAudio = false;
     hasHls = false;
   } else if (moeMeta?.isAudioFound) {
@@ -2247,6 +2296,7 @@ async function probeDlsiteAndWeeabGallery(cleanRj) {
   const canonicalRj = getCanonicalDlsiteRj(cleanUpper);
   const cleanNum = cleanUpper.replace(/^(?:RJ|VJ|BJ)/i, '');
   const strippedNum = cleanNum.replace(/^0+/, '');
+  const strippedUpper = strippedNum ? ('RJ' + strippedNum) : cleanUpper;
   const bucket = getDlsiteCoverBucket(canonicalRj);
   const candidates = [];
 
@@ -2281,18 +2331,32 @@ async function probeDlsiteAndWeeabGallery(cleanRj) {
     proxyUrl: `/image-proxy?url=${encodeURIComponent(`https://api.asmr-200.com/api/cover/${cleanNum}.jpg?type=main`)}`
   });
 
-  // 3. Weeab0o mirror
-  candidates.push({
-    title: 'Alternative Mirror Artwork',
-    role: 'main_cover',
-    source: 'Weeab0o',
-    url: `https://pic.weeabo0.xyz/${canonicalRj}_img_main.jpg`,
-    proxyUrl: `/image-proxy?url=${encodeURIComponent(`https://pic.weeabo0.xyz/${canonicalRj}_img_main.jpg`)}`
-  });
+  // 3. Weeab0o mirror candidates (main covers & alternate domains)
+  const weeabHosts = ['https://pic.weeabo0.xyz', 'https://pic1.weeabo0.xyz', 'https://pic2.weeabo0.xyz'];
+  const weeabCodes = [canonicalRj, strippedUpper].filter(Boolean);
+
+  for (const host of weeabHosts) {
+    for (const code of weeabCodes) {
+      candidates.push({
+        title: 'Alternative Mirror Artwork',
+        role: 'main_cover',
+        source: 'Weeab0o',
+        url: `${host}/${code}_img_main.jpg`,
+        proxyUrl: `/image-proxy?url=${encodeURIComponent(`${host}/${code}_img_main.jpg`)}`
+      });
+      candidates.push({
+        title: 'Alternative Mirror Artwork',
+        role: 'main_cover',
+        source: 'Weeab0o',
+        url: `${host}/${code}.jpg`,
+        proxyUrl: `/image-proxy?url=${encodeURIComponent(`${host}/${code}.jpg`)}`
+      });
+    }
+  }
 
   try {
     let validList = [];
-    const chunkSize = 4;
+    const chunkSize = 6;
 
     for (let i = 0; i < candidates.length; i += chunkSize) {
       const chunk = candidates.slice(i, i + chunkSize);
@@ -2378,21 +2442,47 @@ async function probeDlsiteAndWeeabGallery(cleanRj) {
       validList = validList.concat(altChecked.filter(Boolean));
     }
 
-    // Only probe Weeab0o mirrors if no DLsite samples were found
-    const hasDlsiteSamples = validList.some(v => v.role && v.role.startsWith('sample_'));
-    if (!hasDlsiteSamples) {
-      const weeabCandidates = [];
-      for (let i = 1; i <= 4; i++) {
-        weeabCandidates.push({
-          title: `Sample Artwork #${i}`,
-          role: `sample_${i}`,
-          source: 'Weeab0o',
-          url: `https://pic.weeabo0.xyz/${canonicalRj}_img_smp${i}.jpg`,
-          proxyUrl: `/image-proxy?url=${encodeURIComponent(`https://pic.weeabo0.xyz/${canonicalRj}_img_smp${i}.jpg`)}`
-        });
+    // Probe Weeab0o mirrors for illustrations, sample artwork, and numbered patterns: e.g. RJ01668062(2).jpg
+    const weeabCandidates = [];
+    for (const host of weeabHosts) {
+      for (const code of weeabCodes) {
+        // 1. Parenthetical numbering e.g. RJ01668062(1).jpg, RJ01668062(2).jpg
+        for (let i = 1; i <= 16; i++) {
+          weeabCandidates.push({
+            title: `Sample Illustration (${i})`,
+            role: `sample_paren_${i}`,
+            source: 'Weeab0o',
+            url: `${host}/${code}(${i}).jpg`,
+            proxyUrl: `/image-proxy?url=${encodeURIComponent(`${host}/${code}(${i}).jpg`)}`
+          });
+        }
+        // 2. Standard sample suffixes: _img_smp1.jpg ... _img_smp8.jpg
+        for (let i = 1; i <= 8; i++) {
+          weeabCandidates.push({
+            title: `Sample Artwork #${i}`,
+            role: `sample_smp_${i}`,
+            source: 'Weeab0o',
+            url: `${host}/${code}_img_smp${i}.jpg`,
+            proxyUrl: `/image-proxy?url=${encodeURIComponent(`${host}/${code}_img_smp${i}.jpg`)}`
+          });
+        }
+        // 3. Underscore suffixes: _1.jpg, _2.jpg ... _6.jpg
+        for (let i = 1; i <= 6; i++) {
+          weeabCandidates.push({
+            title: `Sample Artwork #${i}`,
+            role: `sample_und_${i}`,
+            source: 'Weeab0o',
+            url: `${host}/${code}_${i}.jpg`,
+            proxyUrl: `/image-proxy?url=${encodeURIComponent(`${host}/${code}_${i}.jpg`)}`
+          });
+        }
       }
+    }
+
+    for (let i = 0; i < weeabCandidates.length; i += chunkSize) {
+      const chunk = weeabCandidates.slice(i, i + chunkSize);
       const weeabChecked = await Promise.all(
-        weeabCandidates.map(async (item) => {
+        chunk.map(async (item) => {
           try {
             const res = await axios({
               method: 'get',
@@ -2413,18 +2503,7 @@ async function probeDlsiteAndWeeabGallery(cleanRj) {
       validList = validList.concat(weeabChecked.filter(Boolean));
     }
 
-    // Deduplicate by role (keep 1 item per role)
-    const seenRoles = new Set();
-    const roleFiltered = [];
-    for (const item of validList) {
-      if (item.role) {
-        if (seenRoles.has(item.role)) continue;
-        seenRoles.add(item.role);
-      }
-      roleFiltered.push(item);
-    }
-
-    return dedupeGalleryByImageSize(roleFiltered);
+    return dedupeGalleryByImageSize(validList);
   } catch (e) {
     return [];
   }

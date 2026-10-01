@@ -874,6 +874,21 @@ function removeFromPlaylist(playlistId, index) {
   return null;
 }
 
+function updatePlaylist(playlistId, updates) {
+  const db = readDb();
+  const plId = decodeURIComponent(playlistId || '').trim();
+  const pl = (db.playlists || []).find(p => String(p.id).trim() === plId || String(p.id) === String(playlistId).trim());
+  if (pl && updates) {
+    if (Array.isArray(updates.items)) pl.items = updates.items;
+    if (typeof updates.coverUrl === 'string') pl.coverUrl = updates.coverUrl;
+    if (updates.name) pl.name = updates.name;
+    if (updates.description) pl.description = updates.description;
+    writeDb(db);
+    return pl;
+  }
+  return null;
+}
+
 // Aggregation Methods (Artists & Genres)
 function getAllTags() {
   const db = readDb();
@@ -1145,6 +1160,7 @@ module.exports = {
   deletePlaylist,
   addToPlaylist,
   removeFromPlaylist,
+  updatePlaylist,
   getAllTags,
   getAllArtists,
   getSettings,
