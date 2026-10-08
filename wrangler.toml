@@ -5,3 +5,8 @@ compatibility_date = "2024-04-01"
 [[kv_namespaces]]
 binding = "ASTREAMER_KV"
 id = "7eaa08474bf44ffb846cfa22366843a3"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "astreamer-db"
+database_id = "35b11068-d293-4335-8022-c59732079cc8"

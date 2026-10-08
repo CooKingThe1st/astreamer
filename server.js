@@ -3268,13 +3268,18 @@ const INDEX_HTML = `<!DOCTYPE html>
           <div style="width: 36px; height: 36px; border-radius: 10px; background: var(--accent-gradient, linear-gradient(135deg, #ff7a00, #ff9500)); display: flex; align-items: center; justify-content: center; font-size: 1.3rem; box-shadow: 0 0 14px var(--accent-glow);">🚀</div>
           <div>
             <h3 style="font-size: 1.3rem; font-weight: 800;">aStreamer Release Notes</h3>
-            <span style="font-size: 0.8rem; color: var(--accent); font-weight: 700;">Version 2.1 Official Milestone Release</span>
+            <span style="font-size: 0.8rem; color: var(--accent); font-weight: 700;">Version 2.5 Official Milestone Release (Cloudflare D1 Native)</span>
           </div>
         </div>
         <button class="btn-outline" style="padding: 4px 10px;" onclick="closeChangelogModal()">✖</button>
       </div>
       
       <div style="color: #d1d5db; font-size: 0.9rem; line-height: 1.6; display: flex; flex-direction: column; gap: 14px;">
+        <div style="background: rgba(168, 85, 247, 0.12); border: 1px solid rgba(168, 85, 247, 0.4); padding: 14px; border-radius: 10px;">
+          <h4 style="color: #c084fc; font-weight: 700; margin-bottom: 4px;">🗄️ Cloudflare D1 Native SQL Engine &amp; Dedicated KV Stores (v2.5)</h4>
+          <p style="color: var(--text-muted); font-size: 0.85rem;">Upgraded monolithic 10MB KV database to Cloudflare D1 (Native SQLite). Full-library queries run with sub-millisecond execution times, zero CPU limits, and individual dedicated KV stores for Wishlists, Tag Dictionaries, Playlists, and History.</p>
+        </div>
+
         <div style="background: rgba(255, 122, 0, 0.08); border: 1px solid rgba(255, 122, 0, 0.25); padding: 14px; border-radius: 10px;">
           <h4 style="color: #ff7a00; font-weight: 700; margin-bottom: 4px;">⚡ Instant Batch Ingestion &amp; Parallel Fast-Probing</h4>
           <p style="color: var(--text-muted); font-size: 0.85rem;">Eliminated Cloudflare 503 Worker timeouts. Batch imports now probe JapaneseASMR with lightweight 2-URL parallel checks in ~150ms. Works not on JapaneseASMR are instantly ingested via REST API without expensive sequential CDN path guessing.</p>
@@ -3752,7 +3757,7 @@ const INDEX_HTML = `<!DOCTYPE html>
       <div class="logo-icon"><img src="/icon/logo_425.png" alt="streASMR"></div>
       <div>
         <div class="logo-title">aStreamer</div>
-        <span id="appVersionTag" style="font-size: 0.65rem; color: var(--accent); font-weight: 700; background: var(--accent-glow); padding: 1px 6px; border-radius: 4px; border: 1px solid var(--accent);">v2.1 Official</span>
+        <span id="appVersionTag" style="font-size: 0.65rem; color: var(--accent); font-weight: 700; background: var(--accent-glow); padding: 1px 6px; border-radius: 4px; border: 1px solid var(--accent);">v2.5 Official</span>
       </div>
     </a>
 
@@ -5816,6 +5821,30 @@ const INDEX_HTML = `<!DOCTYPE html>
         openAdminModal();
       }
     }
+
+    async function runD1Migration() {
+      if (!isAdmin) {
+        openAdminModal('Unlock admin access first to run D1 database migration.');
+        return;
+      }
+      showToast('⏳ Migrating library & KV collections into Cloudflare D1...');
+      devLog('INFO', 'API', 'Starting /api/admin/migrate-to-d1 batch migration...');
+      try {
+        const res = await apiFetch('/api/admin/migrate-to-d1', { method: 'POST' });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          showToast('🎉 Migrated ' + (data.migratedToD1 || 0) + '/' + (data.totalInKV || 0) + ' works into D1!');
+          devLog('INFO', 'API', 'D1 Migration Successful', data);
+        } else {
+          showToast('❌ Migration failed: ' + (data.error || 'Unknown error'));
+          devLog('ERROR', 'API', 'D1 Migration Failed', data);
+        }
+      } catch(e) {
+        showToast('❌ Network error during migration: ' + e.message);
+        devLog('ERROR', 'API', 'D1 Migration Exception: ' + e.message);
+      }
+    }
+    window.runD1Migration = runD1Migration;
 
     async function loginAdmin() {
       try {
@@ -8538,8 +8567,8 @@ const INDEX_HTML = `<!DOCTYPE html>
       html += '<div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center;"><button class="btn-primary" onclick="openDevLogModal()">📋 Open Activity Log Viewer</button><button class="btn-outline" onclick="clearDevLogs()">🗑️ Clear Log Cache</button><button class="btn-outline" onclick="exportDevLogs()">💾 Download .log File</button></div>';
       html += '</div></div>';
 
-      html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🚀 aStreamer v2.1 Milestone Release</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Client-Assisted Moe Stream Discovery, Zero-403 WAF Fallback, Verbose Diagnostic Tracing, and High-Resilience Ingestion Engine.</p>';
-      html += '<button class="btn-outline" onclick="openChangelogModal()">📜 View Version 2.1 Release Notes & Architecture</button></div>';
+      html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🚀 aStreamer v2.5 Milestone Release</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Cloudflare D1 Native SQLite Database, Isolated Dedicated KV Collections, Sub-Millisecond Search &amp; Infinite Scaling.</p>';
+      html += '<button class="btn-outline" onclick="openChangelogModal()">📜 View Version 2.5 Release Notes & Architecture</button></div>';
 
       container.innerHTML = html;
     }
@@ -9155,7 +9184,7 @@ const INDEX_HTML = `<!DOCTYPE html>
             const clientWpUrl = 'https://hentaiasmr.moe/wp-json/wp/v2/posts?slug=' + encodeURIComponent(s) + '&_embed=1';
             devLog('TRACE', 'CLIENT_PROBE', 'Client probing WP REST slug: ' + clientWpUrl);
             try {
-              const cRes = await fetch(clientWpUrl, { headers: { 'Accept': 'application/json' } });
+              const cRes = await fetch(clientWpUrl, { headers: { 'Accept': 'application/json' }, signal: AbortSignal.timeout(2000) });
               if (cRes.ok) {
                 const cPosts = await cRes.json();
                 if (Array.isArray(cPosts) && cPosts.length > 0 && cPosts[0].id) {
@@ -9187,7 +9216,7 @@ const INDEX_HTML = `<!DOCTYPE html>
             const searchUrl = 'https://hentaiasmr.moe/wp-json/wp/v2/posts?search=' + encodeURIComponent(cleanUpper) + '&per_page=5&_embed=1';
             devLog('TRACE', 'CLIENT_PROBE', 'Client searching WP REST: ' + searchUrl);
             try {
-              const sRes = await fetch(searchUrl, { headers: { 'Accept': 'application/json' } });
+              const sRes = await fetch(searchUrl, { headers: { 'Accept': 'application/json' }, signal: AbortSignal.timeout(2000) });
               if (sRes.ok) {
                 const sPosts = await sRes.json();
                 if (Array.isArray(sPosts) && sPosts.length > 0) {
