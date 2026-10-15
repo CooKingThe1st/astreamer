@@ -1141,9 +1141,88 @@ function preStashWishlistItems(items) {
   return db.wishlist;
 }
 
-function clearWishlist() {
+function getWaitlist() {
   const db = readDb();
-  db.wishlist = [];
+  return db.waitlist || [];
+}
+
+function saveWaitlistItem(entry) {
+  if (!entry || !entry.rjCode) return getWaitlist();
+  const db = readDb();
+  db.waitlist = db.waitlist || [];
+  const cleanRj = entry.rjCode.toUpperCase().trim();
+
+  // If already in works library, don't keep in waitlist
+  if (db.works && db.works[cleanRj]) return db.waitlist;
+
+  const item = {
+    rjCode: cleanRj,
+    title: entry.title || `Work ${cleanRj}`,
+    coverUrl: entry.coverUrl || '',
+    cv: entry.cv || '',
+    circle: entry.circle || '',
+    source: entry.source || 'hentaiasmr.moe',
+    addedAt: entry.addedAt || new Date().toISOString()
+  };
+
+  const idx = db.waitlist.findIndex(w => w.rjCode === cleanRj);
+  if (idx >= 0) {
+    db.waitlist[idx] = { ...db.waitlist[idx], ...item };
+  } else {
+    db.waitlist.unshift(item);
+  }
+  writeDb(db);
+  return db.waitlist;
+}
+
+function addBatchToWaitlist(entries) {
+  if (!Array.isArray(entries) || entries.length === 0) return getWaitlist();
+  const db = readDb();
+  db.waitlist = db.waitlist || [];
+  const works = db.works || {};
+  let addedCount = 0;
+
+  for (const entry of entries) {
+    if (!entry || !entry.rjCode) continue;
+    const cleanRj = entry.rjCode.toUpperCase().trim();
+    if (works[cleanRj]) continue;
+
+    const item = {
+      rjCode: cleanRj,
+      title: entry.title || `Work ${cleanRj}`,
+      coverUrl: entry.coverUrl || '',
+      cv: entry.cv || '',
+      circle: entry.circle || '',
+      source: entry.source || 'hentaiasmr.moe',
+      addedAt: entry.addedAt || new Date().toISOString()
+    };
+
+    const idx = db.waitlist.findIndex(w => w.rjCode === cleanRj);
+    if (idx >= 0) {
+      db.waitlist[idx] = { ...db.waitlist[idx], ...item };
+    } else {
+      db.waitlist.unshift(item);
+      addedCount++;
+    }
+  }
+
+  if (addedCount > 0) {
+    writeDb(db);
+  }
+  return db.waitlist;
+}
+
+function removeWaitlistItem(rjCode) {
+  const db = readDb();
+  const cleanRj = (rjCode || '').toUpperCase().trim();
+  db.waitlist = (db.waitlist || []).filter(w => w.rjCode !== cleanRj);
+  writeDb(db);
+  return db.waitlist;
+}
+
+function clearWaitlist() {
+  const db = readDb();
+  db.waitlist = [];
   writeDb(db);
   return [];
 }
@@ -1174,6 +1253,11 @@ module.exports = {
   removeWishlistItem,
   cleanWishlistDuplicates,
   clearWishlist,
+  getWaitlist,
+  saveWaitlistItem,
+  addBatchToWaitlist,
+  removeWaitlistItem,
+  clearWaitlist,
   readDb,
   BASE_TAG_DICT,
   mergeTagDict,

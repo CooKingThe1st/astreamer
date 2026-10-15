@@ -634,6 +634,7 @@ const SEED_DATA = {
   playlists: [],
   history: [],
   wishlist: [],
+  waitlist: [],
   tagDict: BASE_TAG_DICT,
   settings: { contentMode: 'NSFW' }
 };
@@ -830,14 +831,16 @@ async function getDb(env, forceFresh = false) {
       const worksMap = {};
       d1Works.forEach(w => { worksMap[w.rjCode] = w; });
 
-      // Fetch isolated KV data for wishlist, tagDict, playlists, history
+      // Fetch isolated KV data for wishlist, waitlist, tagDict, playlists, history
       let wishlist = [];
+      let waitlist = [];
       let tagDict = Object.assign({}, BASE_TAG_DICT);
       let playlists = [];
       let history = [];
 
       if (env.ASTREAMER_KV) {
         try { wishlist = (await env.ASTREAMER_KV.get('ASTREAMER_WISHLIST', 'json')) || []; } catch(e) {}
+        try { waitlist = (await env.ASTREAMER_KV.get('ASTREAMER_WAITLIST', 'json')) || []; } catch(e) {}
         try {
           const tKv = await env.ASTREAMER_KV.get('ASTREAMER_TAG_DICT', 'json');
           if (tKv) tagDict = Object.assign({}, BASE_TAG_DICT, tKv);
@@ -849,6 +852,7 @@ async function getDb(env, forceFresh = false) {
       const dbObj = {
         works: worksMap,
         wishlist,
+        waitlist,
         playlists,
         history,
         tagDict
@@ -1114,10 +1118,11 @@ async function saveDb(env, data) {
     }
   }
 
-  // 2. Save standalone KV keys (Wishlist, TagDict, Playlists, History)
+  // 2. Save standalone KV keys (Wishlist, Waitlist, TagDict, Playlists, History)
   if (env && env.ASTREAMER_KV) {
     try {
       if (Array.isArray(data.wishlist)) await env.ASTREAMER_KV.put('ASTREAMER_WISHLIST', JSON.stringify(data.wishlist));
+      if (Array.isArray(data.waitlist)) await env.ASTREAMER_KV.put('ASTREAMER_WAITLIST', JSON.stringify(data.waitlist));
       if (data.tagDict && typeof data.tagDict === 'object') await env.ASTREAMER_KV.put('ASTREAMER_TAG_DICT', JSON.stringify(data.tagDict));
       if (Array.isArray(data.playlists)) await env.ASTREAMER_KV.put('ASTREAMER_PLAYLISTS', JSON.stringify(data.playlists));
       if (Array.isArray(data.history)) await env.ASTREAMER_KV.put('ASTREAMER_HISTORY', JSON.stringify(data.history));
@@ -4541,6 +4546,90 @@ async function fetchChaptersForRj(cleanRj, hasHls = true, targetDuration = 0) {
   return result.chapters;
 }
 
+// Scrape HentaiASMR Moe Frontpage / REST API for WaitList
+async function scrapeHentaiAsmrFrontpageWorker() {
+  const discovered = [];
+  const seenRj = new Set();
+
+  function addWork(rj, title, circle, cv, rawCoverUrl) {
+    if (!rj) return;
+    const cleanRj = rj.toUpperCase().trim();
+    if (seenRj.has(cleanRj)) return;
+    seenRj.add(cleanRj);
+    discovered.push({
+      rjCode: cleanRj,
+      title: title || `Work ${cleanRj}`,
+      circle: circle || '',
+      cv: cv || '',
+      coverUrl: rawCoverUrl || `/image-proxy?rj=${cleanRj}`,
+      source: 'hentaiasmr.moe',
+      addedAt: new Date().toISOString()
+    });
+  }
+
+  // Strategy 1: WordPress REST API (Structured JSON)
+  try {
+    const res = await fetch('https://hentaiasmr.moe/wp-json/wp/v2/posts?page=1&per_page=20&_embed=1', {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'application/json',
+        'Referer': 'https://hentaiasmr.moe/'
+      }
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 0) {
+        for (const p of data) {
+          const slug = p.slug || '';
+          const titleRendered = (p.title?.rendered || '').replace(/&#8211;/g, '-').replace(/&amp;/g, '&').trim();
+          const contentRendered = p.content?.rendered || '';
+          const combinedText = `${slug} ${titleRendered} ${contentRendered}`;
+
+          const rjMatch = combinedText.match(/(?:RJ|VJ|BJ)\d{6,8}/i);
+          if (!rjMatch) continue;
+          const rjCode = rjMatch[0].toUpperCase();
+
+          let cv = '';
+          let circle = '';
+          const cvMatch = contentRendered.match(/(?:Voice|CV|CAST)\s*:\s*([^<\r\n]+)/i);
+          if (cvMatch) cv = cvMatch[1].replace(/&nbsp;/g, ' ').trim();
+
+          const circleMatch = contentRendered.match(/(?:Circle|Studio)\s*:\s*([^<\r\n]+)/i);
+          if (circleMatch) circle = circleMatch[1].replace(/&nbsp;/g, ' ').trim();
+
+          addWork(rjCode, titleRendered, circle, cv);
+        }
+        if (discovered.length > 0) return discovered;
+      }
+    }
+  } catch (apiErr) {
+    console.error('[Worker Waitlist Scraper] REST API error, falling back to HTML:', apiErr);
+  }
+
+  // Strategy 2: Direct Frontpage HTML fallback
+  try {
+    const res = await fetch('https://hentaiasmr.moe/', {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Referer': 'https://hentaiasmr.moe/'
+      }
+    });
+    if (res.ok) {
+      const html = await res.text();
+      const rjMatches = html.match(/(?:RJ|VJ|BJ)\d{6,8}/gi) || [];
+      for (const rj of rjMatches) {
+        addWork(rj, `Work ${rj.toUpperCase()}`, '', '');
+      }
+    }
+  } catch (htmlErr) {
+    console.error('[Worker Waitlist Scraper] HTML error:', htmlErr);
+  }
+
+  return discovered;
+}
+
 // Main Cloudflare Worker Fetch Handler
 export default {
   async fetch(request, env, ctx) {
@@ -5886,6 +5975,63 @@ export default {
       return json({ success: true, wishlist: db.wishlist });
     }
 
+    // WaitList APIs (Discovery Queue)
+    if (pathname === '/api/waitlist' && request.method === 'GET') {
+      if (!isAuth()) return json([]);
+      const db = await getDb(env);
+      return json(db.waitlist || []);
+    }
+
+    if (pathname === '/api/waitlist/scan' && request.method === 'POST') {
+      if (!isAuth()) return json({ error: 'Unauthorized' }, 401);
+      const db = await getDb(env);
+      db.waitlist = db.waitlist || [];
+      const works = db.works || {};
+
+      const discovered = await scrapeHentaiAsmrFrontpageWorker();
+      let addedCount = 0;
+
+      for (const entry of discovered) {
+        if (!entry || !entry.rjCode) continue;
+        const cleanRj = entry.rjCode.toUpperCase().trim();
+        if (works[cleanRj]) continue;
+
+        const idx = db.waitlist.findIndex(w => w.rjCode === cleanRj);
+        if (idx >= 0) {
+          db.waitlist[idx] = { ...db.waitlist[idx], ...entry };
+        } else {
+          db.waitlist.unshift(entry);
+          addedCount++;
+        }
+      }
+
+      if (addedCount > 0) {
+        await saveDb(env, db);
+      }
+      return json({ success: true, discoveredCount: discovered.length, addedCount, waitlist: db.waitlist });
+    }
+
+    if (pathname.startsWith('/api/waitlist/') && request.method === 'DELETE') {
+      if (!isAuth()) return json({ error: 'Unauthorized' }, 401);
+      const rjCode = pathname.replace('/api/waitlist/', '').toUpperCase().trim();
+      const db = await getDb(env);
+      if (rjCode === 'CLEAR_ALL' || rjCode === 'CLEAR') {
+        db.waitlist = [];
+      } else {
+        db.waitlist = (db.waitlist || []).filter(w => w.rjCode !== rjCode);
+      }
+      await saveDb(env, db);
+      return json({ success: true, waitlist: db.waitlist });
+    }
+
+    if (pathname === '/api/waitlist' && request.method === 'DELETE') {
+      if (!isAuth()) return json({ error: 'Unauthorized' }, 401);
+      const db = await getDb(env);
+      db.waitlist = [];
+      await saveDb(env, db);
+      return json({ success: true, waitlist: [] });
+    }
+
     // Aggregations
     if (pathname === '/api/tags') {
       if (!isAuth()) return json([]);
@@ -6253,6 +6399,42 @@ export default {
         'Cache-Control': 'no-cache, no-store, must-revalidate'
       }
     });
+  },
+
+  // Cloudflare Cron Trigger (twice-daily automatic poll for WaitList)
+  async scheduled(event, env, ctx) {
+    try {
+      console.log('[Worker Cron] Triggered scheduled polling of hentaiasmr.moe frontpage...');
+      const db = await getDb(env);
+      db.waitlist = db.waitlist || [];
+      const works = db.works || {};
+
+      const discovered = await scrapeHentaiAsmrFrontpageWorker();
+      let addedCount = 0;
+
+      for (const entry of discovered) {
+        if (!entry || !entry.rjCode) continue;
+        const cleanRj = entry.rjCode.toUpperCase().trim();
+        if (works[cleanRj]) continue;
+
+        const idx = db.waitlist.findIndex(w => w.rjCode === cleanRj);
+        if (idx >= 0) {
+          db.waitlist[idx] = { ...db.waitlist[idx], ...entry };
+        } else {
+          db.waitlist.unshift(entry);
+          addedCount++;
+        }
+      }
+
+      if (addedCount > 0) {
+        await saveDb(env, db);
+        console.log(`[Worker Cron] Successfully added ${addedCount} new works to WaitList. Total: ${db.waitlist.length}`);
+      } else {
+        console.log(`[Worker Cron] Polled ${discovered.length} works, no new unimported works found.`);
+      }
+    } catch (e) {
+      console.error('[Worker Cron] Error in scheduled handler:', e);
+    }
   }
 };
 
@@ -8367,6 +8549,77 @@ const INDEX_HTML = `<!DOCTYPE html>
           <div style="display: flex; gap: 10px;">
             <button class="btn-outline" onclick="closePageImportModal()">Cancel</button>
             <button class="btn-primary" id="btnFinishPageImport" onclick="startPageImportExecution()" style="font-weight: 800; padding: 9px 20px;">🚀 Import Selected (<span id="pageImportFinalBtnCount">0</span>)</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Visual WaitList Discovery Modal -->
+  <div id="waitlistModal" class="modal-overlay" style="z-index: 10040;">
+    <div class="modal-content" id="waitlistModalContent" style="max-width: 880px; width: 95vw; max-height: 90vh; display: flex; flex-direction: column; padding: 24px; background: #0e111a; border: 1px solid rgba(56, 189, 248, 0.35); box-shadow: 0 25px 60px rgba(0,0,0,0.85); border-radius: 16px; overflow: hidden;">
+      
+      <!-- Modal Header -->
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; flex-shrink: 0;">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <div style="font-size: 1.6rem;">📑</div>
+          <div>
+            <h3 class="modal-title" style="margin: 0; font-size: 1.25rem; color: #fff;">Automated Scraper WaitList</h3>
+            <p style="color: var(--text-muted); font-size: 0.78rem; margin: 2px 0 0 0;">Scheduled frontpage releases waiting for review. Pick what to import or discard.</p>
+          </div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <button class="btn-outline" id="btnWaitlistScanNow" style="padding: 4px 10px; font-size: 0.78rem;" onclick="triggerWaitlistScanNow()" title="Scan frontpage now">🔄 Scan Now</button>
+          <button class="btn-outline" style="padding: 4px 10px;" onclick="closeWaitlistModal()">✖</button>
+        </div>
+      </div>
+
+      <!-- Interactive Preview & Selection View -->
+      <div id="waitlistStepPreview" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden;">
+        
+        <!-- Toolbar & Selection Summary -->
+        <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border); padding: 10px 14px; border-radius: 10px; flex-shrink: 0;">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span id="waitlistSelectionCount" style="font-size: 0.9rem; font-weight: 700; color: #38bdf8;">0 works selected</span>
+            <span style="font-size: 0.78rem; color: var(--text-muted);">• Click any card to pick / exclude</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+            <label style="display: inline-flex; align-items: center; gap: 5px; font-size: 0.78rem; color: #38bdf8; cursor: pointer; user-select: none; margin-right: 4px; background: rgba(56,189,248,0.1); padding: 3px 8px; border-radius: 6px; border: 1px solid rgba(56,189,248,0.3);" title="Hide works that are already present in your library">
+              <input type="checkbox" id="waitlistHideImportedCheck" checked onchange="toggleWaitlistHideImported(this.checked)" style="cursor: pointer;">
+              <span>✨ Unimported Only</span>
+            </label>
+            <label style="display: inline-flex; align-items: center; gap: 5px; font-size: 0.78rem; color: #cbd5e1; cursor: pointer; user-select: none; margin-right: 4px; background: rgba(255,255,255,0.06); padding: 3px 8px; border-radius: 6px; border: 1px solid var(--border);" title="Toggle between original high-res cover and disguised SFW artwork">
+              <input type="checkbox" id="waitlistOriginalArtCheck" onchange="toggleWaitlistOriginalArt(this.checked)" style="cursor: pointer;">
+              <span>🖼️ Original Art</span>
+            </label>
+            <button class="btn-outline" style="padding: 4px 10px; font-size: 0.78rem;" onclick="waitlistSelectAll(true)">✅ Select All</button>
+            <button class="btn-outline" style="padding: 4px 10px; font-size: 0.78rem;" onclick="waitlistSelectAll(false)">❌ Deselect All</button>
+            <div style="width: 1px; height: 20px; background: var(--border); margin: 0 4px;"></div>
+            <button class="view-btn active" id="btnWaitlistViewCarousel" onclick="setWaitlistViewMode('carousel')" title="Carousel Slider View">↔ Carousel</button>
+            <button class="view-btn" id="btnWaitlistViewGrid" onclick="setWaitlistViewMode('grid')" title="Grid Overview">⊞ Grid</button>
+          </div>
+        </div>
+
+        <!-- Carousel Slider Container with Slide Controls -->
+        <div style="position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden;">
+          <button id="btnWaitlistSlideLeft" class="btn-icon" onclick="slideWaitlistCarousel(-1)" title="Previous works" style="position: absolute; left: 8px; top: 50%; transform: translateY(-50%); z-index: 20; background: rgba(15, 23, 42, 0.85); border: 1px solid rgba(56, 189, 248, 0.5); width: 38px; height: 38px; border-radius: 50%; font-size: 1.4rem; color: #38bdf8; box-shadow: 0 4px 15px rgba(0,0,0,0.7); display: none; align-items: center; justify-content: center; backdrop-filter: blur(8px); cursor: pointer;">‹</button>
+          
+          <div id="waitlistCarouselWrap" style="flex: 1; min-height: 0; overflow-y: auto; overflow-x: auto; padding-bottom: 12px;">
+            <!-- Live cards dynamically rendered here -->
+          </div>
+
+          <button id="btnWaitlistSlideRight" class="btn-icon" onclick="slideWaitlistCarousel(1)" title="Next works" style="position: absolute; right: 8px; top: 50%; transform: translateY(-50%); z-index: 20; background: rgba(15, 23, 42, 0.85); border: 1px solid rgba(56, 189, 248, 0.5); width: 38px; height: 38px; border-radius: 50%; font-size: 1.4rem; color: #38bdf8; box-shadow: 0 4px 15px rgba(0,0,0,0.7); display: none; align-items: center; justify-content: center; backdrop-filter: blur(8px); cursor: pointer;">›</button>
+        </div>
+
+        <!-- Footer Actions -->
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); flex-shrink: 0; flex-wrap: wrap; gap: 10px;">
+          <div style="display: flex; gap: 8px;">
+            <button class="btn-outline" style="color: #ef4444; border-color: rgba(239,68,68,0.4);" onclick="discardSelectedWaitlist()" title="Remove selected works from queue">🗑️ Discard Selected</button>
+            <button class="btn-outline" style="color: #ef4444; border-color: rgba(239,68,68,0.4);" onclick="clearAllWaitlistItems()" title="Clear entire WaitList queue">🧹 Clear All</button>
+          </div>
+          <div style="display: flex; gap: 10px;">
+            <button class="btn-outline" onclick="closeWaitlistModal()">Cancel</button>
+            <button class="btn-primary" id="btnFinishWaitlistImport" onclick="startWaitlistExecution()" style="font-weight: 800; padding: 9px 20px; background: linear-gradient(135deg, #0284c7, #38bdf8); border: none;">🚀 Import Selected (<span id="waitlistFinalBtnCount">0</span>)</button>
           </div>
         </div>
       </div>
@@ -12657,6 +12910,7 @@ const INDEX_HTML = `<!DOCTYPE html>
         html += '<div><h1 class="section-title">📋 Wishlist & Pending Ingestion (' + list.length + ')</h1>';
         html += '<p style="color: var(--text-muted); font-size: 0.85rem; margin-top: 4px;">Works that were skipped during single/batch import (e.g. pending crawler or audio stream on CDN) are kept here for quick re-import.</p></div>';
         html += '<div style="display:flex; gap:10px; flex-wrap:wrap;">';
+        html += '<button class="btn-primary" id="btnViewWaitlist" onclick="openWaitlistModal()" style="background: linear-gradient(135deg, #0284c7, #38bdf8); border: none; font-weight: 700;">📑 View WaitList <span id="waitlistBtnBadge" style="display:none; background: #fff; color: #0369a1; padding: 1px 6px; border-radius: 999px; font-size: 0.72rem; margin-left: 4px;">0</span></button>';
         if (list.length > 0) {
           html += '<button class="btn-primary" id="btnRetryAllWishlist" onclick="retryAllWishlist()">🔄 Re-try All Ingestion</button>';
           html += '<button class="btn-outline" onclick="cleanWishlistDuplicates()">🧹 Clean Imported</button>';
@@ -12804,24 +13058,53 @@ const INDEX_HTML = `<!DOCTYPE html>
       } catch(e) { alert('Error: ' + e.message); }
     }
 
-    async function updateWishlistBadge(count = null) {
-      const badge = document.getElementById('wishlistCountBadge');
-      if (!badge) return;
+    async function updateWaitlistBadge(count = null) {
+      const btnBadge = document.getElementById('waitlistBtnBadge');
       if (count !== null) {
-        badge.innerText = count;
-        badge.style.display = count > 0 ? 'inline-block' : 'none';
+        if (btnBadge) {
+          btnBadge.innerText = count;
+          btnBadge.style.display = count > 0 ? 'inline-block' : 'none';
+        }
         return;
       }
       if (!isAdmin) {
-        badge.style.display = 'none';
+        if (btnBadge) btnBadge.style.display = 'none';
+        return;
+      }
+      try {
+        const list = await apiFetchJson('/api/waitlist');
+        const c = Array.isArray(list) ? list.length : 0;
+        if (btnBadge) {
+          btnBadge.innerText = c;
+          btnBadge.style.display = c > 0 ? 'inline-block' : 'none';
+        }
+      } catch(e) {}
+    }
+
+    async function updateWishlistBadge(count = null) {
+      const badge = document.getElementById('wishlistCountBadge');
+      if (count !== null) {
+        if (badge) {
+          badge.innerText = count;
+          badge.style.display = count > 0 ? 'inline-block' : 'none';
+        }
+        updateWaitlistBadge();
+        return;
+      }
+      if (!isAdmin) {
+        if (badge) badge.style.display = 'none';
+        updateWaitlistBadge(0);
         return;
       }
       try {
         const list = await apiFetchJson('/api/wishlist');
         const c = Array.isArray(list) ? list.length : 0;
-        badge.innerText = c;
-        badge.style.display = c > 0 ? 'inline-block' : 'none';
+        if (badge) {
+          badge.innerText = c;
+          badge.style.display = c > 0 ? 'inline-block' : 'none';
+        }
       } catch(e) {}
+      updateWaitlistBadge();
     }
 
     async function loadGenres() {
@@ -17168,6 +17451,311 @@ const INDEX_HTML = `<!DOCTYPE html>
       }
       closePageImportModal();
       await executeBatchImportRjList(selectedItems, 'Page Import (' + selectedItems.length + ' works)', { keepModalOpen: false, rawItems: selectedItems });
+    }
+
+    // ==========================================
+    // WAITLIST DISCOVERY PREVIEW & CONTROLLER
+    // ==========================================
+    let waitlistItems = [];
+    let waitlistViewMode = 'grid';
+    let waitlistShowOriginalArt = false;
+    let waitlistHideImported = true;
+
+    async function openWaitlistModal() {
+      if (!isAdmin) {
+        openAdminModal('Please unlock Admin access first to view WaitList.');
+        return;
+      }
+      const modal = document.getElementById('waitlistModal');
+      if (!modal) return;
+      waitlistShowOriginalArt = (contentMode === 'NSFW');
+      waitlistHideImported = true;
+      const chkArt = document.getElementById('waitlistOriginalArtCheck');
+      if (chkArt) chkArt.checked = waitlistShowOriginalArt;
+      const chkHide = document.getElementById('waitlistHideImportedCheck');
+      if (chkHide) chkHide.checked = true;
+
+      const container = document.getElementById('waitlistCarouselWrap');
+      if (container) {
+        container.innerHTML = '<div style="text-align:center; padding: 40px; color: var(--text-muted);"><div style="font-size:2rem; margin-bottom:8px;">⏳</div>Loading WaitList items...</div>';
+      }
+      modal.style.display = 'flex';
+
+      try {
+        if (!allWorks || allWorks.length === 0) {
+          try {
+            const works = await apiFetchJson('/api/library');
+            if (Array.isArray(works)) allWorks = works;
+          } catch(e) {}
+        }
+        const data = await apiFetchJson('/api/waitlist');
+        const list = Array.isArray(data) ? data : [];
+        updateWaitlistBadge(list.length);
+
+        const libraryRjSet = new Set();
+        (allWorks || []).forEach(function(w) {
+          const raw = (w.rj || w.id || w.rjCode || '').toUpperCase().trim();
+          if (raw) {
+            libraryRjSet.add(raw);
+            libraryRjSet.add(normRjKey(raw));
+          }
+        });
+
+        waitlistItems = list.map(item => {
+          const cleanRj = (item.rjCode || item.rj || '').toUpperCase().trim();
+          const inLib = libraryRjSet.has(cleanRj) || libraryRjSet.has(normRjKey(cleanRj));
+          return {
+            rj: cleanRj,
+            rjCode: cleanRj,
+            title: item.title || ('Work ' + cleanRj),
+            circle: item.circle || '',
+            cv: item.cv || '',
+            coverUrl: item.coverUrl || '',
+            source: item.source || 'hentaiasmr.moe',
+            addedAt: item.addedAt || null,
+            inLibrary: inLib,
+            selected: !inLib
+          };
+        });
+
+        const initialMode = (window.innerWidth < 768) ? 'carousel' : 'grid';
+        setWaitlistViewMode(initialMode);
+      } catch (err) {
+        if (container) {
+          container.innerHTML = '<div style="text-align:center; padding:40px; color:#ef4444;">Failed to load WaitList: ' + (err.message || '').replace(/</g, '&lt;') + '</div>';
+        }
+      }
+    }
+
+    function closeWaitlistModal() {
+      const modal = document.getElementById('waitlistModal');
+      if (modal) modal.style.display = 'none';
+    }
+
+    function toggleWaitlistOriginalArt(checked) {
+      waitlistShowOriginalArt = !!checked;
+      renderWaitlistPreview();
+    }
+
+    function toggleWaitlistHideImported(checked) {
+      waitlistHideImported = !!checked;
+      renderWaitlistPreview();
+    }
+
+    function slideWaitlistCarousel(direction) {
+      const wrap = document.getElementById('waitlistCarouselWrap');
+      if (!wrap) return;
+      const scrollAmount = (direction > 0 ? 1 : -1) * Math.max(260, wrap.clientWidth * 0.75);
+      wrap.scrollBy({ left: scrollAmount, behavior: 'smooth' });
+    }
+
+    function setWaitlistViewMode(mode) {
+      waitlistViewMode = mode;
+      const btnCarousel = document.getElementById('btnWaitlistViewCarousel');
+      const btnGrid = document.getElementById('btnWaitlistViewGrid');
+      const btnLeft = document.getElementById('btnWaitlistSlideLeft');
+      const btnRight = document.getElementById('btnWaitlistSlideRight');
+
+      if (btnCarousel && btnGrid) {
+        if (mode === 'carousel') {
+          btnCarousel.classList.add('active');
+          btnGrid.classList.remove('active');
+          if (btnLeft) btnLeft.style.display = 'flex';
+          if (btnRight) btnRight.style.display = 'flex';
+        } else {
+          btnCarousel.classList.remove('active');
+          btnGrid.classList.add('active');
+          if (btnLeft) btnLeft.style.display = 'none';
+          if (btnRight) btnRight.style.display = 'none';
+        }
+      }
+      renderWaitlistPreview();
+    }
+
+    function renderWaitlistPreview() {
+      const container = document.getElementById('waitlistCarouselWrap');
+      if (!container) return;
+
+      const total = waitlistItems.length;
+      const visibleItems = waitlistItems.filter(function(x) {
+        return !waitlistHideImported || !x.inLibrary;
+      });
+      const selectedCount = waitlistItems.filter(function(x) { return x.selected; }).length;
+
+      const countBadge = document.getElementById('waitlistSelectionCount');
+      if (countBadge) {
+        const hiddenCount = total - visibleItems.length;
+        countBadge.innerText = selectedCount + '/' + total + ' works selected' + (waitlistHideImported && hiddenCount > 0 ? ' (' + hiddenCount + ' in-library hidden)' : '');
+      }
+
+      const finalBtnCount = document.getElementById('waitlistFinalBtnCount');
+      if (finalBtnCount) {
+        finalBtnCount.innerText = selectedCount;
+      }
+
+      const finishBtn = document.getElementById('btnFinishWaitlistImport');
+      if (finishBtn) {
+        finishBtn.disabled = (selectedCount === 0);
+      }
+
+      if (total === 0) {
+        container.innerHTML = '<div style="text-align: center; color: var(--text-muted); padding: 40px; background: rgba(56, 189, 248, 0.04); border: 1px dashed rgba(56, 189, 248, 0.25); border-radius: 12px; margin: 20px;"><div style="font-size: 2.5rem; margin-bottom: 10px;">📑</div><div style="font-weight: 700; color: #fff; font-size: 1.05rem; margin-bottom: 6px;">WaitList is currently empty</div><div style="font-size: 0.85rem; color: #94a3b8; max-width: 480px; margin: 0 auto 16px;">Scheduled scrapers run twice a day to discover works, or you can run an instant frontpage scan right now.</div><button class="btn-primary" onclick="triggerWaitlistScanNow()" style="background: linear-gradient(135deg, #0284c7, #38bdf8); border: none;">🔄 Scan hentaiasmr.moe Now</button></div>';
+        return;
+      }
+
+      if (visibleItems.length === 0) {
+        container.innerHTML = '<div style="text-align: center; color: var(--text-muted); padding: 40px; background: rgba(16,185,129,0.06); border: 1px solid rgba(16,185,129,0.25); border-radius: 12px; margin: 20px;"><div style="font-size: 2rem; margin-bottom: 8px;">📚</div><div style="font-weight: 700; color: #fff; font-size: 1rem; margin-bottom: 6px;">All ' + total + ' WaitList works are already in your library!</div><div style="font-size: 0.85rem; color: #94a3b8;">Uncheck "✨ Unimported Only" above to review or re-import them.</div></div>';
+        return;
+      }
+
+      const isCarousel = (waitlistViewMode === 'carousel');
+      container.className = isCarousel ? 'page-import-carousel' : 'page-import-grid';
+
+      function safeAttr(str) {
+        if (!str) return '';
+        return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+      }
+
+      let html = '';
+      visibleItems.forEach(function(item) {
+        const isExcluded = !item.selected;
+        const rawCoverUrl = item.coverUrl || ('/image-proxy?rj=' + item.rj);
+        let finalCover = rawCoverUrl;
+        let isDisguised = false;
+        if (!waitlistShowOriginalArt && (contentMode === 'PSFW' || contentMode === 'SFW')) {
+          const dummyWork = { id: item.rj, rjCode: item.rj, coverUrl: rawCoverUrl, title: item.title, isNsfw: true };
+          const coverObj = (typeof getDisplayCover === 'function') ? getDisplayCover(dummyWork) : { coverUrl: rawCoverUrl };
+          finalCover = coverObj.coverUrl;
+          isDisguised = !!coverObj.isDisguised;
+        }
+
+        html += '<div class="page-import-card ' + (isExcluded ? 'excluded' : '') + '" data-rj="' + item.rj + '" onclick="toggleWaitlistItem(this.dataset.rj)" title="' + (isExcluded ? 'Click to Pick for Import' : 'Click to Exclude') + '">';
+        html += '  <div class="import-check-overlay">' + (item.selected ? '✓' : '✕') + '</div>';
+        html += '  <div style="position: relative; width: 100%; aspect-ratio: 1; border-radius: 10px; overflow: hidden; background: #0c0d12; margin-bottom: 10px;">';
+        html += '    <img src="' + finalCover + '" data-rj="' + item.rj + '" onerror="handleImgError(this, this.dataset.rj)" loading="lazy" style="width: 100%; height: 100%; object-fit: cover; transition: transform 0.2s;" alt="' + safeAttr(item.rj) + '">';
+        if (isDisguised) {
+          html += '    <div class="disguised-overlay" style="top:6px; left:6px;"><span class="disguised-badge" style="font-size:0.65rem; padding:1px 5px;">🎭 SFW</span></div>';
+        }
+        if (item.inLibrary) {
+          html += '    <div style="position: absolute; bottom: 6px; left: 6px; background: rgba(16, 185, 129, 0.9); color: #fff; font-size: 0.68rem; font-weight: 800; padding: 2px 7px; border-radius: 4px; box-shadow: 0 2px 6px rgba(0,0,0,0.5); backdrop-filter: blur(4px);">📚 In Library</div>';
+        } else {
+          html += '    <div style="position: absolute; bottom: 6px; left: 6px; background: rgba(56, 189, 248, 0.9); color: #000; font-size: 0.68rem; font-weight: 800; padding: 2px 7px; border-radius: 4px; box-shadow: 0 2px 6px rgba(0,0,0,0.5); backdrop-filter: blur(4px);">✨ Scraped</div>';
+        }
+        html += '  </div>';
+        html += '  <div style="display: flex; flex-direction: column; gap: 4px; flex: 1;">';
+        html += '    <div style="display: flex; align-items: center; justify-content: space-between; gap: 6px;">';
+        html += '      <span style="font-family: monospace; font-size: 0.78rem; font-weight: 800; color: #38bdf8; background: rgba(56, 189, 248, 0.12); padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(56,189,248,0.25);">' + item.rj + '</span>';
+        if (item.circle) {
+          html += '      <span style="font-size: 0.7rem; color: #94a3b8; max-width: 110px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="' + safeAttr(item.circle) + '">🏛️ ' + safeAttr(item.circle) + '</span>';
+        }
+        html += '    </div>';
+        html += '    <div style="font-size: 0.82rem; font-weight: 700; color: #fff; line-height: 1.35; max-height: 2.7em; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; margin-top: 2px;" title="' + safeAttr(item.title) + '">' + safeAttr(item.title) + '</div>';
+        if (item.cv) {
+          html += '    <div style="font-size: 0.72rem; color: #38bdf8; margin-top: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="' + safeAttr(item.cv) + '">🎙️ ' + safeAttr(item.cv) + '</div>';
+        }
+        html += '    <div style="margin-top: 6px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,0.08); font-size: 0.7rem; color: ' + (item.selected ? '#38bdf8' : '#ef4444') + '; font-weight: 700; text-align: center;">' + (item.selected ? '✓ Will Import' : '✕ Excluded') + '</div>';
+        html += '  </div>';
+        html += '</div>';
+      });
+
+      container.innerHTML = html;
+    }
+
+    function toggleWaitlistItem(rj) {
+      const item = waitlistItems.find(x => x.rj === rj);
+      if (item) {
+        item.selected = !item.selected;
+        renderWaitlistPreview();
+      }
+    }
+
+    function waitlistSelectAll(selectVal) {
+      waitlistItems.forEach(function(x) {
+        if (!waitlistHideImported || !x.inLibrary) {
+          x.selected = !!selectVal;
+        }
+      });
+      renderWaitlistPreview();
+    }
+
+    async function triggerWaitlistScanNow() {
+      if (!isAdmin) {
+        openAdminModal('Please unlock Admin access first.');
+        return;
+      }
+      const btn = document.getElementById('btnWaitlistScanNow');
+      if (btn) { btn.innerText = '⏳ Scanning...'; btn.disabled = true; }
+      showToast('🔄 Scanning hentaiasmr.moe frontpage for new releases...');
+      try {
+        const res = await apiFetch('/api/waitlist/scan', { method: 'POST' });
+        const data = await res.json().catch(() => ({}));
+        showToast('✨ Scan complete! Discovered ' + (data.discoveredCount || 0) + ' works (' + (data.addedCount || 0) + ' new added to WaitList).');
+        await openWaitlistModal();
+      } catch (err) {
+        alert('Frontpage scan failed: ' + err.message);
+      } finally {
+        if (btn) { btn.innerText = '🔄 Scan Now'; btn.disabled = false; }
+      }
+    }
+
+    async function discardSelectedWaitlist() {
+      if (!isAdmin) {
+        openAdminModal('Please unlock Admin access first.');
+        return;
+      }
+      const selected = waitlistItems.filter(x => x.selected);
+      if (selected.length === 0) {
+        alert('Please select at least 1 work to discard.');
+        return;
+      }
+      if (!confirm('Discard ' + selected.length + ' selected work(s) from WaitList?')) return;
+      showToast('🗑️ Discarding ' + selected.length + ' works from WaitList...');
+      try {
+        for (const item of selected) {
+          await apiFetch('/api/waitlist/' + encodeURIComponent(item.rj), { method: 'DELETE' });
+        }
+        showToast('✨ Removed selected works from WaitList.');
+        await openWaitlistModal();
+      } catch (err) {
+        alert('Failed to discard works: ' + err.message);
+      }
+    }
+
+    async function clearAllWaitlistItems() {
+      if (!isAdmin) {
+        openAdminModal('Please unlock Admin access first.');
+        return;
+      }
+      if (!confirm('Are you sure you want to completely clear the WaitList?')) return;
+      try {
+        await apiFetch('/api/waitlist/CLEAR_ALL', { method: 'DELETE' });
+        showToast('✨ Cleared WaitList.');
+        await openWaitlistModal();
+      } catch (err) {
+        alert('Failed to clear WaitList: ' + err.message);
+      }
+    }
+
+    async function startWaitlistExecution() {
+      if (!isAdmin) {
+        openAdminModal('Please unlock Admin access first to import works.');
+        return;
+      }
+      const selectedItems = waitlistItems.filter(x => x.selected);
+      if (selectedItems.length === 0) {
+        alert('Please select at least 1 work to import.');
+        return;
+      }
+      closeWaitlistModal();
+
+      // Launch batch import queue
+      await executeBatchImportRjList(selectedItems, 'WaitList Import (' + selectedItems.length + ' works)', { keepModalOpen: false, rawItems: selectedItems });
+
+      // Automatically remove picked works from WaitList after initiating import
+      for (const item of selectedItems) {
+        apiFetch('/api/waitlist/' + encodeURIComponent(item.rj), { method: 'DELETE' }).catch(() => {});
+      }
+      updateWaitlistBadge();
     }
 
     async function executeBatchImportRjList(rjList, batchLabel, options = {}) {

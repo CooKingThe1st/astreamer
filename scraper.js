@@ -2994,6 +2994,94 @@ async function resolveRjMetadataOnly(cleanRj, oldWork) {
   return assembleMetadataResult();
 }
 
+async function scrapeHentaiAsmrFrontpage() {
+  const discovered = [];
+  const seenRj = new Set();
+
+  function addWork(rj, title, circle, cv, rawCoverUrl) {
+    if (!rj) return;
+    const cleanRj = rj.toUpperCase().trim();
+    if (seenRj.has(cleanRj)) return;
+    seenRj.add(cleanRj);
+    discovered.push({
+      rjCode: cleanRj,
+      title: title || `Work ${cleanRj}`,
+      circle: circle || '',
+      cv: cv || '',
+      coverUrl: rawCoverUrl || `/image-proxy?rj=${cleanRj}`,
+      source: 'hentaiasmr.moe',
+      addedAt: new Date().toISOString()
+    });
+  }
+
+  // Strategy 1: WordPress REST API (Structured & Rich)
+  try {
+    const apiUrl = 'https://hentaiasmr.moe/wp-json/wp/v2/posts?page=1&per_page=20&_embed=1';
+    const res = await axios.get(apiUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'application/json',
+        'Referer': 'https://hentaiasmr.moe/'
+      },
+      httpsAgent,
+      timeout: 10000,
+      validateStatus: () => true
+    });
+
+    if (res.status === 200 && Array.isArray(res.data) && res.data.length > 0) {
+      for (const p of res.data) {
+        const slug = p.slug || '';
+        const titleRendered = (p.title?.rendered || '').replace(/&#8211;/g, '-').replace(/&amp;/g, '&').trim();
+        const contentRendered = p.content?.rendered || '';
+        const combinedText = `${slug} ${titleRendered} ${contentRendered}`;
+
+        const rjMatch = combinedText.match(/(?:RJ|VJ|BJ)\d{6,8}/i);
+        if (!rjMatch) continue;
+        const rjCode = rjMatch[0].toUpperCase();
+
+        // Extract CV & Circle from content paragraphs if present
+        let cv = '';
+        let circle = '';
+        const cvMatch = contentRendered.match(/(?:Voice|CV|CAST)\s*:\s*([^<\r\n]+)/i);
+        if (cvMatch) cv = cvMatch[1].replace(/&nbsp;/g, ' ').trim();
+
+        const circleMatch = contentRendered.match(/(?:Circle|Studio)\s*:\s*([^<\r\n]+)/i);
+        if (circleMatch) circle = circleMatch[1].replace(/&nbsp;/g, ' ').trim();
+
+        addWork(rjCode, titleRendered, circle, cv);
+      }
+      if (discovered.length > 0) {
+        return discovered;
+      }
+    }
+  } catch (apiErr) {
+    console.error('[Waitlist Scraper] REST API failed, falling back to frontpage HTML:', apiErr.message);
+  }
+
+  // Strategy 2: Direct Frontpage HTML fallback
+  try {
+    const htmlUrl = 'https://hentaiasmr.moe/';
+    const res = await axios.get(htmlUrl, {
+      headers: BROWSER_HEADERS,
+      httpsAgent,
+      timeout: 10000,
+      validateStatus: () => true
+    });
+
+    if (res.status === 200 && typeof res.data === 'string') {
+      const html = res.data;
+      const rjMatches = html.match(/(?:RJ|VJ|BJ)\d{6,8}/gi) || [];
+      for (const rj of rjMatches) {
+        addWork(rj, `Work ${rj.toUpperCase()}`, '', '');
+      }
+    }
+  } catch (htmlErr) {
+    console.error('[Waitlist Scraper] HTML fallback failed:', htmlErr.message);
+  }
+
+  return discovered;
+}
+
 module.exports = {
   resolveAndSaveWork,
   resolveRjMetadataOnly,
@@ -3006,6 +3094,7 @@ module.exports = {
   fetchChaptersAndGallery,
   parseAsmrTreeData,
   isWorkMetadataChanged,
-  normalizeReleaseDate
+  normalizeReleaseDate,
+  scrapeHentaiAsmrFrontpage
 };
 

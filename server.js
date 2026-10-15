@@ -22,7 +22,7 @@ const http = require('http');
 const https = require('https');
 
 const db = require('./db');
-const { resolveAndSaveWork, resolveRjMetadataOnly, batchImport, fetchChaptersForRj, fetchChaptersAndGallery, resolveLazyWorkAudio, isWorkMetadataChanged, normalizeReleaseDate } = require('./scraper');
+const { resolveAndSaveWork, resolveRjMetadataOnly, batchImport, fetchChaptersForRj, fetchChaptersAndGallery, resolveLazyWorkAudio, isWorkMetadataChanged, normalizeReleaseDate, scrapeHentaiAsmrFrontpage } = require('./scraper');
 
 const httpAgent = new http.Agent({ family: 4 });
 const httpsAgent = new https.Agent({ family: 4 });
@@ -1118,6 +1118,40 @@ app.post('/api/wishlist/clean', checkAuth, (req, res) => {
 app.delete('/api/wishlist', checkAuth, (req, res) => {
   const wishlist = db.clearWishlist();
   res.json({ success: true, wishlist });
+});
+
+// ==========================================
+// 4b. WAITLIST (DISCOVERY QUEUE)
+// ==========================================
+app.get('/api/waitlist', (req, res) => {
+  if (!isAuthenticatedReq(req)) return res.json([]);
+  res.json(db.getWaitlist());
+});
+
+app.post('/api/waitlist/scan', checkAuth, async (req, res) => {
+  try {
+    const discovered = await scrapeHentaiAsmrFrontpage();
+    const waitlist = db.addBatchToWaitlist(discovered);
+    res.json({ success: true, count: discovered.length, waitlist });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.delete('/api/waitlist/:rjCode', checkAuth, (req, res) => {
+  const rjCode = req.params.rjCode.toUpperCase().trim();
+  let waitlist;
+  if (rjCode === 'CLEAR_ALL' || rjCode === 'CLEAR') {
+    waitlist = db.clearWaitlist();
+  } else {
+    waitlist = db.removeWaitlistItem(rjCode);
+  }
+  res.json({ success: true, waitlist });
+});
+
+app.delete('/api/waitlist', checkAuth, (req, res) => {
+  const waitlist = db.clearWaitlist();
+  res.json({ success: true, waitlist });
 });
 
 // ==========================================
@@ -12833,4 +12867,20 @@ app.listen(PORT, () => {
   console.log(`✨ aStreamer Suite is running at: http://localhost:${PORT}`);
   console.log(`🔑 Admin Passcode: ${ADMIN_PASSCODE}`);
   console.log(`=================================================\n`);
+
+  // Periodic WaitList Scraper: Run every 12 hours (twice daily), plus initial scan after 10s
+  const TWELVE_HOURS_MS = 12 * 60 * 60 * 1000;
+  async function runScheduledWaitlistPoll() {
+    try {
+      console.log('[Waitlist Cron] Polling hentaiasmr.moe frontpage for new releases...');
+      const discovered = await scrapeHentaiAsmrFrontpage();
+      const updatedList = db.addBatchToWaitlist(discovered);
+      console.log(`[Waitlist Cron] Done. Discovered: ${discovered.length}, Current Waitlist Total: ${updatedList.length}`);
+    } catch (e) {
+      console.error('[Waitlist Cron] Error during periodic poll:', e.message);
+    }
+  }
+
+  setTimeout(runScheduledWaitlistPoll, 10000);
+  setInterval(runScheduledWaitlistPoll, TWELVE_HOURS_MS);
 });
