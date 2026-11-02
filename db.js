@@ -682,11 +682,25 @@ const DEFAULT_DB = {
   ],
   history: [],
   wishlist: [],
+  waitlist: [],
+  blacklist: [],
   tagDict: BASE_TAG_DICT,
   settings: {
     contentMode: 'NSFW' // 'SFW' | 'PSFW' | 'NSFW'
   }
 };
+
+function normRjKey(str) {
+  if (!str) return '';
+  const clean = String(str).toUpperCase().trim();
+  const m = clean.match(/^(?:RJ|VJ|BJ)?0*([0-9]+)$/i);
+  if (m) {
+    const prefMatch = clean.match(/(RJ|VJ|BJ)/i);
+    const pref = prefMatch ? prefMatch[1].toUpperCase() : 'RJ';
+    return pref + m[1];
+  }
+  return clean;
+}
 
 function readDb() {
   try {
@@ -700,6 +714,8 @@ function readDb() {
     data.playlists = data.playlists || [];
     data.history = data.history || [];
     data.wishlist = data.wishlist || [];
+    data.waitlist = data.waitlist || [];
+    data.blacklist = data.blacklist || [];
     data.works = data.works || {};
     data.tagDict = Object.assign({}, BASE_TAG_DICT, data.tagDict || {});
     return data;
@@ -1090,6 +1106,13 @@ function cleanWishlistDuplicates() {
   return { removedCount, remaining: db.wishlist.length, wishlist: db.wishlist };
 }
 
+function clearWishlist() {
+  const db = readDb();
+  db.wishlist = [];
+  writeDb(db);
+  return db.wishlist;
+}
+
 function preStashWishlistItems(items) {
   const db = readDb();
   if (!db.wishlist) db.wishlist = [];
@@ -1180,12 +1203,24 @@ function addBatchToWaitlist(entries) {
   const db = readDb();
   db.waitlist = db.waitlist || [];
   const works = db.works || {};
+  const now = Date.now();
+  const blacklistedSet = new Set();
+  (db.blacklist || []).forEach(b => {
+    if (b && (!b.expiresAt || b.expiresAt > now)) {
+      const code = (b.rjCode || '').toUpperCase().trim();
+      if (code) {
+        blacklistedSet.add(code);
+        blacklistedSet.add(normRjKey(code));
+      }
+    }
+  });
   let addedCount = 0;
 
   for (const entry of entries) {
     if (!entry || !entry.rjCode) continue;
     const cleanRj = entry.rjCode.toUpperCase().trim();
-    if (works[cleanRj]) continue;
+    const norm = normRjKey(cleanRj);
+    if (works[cleanRj] || works[norm] || blacklistedSet.has(cleanRj) || blacklistedSet.has(norm)) continue;
 
     const item = {
       rjCode: cleanRj,
@@ -1197,7 +1232,7 @@ function addBatchToWaitlist(entries) {
       addedAt: entry.addedAt || new Date().toISOString()
     };
 
-    const idx = db.waitlist.findIndex(w => w.rjCode === cleanRj);
+    const idx = db.waitlist.findIndex(w => w.rjCode === cleanRj || normRjKey(w.rjCode) === norm);
     if (idx >= 0) {
       db.waitlist[idx] = { ...db.waitlist[idx], ...item };
     } else {
@@ -1215,7 +1250,11 @@ function addBatchToWaitlist(entries) {
 function removeWaitlistItem(rjCode) {
   const db = readDb();
   const cleanRj = (rjCode || '').toUpperCase().trim();
-  db.waitlist = (db.waitlist || []).filter(w => w.rjCode !== cleanRj);
+  const norm = normRjKey(cleanRj);
+  db.waitlist = (db.waitlist || []).filter(w => {
+    const wClean = (w.rjCode || '').toUpperCase().trim();
+    return wClean !== cleanRj && normRjKey(wClean) !== norm;
+  });
   writeDb(db);
   return db.waitlist;
 }
@@ -1225,6 +1264,93 @@ function clearWaitlist() {
   db.waitlist = [];
   writeDb(db);
   return [];
+}
+
+function getBlacklist() {
+  const db = readDb();
+  const now = Date.now();
+  db.blacklist = (db.blacklist || []).filter(item => {
+    return item && (!item.expiresAt || item.expiresAt > now);
+  });
+  return db.blacklist;
+}
+
+function isBlacklisted(rjCode) {
+  if (!rjCode) return false;
+  const cleanRj = String(rjCode).toUpperCase().trim();
+  const norm = normRjKey(cleanRj);
+  const list = getBlacklist();
+  return list.some(item => {
+    const itClean = String(item.rjCode || '').toUpperCase().trim();
+    return itClean === cleanRj || normRjKey(itClean) === norm;
+  });
+}
+
+function addToBlacklist(items, durationHours = 48) {
+  if (!items) return getBlacklist();
+  const db = readDb();
+  db.blacklist = db.blacklist || [];
+  db.waitlist = db.waitlist || [];
+  const now = Date.now();
+  const durationMs = (Number(durationHours) || 48) * 60 * 60 * 1000;
+  const list = Array.isArray(items) ? items : [items];
+  let changed = false;
+
+  list.forEach(entry => {
+    const rawCode = typeof entry === 'string' ? entry : (entry.rj || entry.rjCode || '');
+    if (!rawCode) return;
+    const cleanRj = String(rawCode).toUpperCase().trim();
+    const norm = normRjKey(cleanRj);
+    const expiresAt = now + durationMs;
+    const existingIdx = db.blacklist.findIndex(b => {
+      const bClean = String(b.rjCode || '').toUpperCase().trim();
+      return bClean === cleanRj || normRjKey(bClean) === norm;
+    });
+    if (existingIdx >= 0) {
+      db.blacklist[existingIdx].expiresAt = expiresAt;
+      db.blacklist[existingIdx].updatedAt = new Date().toISOString();
+    } else {
+      db.blacklist.unshift({
+        rjCode: cleanRj,
+        title: entry.title || (`Work ` + cleanRj),
+        cv: entry.cv || '',
+        circle: entry.circle || '',
+        coverUrl: entry.coverUrl || '',
+        snoozedAt: new Date().toISOString(),
+        expiresAt: expiresAt
+      });
+    }
+    // Atomically evict newly snoozed items from the waitlist
+    db.waitlist = db.waitlist.filter(w => {
+      const wClean = String(w.rjCode || '').toUpperCase().trim();
+      return wClean !== cleanRj && normRjKey(wClean) !== norm;
+    });
+    changed = true;
+  });
+
+  // Filter out naturally expired entries while saving
+  db.blacklist = db.blacklist.filter(b => b.expiresAt > now);
+
+  if (changed) {
+    writeDb(db);
+  }
+  return db.blacklist;
+}
+
+function removeFromBlacklist(rjCode) {
+  const db = readDb();
+  const cleanRj = String(rjCode || '').toUpperCase().trim();
+  if (cleanRj === 'CLEAR_ALL' || cleanRj === 'CLEAR') {
+    db.blacklist = [];
+  } else {
+    const norm = normRjKey(cleanRj);
+    db.blacklist = (db.blacklist || []).filter(b => {
+      const bClean = String(b.rjCode || '').toUpperCase().trim();
+      return bClean !== cleanRj && normRjKey(bClean) !== norm;
+    });
+  }
+  writeDb(db);
+  return db.blacklist;
 }
 
 module.exports = {
@@ -1258,7 +1384,12 @@ module.exports = {
   addBatchToWaitlist,
   removeWaitlistItem,
   clearWaitlist,
+  getBlacklist,
+  addToBlacklist,
+  removeFromBlacklist,
+  isBlacklisted,
   readDb,
+  writeDb,
   BASE_TAG_DICT,
   mergeTagDict,
   cleanCVName,

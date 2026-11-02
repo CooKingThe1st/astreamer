@@ -1138,6 +1138,16 @@ app.post('/api/waitlist/scan', checkAuth, async (req, res) => {
   }
 });
 
+// Batch removal from WaitList
+app.post('/api/waitlist/remove', checkAuth, (req, res) => {
+  const { rjCodes } = req.body || {};
+  const list = Array.isArray(rjCodes) ? rjCodes : [];
+  list.forEach(rj => {
+    if (rj) db.removeWaitlistItem(rj);
+  });
+  res.json({ success: true, count: list.length, waitlist: db.getWaitlist() });
+});
+
 app.delete('/api/waitlist/:rjCode', checkAuth, (req, res) => {
   const rjCode = req.params.rjCode.toUpperCase().trim();
   let waitlist;
@@ -1153,6 +1163,42 @@ app.delete('/api/waitlist', checkAuth, (req, res) => {
   const waitlist = db.clearWaitlist();
   res.json({ success: true, waitlist });
 });
+
+// ==========================================
+// 4c. BLACKLIST / SNOOZE APIS
+// ==========================================
+app.get('/api/blacklist', (req, res) => {
+  if (!isAuthenticatedReq(req)) return res.json([]);
+  res.json(db.getBlacklist());
+});
+
+app.post('/api/blacklist', checkAuth, (req, res) => {
+  const { items, durationHours } = req.body || {};
+  const list = Array.isArray(items) ? items : (items ? [items] : []);
+  const hours = Number(durationHours) || (db.getSettings().blacklistDurationHours || 48);
+  const updated = db.addToBlacklist(list, hours);
+
+  // Also remove newly blacklisted items from the active waitlist queue immediately
+  list.forEach(entry => {
+    const raw = typeof entry === 'string' ? entry : (entry.rj || entry.rjCode || '');
+    if (raw) db.removeWaitlistItem(raw);
+  });
+
+  res.json({ success: true, count: list.length, blacklist: updated, waitlist: db.getWaitlist() });
+});
+
+app.delete('/api/blacklist/:rjCode', checkAuth, (req, res) => {
+  const rjCode = req.params.rjCode.toUpperCase().trim();
+  const updated = db.removeFromBlacklist(rjCode);
+  res.json({ success: true, blacklist: updated });
+});
+
+app.delete('/api/blacklist', checkAuth, (req, res) => {
+  const updated = db.removeFromBlacklist('CLEAR_ALL');
+  res.json({ success: true, blacklist: updated });
+});
+
+
 
 // ==========================================
 // 5. BACKUP & EXPORT
@@ -1213,7 +1259,7 @@ app.get('/image-proxy', async (req, res) => {
 
       if (response.status >= 200 && response.status < 300) {
         res.setHeader('Content-Type', response.headers['content-type'] || 'image/jpeg');
-        res.setHeader('Cache-Control', 'public, max-age=86400');
+        res.setHeader('Cache-Control', 'public, max-age=2592000, immutable');
         res.setHeader('Access-Control-Allow-Origin', '*');
         return response.data.pipe(res);
       }
@@ -2219,10 +2265,45 @@ const INDEX_HTML = `<!DOCTYPE html>
       border-color: #64748b;
     }
 
-    /* Bottom Player Bar */
-    .player-bar { position: fixed; bottom: 0; left: var(--sidebar-w); right: 0; height: 84px; background: var(--player-bg); border-top: 1px solid var(--border); padding: 0 24px; display: flex; align-items: center; justify-content: space-between; z-index: 100; box-shadow: 0 -8px 24px rgba(0,0,0,0.5); }
+    /* Bottom Player Bar (Stacked Adaptive Multi-Deck) */
+    .player-bar {
+      position: fixed;
+      bottom: 0;
+      left: var(--sidebar-w);
+      right: 0;
+      height: auto;
+      background: var(--player-bg);
+      border-top: 1px solid var(--border);
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      z-index: 100;
+      box-shadow: 0 -8px 24px rgba(0,0,0,0.5);
+    }
+    .player-tier {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 24px;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    .player-tier-b {
+      display: none;
+      background: rgba(14, 165, 233, 0.05);
+      border-bottom: 1px solid rgba(56, 189, 248, 0.22);
+    }
+    body.has-deck-b .player-tier-b {
+      display: flex;
+    }
+    body.has-deck-b .app-main {
+      padding-bottom: 220px !important;
+    }
+    body.has-deck-b .scroll-jump-widget {
+      bottom: 172px !important;
+    }
     .player-left { display: flex; align-items: center; gap: 14px; width: 300px; cursor: pointer; }
-    .player-thumb { width: 52px; height: 52px; border-radius: 8px; object-fit: cover; background: #0c0d12; flex-shrink: 0; }
+    .player-thumb { width: 50px; height: 50px; border-radius: 8px; object-fit: cover; background: #0c0d12; flex-shrink: 0; }
     .player-track-info { overflow: hidden; }
     .player-title { font-size: 0.9rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .player-sub { font-size: 0.75rem; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -2237,9 +2318,55 @@ const INDEX_HTML = `<!DOCTYPE html>
     .time-text { font-size: 0.75rem; color: var(--text-muted); font-variant-numeric: tabular-nums; min-width: 40px; }
     .scrubber { flex: 1; height: 4px; appearance: none; -webkit-appearance: none; background: #333748; border-radius: 2px; outline: none; cursor: pointer; }
     .scrubber::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 12px; height: 12px; border-radius: 50%; background: var(--accent); cursor: pointer; }
-    .player-right { display: flex; align-items: center; gap: 14px; width: 300px; justify-content: flex-end; }
+    .player-right {
+      display: grid;
+      grid-template-columns: 36px 36px 110px;
+      align-items: center;
+      justify-content: end;
+      justify-items: center;
+      gap: 8px;
+      width: auto;
+      min-width: 200px;
+    }
+    .player-right .ctrl-btn {
+      width: 34px;
+      height: 34px;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .player-right .player-expand-btn {
+      justify-self: end;
+    }
+    .player-right .mixer-mode-btn {
+      justify-self: end;
+      min-width: 96px;
+      justify-content: center;
+    }
     .volume-slider { width: 90px; height: 4px; appearance: none; -webkit-appearance: none; background: #333748; border-radius: 2px; outline: none; cursor: pointer; }
     .volume-slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 10px; height: 10px; border-radius: 50%; background: #fff; }
+
+    .mixer-mode-btn {
+      font-size: 0.8rem;
+      font-weight: 700;
+      padding: 4px 10px;
+      border-radius: 6px;
+      border: 1px solid rgba(56,189,248,0.4);
+      background: rgba(56,189,248,0.12);
+      color: #38bdf8;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      transition: all 0.15s ease;
+      white-space: nowrap;
+    }
+    .mixer-mode-btn:hover {
+      background: rgba(56,189,248,0.25);
+      border-color: #38bdf8;
+      transform: scale(1.03);
+    }
 
     .player-expand-btn {
       width: 36px;
@@ -2265,9 +2392,9 @@ const INDEX_HTML = `<!DOCTYPE html>
     /* Floating Corner Player (Bottom-Right Docked Card) */
     .floating-corner-player {
       position: fixed;
-      bottom: 24px;
-      right: 24px;
-      width: 360px;
+      bottom: 16px;
+      right: 16px;
+      width: 420px;
       max-width: calc(100vw - 32px);
       max-height: calc(100vh - 48px);
       z-index: 1050;
@@ -2281,6 +2408,215 @@ const INDEX_HTML = `<!DOCTYPE html>
       flex-direction: column;
       overflow: hidden;
       animation: slideUpCorner 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    /* Audio Mixer Deck Styles */
+    .mixer-nav-tabs {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      background: rgba(0, 0, 0, 0.45);
+      padding: 3px;
+      border-radius: 9px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .mixer-tab-btn {
+      flex: 1;
+      background: transparent;
+      border: none;
+      color: #94a3b8;
+      font-size: 0.74rem;
+      font-weight: 700;
+      padding: 5px 8px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      white-space: nowrap;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+    }
+    .mixer-tab-btn:hover {
+      color: #fff;
+      background: rgba(255, 255, 255, 0.06);
+    }
+    .mixer-tab-btn.active {
+      background: #ff3366;
+      color: #fff;
+      box-shadow: 0 2px 8px rgba(255, 51, 102, 0.4);
+    }
+    .mixer-presets-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      justify-content: space-between;
+      padding: 2px 0 8px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    .mixer-preset-btn {
+      flex: 1;
+      padding: 6px 4px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: #e2e8f0;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      transition: all 0.15s ease;
+      white-space: nowrap;
+    }
+    .mixer-preset-btn:hover {
+      background: rgba(255, 255, 255, 0.12);
+      border-color: rgba(255, 255, 255, 0.25);
+      color: #fff;
+    }
+    .mixer-preset-btn.btn-swap {
+      background: rgba(56, 189, 248, 0.12);
+      border-color: rgba(56, 189, 248, 0.4);
+      color: #38bdf8;
+    }
+    .mixer-preset-btn.btn-swap:hover {
+      background: rgba(56, 189, 248, 0.25);
+      border-color: #38bdf8;
+      box-shadow: 0 0 12px rgba(56, 189, 248, 0.35);
+    }
+    .mixer-channel-card {
+      background: rgba(12, 13, 20, 0.7);
+      border-radius: 12px;
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      position: relative;
+    }
+    .mixer-channel-card.deck-a {
+      border-left: 3px solid #ff3366;
+    }
+    .mixer-channel-card.deck-b {
+      border-left: 3px solid #38bdf8;
+    }
+    .mixer-channel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .badge-deck-a {
+      font-size: 0.68rem;
+      font-weight: 800;
+      color: #ff3366;
+      background: rgba(255, 51, 102, 0.15);
+      padding: 2px 6px;
+      border-radius: 4px;
+      letter-spacing: 0.5px;
+    }
+    .badge-deck-b {
+      font-size: 0.68rem;
+      font-weight: 800;
+      color: #38bdf8;
+      background: rgba(56, 189, 248, 0.15);
+      padding: 2px 6px;
+      border-radius: 4px;
+      letter-spacing: 0.5px;
+    }
+    .deck-b-pill {
+      font-size: 0.68rem;
+      font-weight: 700;
+      color: #38bdf8;
+      background: rgba(56, 189, 248, 0.15);
+      border: 1px solid rgba(56, 189, 248, 0.4);
+      padding: 2px 6px;
+      border-radius: 4px;
+      cursor: pointer;
+      margin-left: 6px;
+      display: inline-flex;
+      align-items: center;
+    }
+    .deck-b-pill:hover {
+      background: rgba(56, 189, 248, 0.3);
+    }
+    .mixer-control-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 0.75rem;
+    }
+    .mixer-control-label {
+      color: #94a3b8;
+      font-weight: 600;
+      width: 44px;
+      flex-shrink: 0;
+    }
+    .mixer-control-val {
+      font-variant-numeric: tabular-nums;
+      font-size: 0.72rem;
+      color: #cbd5e1;
+      width: 44px;
+      text-align: right;
+      flex-shrink: 0;
+    }
+    .mixer-fader {
+      flex: 1;
+      height: 5px;
+      appearance: none;
+      -webkit-appearance: none;
+      background: #252836;
+      border-radius: 3px;
+      outline: none;
+      cursor: pointer;
+    }
+    .mixer-fader::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: #fff;
+      cursor: pointer;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.5);
+    }
+    .mixer-fader.deck-a::-webkit-slider-thumb {
+      background: #ff3366;
+    }
+    .mixer-fader.deck-b::-webkit-slider-thumb {
+      background: #38bdf8;
+    }
+    .mixer-pan-fader::-webkit-slider-thumb {
+      background: #e2e8f0;
+      width: 12px;
+      height: 16px;
+      border-radius: 3px;
+    }
+    .mixer-bar-btn {
+      font-size: 0.95rem;
+      padding: 4px 6px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: #cbd5e1;
+    }
+    .mixer-bar-btn:hover {
+      background: rgba(255, 255, 255, 0.12);
+      color: #fff;
+    }
+    .mixer-toggle-btn {
+      background: rgba(56, 189, 248, 0.08);
+      border: 1px solid rgba(56, 189, 248, 0.35);
+      border-radius: 8px;
+      padding: 4px 8px;
+      color: #38bdf8;
+      cursor: pointer;
+    }
+    .mixer-toggle-btn:hover {
+      background: rgba(56, 189, 248, 0.22);
+      border-color: #38bdf8;
     }
     @keyframes slideUpCorner {
       from { opacity: 0; transform: translateY(24px) scale(0.95); }
@@ -2324,9 +2660,9 @@ const INDEX_HTML = `<!DOCTYPE html>
     .popup-cv-row { display: flex; justify-content: center; flex-wrap: wrap; gap: 6px; }
     .popup-controls { display: flex; align-items: center; justify-content: center; gap: 16px; margin: 4px 0; }
     .popup-play-btn { width: 48px; height: 48px; border-radius: 50%; background: #fff; color: #000; display: flex; align-items: center; justify-content: center; font-size: 1.4rem; cursor: pointer; border: none; transition: transform 0.15s, background 0.15s; }
-    .popup-play-btn:hover { transform: scale(1.08); background: var(--accent); color: #fff; }
-    .popup-secondary-row { display: flex; align-items: center; justify-content: space-between; padding-top: 4px; border-top: 1px solid rgba(255,255,255,0.06); }
-    .popup-drawer-toggle { background: var(--bg-card); border: 1px solid var(--border); color: #fff; padding: 8px 12px; border-radius: 10px; font-size: 0.8rem; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: space-between; width: 100%; transition: 0.2s; }
+    .popup-secondary-row { display: flex; align-items: center; gap: 10px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,0.06); }
+    .popup-secondary-actions { flex: 1; display: flex; align-items: center; gap: 8px; }
+    .popup-secondary-actions .btn-outline { flex: 1; display: inline-flex; align-items: center; justify-content: center; text-align: center; padding: 6px 8px; font-size: 0.78rem; white-space: nowrap; }
     .popup-drawer-toggle:hover { background: var(--bg-card-hover); }
     .popup-chapters-list { max-height: 150px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
     .popup-chapter-item { padding: 8px 10px; border-radius: 6px; font-size: 0.8rem; background: rgba(255,255,255,0.03); cursor: pointer; display: flex; justify-content: space-between; align-items: center; transition: 0.15s; }
@@ -2351,7 +2687,6 @@ const INDEX_HTML = `<!DOCTYPE html>
     .settings-radio { margin-top: 4px; accent-color: var(--accent); cursor: pointer; }
     .settings-label { font-size: 1rem; font-weight: 700; margin-bottom: 4px; }
     .settings-desc { font-size: 0.85rem; color: var(--text-muted); }
-    #playerBarChapterBtnMobile, #playerBarWorkBtnMobile { display: none; }
 
     /* Responsive Mobile Media Queries */
     @media (max-width: 768px) {
@@ -2399,9 +2734,6 @@ const INDEX_HTML = `<!DOCTYPE html>
       .works-grid.mode-small .card-sub {
         font-size: 0.58rem !important;
       }
-
-      #playerBarChapterBtnMobile, #playerBarWorkBtnMobile { display: inline-flex; }
-      #playerBarChapterBtn { display: none; }
       .app-sidebar { display: none; }
       .mobile-topbar, .app-topbar {
         left: 0;
@@ -2502,21 +2834,43 @@ const INDEX_HTML = `<!DOCTYPE html>
         min-width: fit-content;
         justify-content: center;
       }
-      /* Mobile Player Bar Overhaul: Clean, spacious 3-row thumb-friendly layout */
+      /* Mobile Player Bar Overhaul: Clean adaptive multi-tier layout */
       .player-bar {
         left: 0;
-        padding: 6px 12px 10px;
+        padding: 0;
         height: auto;
-        min-height: 110px;
+        min-height: 0;
         flex-direction: column;
-        justify-content: center;
+      }
+      .player-tier {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        grid-template-areas:
+          "left right"
+          "center center";
         gap: 6px;
+        padding: 6px 10px 8px;
+        width: 100%;
+        box-sizing: border-box;
+      }
+      .player-tier-b {
+        display: none !important;
+      }
+      body.has-deck-b .player-tier-b {
+        display: grid !important;
+      }
+      body.has-deck-b .app-main {
+        padding-bottom: 300px !important;
+      }
+      body.has-deck-b .floating-corner-player {
+        bottom: 12px !important;
       }
       .player-left {
-        width: 100%;
+        grid-area: left;
+        width: auto;
+        min-width: 0;
         display: flex;
         align-items: center;
-        justify-content: space-between;
         gap: 8px;
       }
       .player-left-info {
@@ -2533,7 +2887,16 @@ const INDEX_HTML = `<!DOCTYPE html>
         border-radius: 8px;
         background: rgba(255,255,255,0.06);
       }
+      .player-right {
+        grid-area: right;
+        width: auto;
+        display: flex !important;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 6px;
+      }
       .player-center {
+        grid-area: center;
         width: 100%;
         max-width: 100%;
         display: flex;
@@ -2564,14 +2927,14 @@ const INDEX_HTML = `<!DOCTYPE html>
         padding: 0 4px;
       }
       .player-controls .play-btn-circle {
-        width: 46px;
-        height: 46px;
-        font-size: 1.35rem;
+        width: 44px;
+        height: 44px;
+        font-size: 1.3rem;
       }
       .player-controls .ctrl-btn {
-        width: 38px;
-        height: 38px;
-        font-size: 1.1rem;
+        width: 36px;
+        height: 36px;
+        font-size: 1.05rem;
         display: inline-flex;
         align-items: center;
         justify-content: center;
@@ -2582,8 +2945,6 @@ const INDEX_HTML = `<!DOCTYPE html>
         width: 100%;
         gap: 8px;
       }
-      #btnExpandPlayerMobile { display: inline-flex !important; }
-      .player-right { display: none !important; }
 
       .scroll-jump-widget {
         left: 50%;
@@ -2591,6 +2952,9 @@ const INDEX_HTML = `<!DOCTYPE html>
         bottom: 154px;
         padding: 3px 6px;
         gap: 6px;
+      }
+      body.has-deck-b .scroll-jump-widget {
+        bottom: 264px !important;
       }
       .scroll-jump-btn {
         width: 32px;
@@ -3302,13 +3666,18 @@ const INDEX_HTML = `<!DOCTYPE html>
           <div style="width: 36px; height: 36px; border-radius: 10px; background: var(--accent-gradient, linear-gradient(135deg, #ff7a00, #ff9500)); display: flex; align-items: center; justify-content: center; font-size: 1.3rem; box-shadow: 0 0 14px var(--accent-glow);">🚀</div>
           <div>
             <h3 style="font-size: 1.3rem; font-weight: 800;">aStreamer Release Notes</h3>
-            <span style="font-size: 0.8rem; color: var(--accent); font-weight: 700;">Version 2.5 Official Milestone Release (Cloudflare D1 Native)</span>
+            <span style="font-size: 0.8rem; color: var(--accent); font-weight: 700;">Version 2.5.1 Official Release (Dual-Deck Mobile &amp; Corner Player Polish)</span>
           </div>
         </div>
         <button class="btn-outline" style="padding: 4px 10px;" onclick="closeChangelogModal()">✖</button>
       </div>
       
       <div style="color: #d1d5db; font-size: 0.9rem; line-height: 1.6; display: flex; flex-direction: column; gap: 14px;">
+        <div style="background: rgba(56, 189, 248, 0.12); border: 1px solid rgba(56, 189, 248, 0.4); padding: 14px; border-radius: 10px;">
+          <h4 style="color: #38bdf8; font-weight: 700; margin-bottom: 4px;">📱 Dual-Deck Mobile Positioning &amp; Corner Player (v2.5.1)</h4>
+          <p style="color: var(--text-muted); font-size: 0.85rem;">Adaptive bottom clearance for scroll navigation widget (264px dual-deck / 154px single), strict mobile Deck B isolation, full-width edge-to-edge corner player tabs and secondary action rows, plus CV tag filter &amp; shuffle buttons on Deck B.</p>
+        </div>
+
         <div style="background: rgba(168, 85, 247, 0.12); border: 1px solid rgba(168, 85, 247, 0.4); padding: 14px; border-radius: 10px;">
           <h4 style="color: #c084fc; font-weight: 700; margin-bottom: 4px;">🗄️ Cloudflare D1 Native SQL Engine &amp; Dedicated KV Stores (v2.5)</h4>
           <p style="color: var(--text-muted); font-size: 0.85rem;">Upgraded monolithic 10MB KV database to Cloudflare D1 (Native SQLite). Full-library queries run with sub-millisecond execution times, zero CPU limits, and individual dedicated KV stores for Wishlists, Tag Dictionaries, Playlists, and History.</p>
@@ -3471,6 +3840,10 @@ const INDEX_HTML = `<!DOCTYPE html>
               <input type="checkbox" id="pageImportHideImportedCheck" checked onchange="togglePageImportHideImported(this.checked)" style="cursor: pointer;">
               <span>✨ Unimported Only</span>
             </label>
+            <label style="display: inline-flex; align-items: center; gap: 5px; font-size: 0.78rem; color: #f59e0b; cursor: pointer; user-select: none; margin-right: 4px; background: rgba(245,158,11,0.1); padding: 3px 8px; border-radius: 6px; border: 1px solid rgba(245,158,11,0.3);" title="Show snoozed works currently in short-term blacklist">
+              <input type="checkbox" id="pageImportShowSnoozedCheck" onchange="togglePageImportShowSnoozed(this.checked)" style="cursor: pointer;">
+              <span>💤 Show Snoozed</span>
+            </label>
             <label style="display: inline-flex; align-items: center; gap: 5px; font-size: 0.78rem; color: #cbd5e1; cursor: pointer; user-select: none; margin-right: 4px; background: rgba(255,255,255,0.06); padding: 3px 8px; border-radius: 6px; border: 1px solid var(--border);" title="Toggle between original high-res cover and disguised SFW artwork">
               <input type="checkbox" id="pageImportOriginalArtCheck" onchange="togglePageImportOriginalArt(this.checked)" style="cursor: pointer;">
               <span>🖼️ Original Art</span>
@@ -3500,6 +3873,81 @@ const INDEX_HTML = `<!DOCTYPE html>
           <div style="display: flex; gap: 10px;">
             <button class="btn-outline" onclick="closePageImportModal()">Cancel</button>
             <button class="btn-primary" id="btnFinishPageImport" onclick="startPageImportExecution()" style="font-weight: 800; padding: 9px 20px;">🚀 Import Selected (<span id="pageImportFinalBtnCount">0</span>)</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Visual WaitList Discovery Modal -->
+  <div id="waitlistModal" class="modal-overlay" style="z-index: 10040;">
+    <div class="modal-content" id="waitlistModalContent" style="max-width: 880px; width: 95vw; max-height: 90vh; display: flex; flex-direction: column; padding: 24px; background: #0e111a; border: 1px solid rgba(56, 189, 248, 0.35); box-shadow: 0 25px 60px rgba(0,0,0,0.85); border-radius: 16px; overflow: hidden;">
+      
+      <!-- Modal Header -->
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; flex-shrink: 0;">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <div style="font-size: 1.6rem;">📑</div>
+          <div>
+            <h3 class="modal-title" style="margin: 0; font-size: 1.25rem; color: #fff;">Automated Scraper WaitList</h3>
+            <p style="color: var(--text-muted); font-size: 0.78rem; margin: 2px 0 0 0;">Scheduled frontpage releases waiting for review. Pick what to import or discard.</p>
+          </div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <button class="btn-outline" id="btnWaitlistScanNow" style="padding: 4px 10px; font-size: 0.78rem;" onclick="triggerWaitlistScanNow()" title="Scan frontpage now">🔄 Scan Now</button>
+          <button class="btn-outline" style="padding: 4px 10px;" onclick="closeWaitlistModal()">✖</button>
+        </div>
+      </div>
+
+      <!-- Interactive Preview & Selection View -->
+      <div id="waitlistStepPreview" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden;">
+        
+        <!-- Toolbar & Selection Summary -->
+        <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border); padding: 10px 14px; border-radius: 10px; flex-shrink: 0;">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span id="waitlistSelectionCount" style="font-size: 0.9rem; font-weight: 700; color: #38bdf8;">0 works selected</span>
+            <span style="font-size: 0.78rem; color: var(--text-muted);">• Click any card to pick / exclude</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+            <label style="display: inline-flex; align-items: center; gap: 5px; font-size: 0.78rem; color: #38bdf8; cursor: pointer; user-select: none; margin-right: 4px; background: rgba(56,189,248,0.1); padding: 3px 8px; border-radius: 6px; border: 1px solid rgba(56,189,248,0.3);" title="Hide works that are already present in your library">
+              <input type="checkbox" id="waitlistHideImportedCheck" checked onchange="toggleWaitlistHideImported(this.checked)" style="cursor: pointer;">
+              <span>✨ Unimported Only</span>
+            </label>
+            <label style="display: inline-flex; align-items: center; gap: 5px; font-size: 0.78rem; color: #f59e0b; cursor: pointer; user-select: none; margin-right: 4px; background: rgba(245,158,11,0.1); padding: 3px 8px; border-radius: 6px; border: 1px solid rgba(245,158,11,0.3);" title="Show snoozed works currently in short-term blacklist">
+              <input type="checkbox" id="waitlistShowSnoozedCheck" onchange="toggleWaitlistShowSnoozed(this.checked)" style="cursor: pointer;">
+              <span>💤 Show Snoozed</span>
+            </label>
+            <label style="display: inline-flex; align-items: center; gap: 5px; font-size: 0.78rem; color: #cbd5e1; cursor: pointer; user-select: none; margin-right: 4px; background: rgba(255,255,255,0.06); padding: 3px 8px; border-radius: 6px; border: 1px solid var(--border);" title="Toggle between original high-res cover and disguised SFW artwork">
+              <input type="checkbox" id="waitlistOriginalArtCheck" onchange="toggleWaitlistOriginalArt(this.checked)" style="cursor: pointer;">
+              <span>🖼️ Original Art</span>
+            </label>
+            <button class="btn-outline" style="padding: 4px 10px; font-size: 0.78rem;" onclick="waitlistSelectAll(true)">✅ Select All</button>
+            <button class="btn-outline" style="padding: 4px 10px; font-size: 0.78rem;" onclick="waitlistSelectAll(false)">❌ Deselect All</button>
+            <div style="width: 1px; height: 20px; background: var(--border); margin: 0 4px;"></div>
+            <button class="view-btn active" id="btnWaitlistViewCarousel" onclick="setWaitlistViewMode('carousel')" title="Carousel Slider View">↔ Carousel</button>
+            <button class="view-btn" id="btnWaitlistViewGrid" onclick="setWaitlistViewMode('grid')" title="Grid Overview">⊞ Grid</button>
+          </div>
+        </div>
+
+        <!-- Carousel Slider Container with Slide Controls -->
+        <div style="position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden;">
+          <button id="btnWaitlistSlideLeft" class="btn-icon" onclick="slideWaitlistCarousel(-1)" title="Previous works" style="position: absolute; left: 8px; top: 50%; transform: translateY(-50%); z-index: 20; background: rgba(15, 23, 42, 0.85); border: 1px solid rgba(56, 189, 248, 0.5); width: 38px; height: 38px; border-radius: 50%; font-size: 1.4rem; color: #38bdf8; box-shadow: 0 4px 15px rgba(0,0,0,0.7); display: none; align-items: center; justify-content: center; backdrop-filter: blur(8px); cursor: pointer;">‹</button>
+          
+          <div id="waitlistCarouselWrap" style="flex: 1; min-height: 0; overflow-y: auto; overflow-x: auto; padding-bottom: 12px;">
+            <!-- Live cards dynamically rendered here -->
+          </div>
+
+          <button id="btnWaitlistSlideRight" class="btn-icon" onclick="slideWaitlistCarousel(1)" title="Next works" style="position: absolute; right: 8px; top: 50%; transform: translateY(-50%); z-index: 20; background: rgba(15, 23, 42, 0.85); border: 1px solid rgba(56, 189, 248, 0.5); width: 38px; height: 38px; border-radius: 50%; font-size: 1.4rem; color: #38bdf8; box-shadow: 0 4px 15px rgba(0,0,0,0.7); display: none; align-items: center; justify-content: center; backdrop-filter: blur(8px); cursor: pointer;">›</button>
+        </div>
+
+        <!-- Footer Actions -->
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); flex-shrink: 0; flex-wrap: wrap; gap: 10px;">
+          <div style="display: flex; gap: 8px;">
+            <button class="btn-outline" style="color: #ef4444; border-color: rgba(239,68,68,0.4);" onclick="discardSelectedWaitlist()" title="Remove selected works from queue">🗑️ Discard Selected</button>
+            <button class="btn-outline" style="color: #ef4444; border-color: rgba(239,68,68,0.4);" onclick="clearAllWaitlistItems()" title="Clear entire WaitList queue">🧹 Clear All</button>
+          </div>
+          <div style="display: flex; gap: 10px;">
+            <button class="btn-outline" onclick="closeWaitlistModal()">Cancel</button>
+            <button class="btn-primary" id="btnFinishWaitlistImport" onclick="startWaitlistExecution()" style="font-weight: 800; padding: 9px 20px; background: linear-gradient(135deg, #0284c7, #38bdf8); border: none;">🚀 Import Selected (<span id="waitlistFinalBtnCount">0</span>)</button>
           </div>
         </div>
       </div>
@@ -3665,16 +4113,16 @@ const INDEX_HTML = `<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- Floating Corner Player Card (Bottom-Right Docked) -->
+  <!-- Floating Corner Player Card (Bottom-Right Docked Mixer & Deck) -->
   <div id="popupPlayerModal" class="floating-corner-player">
-    <div class="popup-header">
-      <div style="display: flex; align-items: center; gap: 8px;">
-        <span style="font-size: 0.72rem; font-weight: 800; color: var(--accent); background: rgba(255,51,102,0.12); padding: 3px 8px; border-radius: 4px; letter-spacing: 0.5px;">NOW PLAYING</span>
-        <span id="popupHlsBadge" style="font-size: 0.7rem; font-weight: 700; color: #38bdf8; background: rgba(56,189,248,0.12); padding: 3px 6px; border-radius: 4px;">HLS</span>
+    <div class="popup-header" style="justify-content: space-between;">
+      <div class="mixer-nav-tabs">
+        <button id="popupTabMixerBtn" class="mixer-tab-btn" onclick="switchPopupTab('mixer')">🎚️ Mixer</button>
+        <button id="popupTabDeckABtn" class="mixer-tab-btn active" onclick="switchPopupTab('deckA')">🅰️ Deck A</button>
+        <button id="popupTabDeckBBtn" class="mixer-tab-btn" onclick="switchPopupTab('deckB')">🅱️ Deck B</button>
       </div>
       <div style="display: flex; gap: 6px; align-items: center;">
-        <button class="btn-icon" style="width: 32px; height: 32px; font-size: 0.85rem; display: inline-flex; align-items: center; justify-content: center;" title="View Work Details" onclick="jumpToCurrentWorkDetail()">ℹ️</button>
-        <button class="btn-icon" style="width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; color: #38bdf8;" title="Collapse to Bar (Esc)" onclick="closePopupPlayer()">
+        <button class="btn-icon" style="width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; color: #38bdf8;" title="Collapse to Bar (Esc)" onclick="closePopupPlayer()">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="6 9 12 15 18 9"></polyline>
           </svg>
@@ -3682,7 +4130,8 @@ const INDEX_HTML = `<!DOCTYPE html>
       </div>
     </div>
 
-    <div class="popup-body">
+    <!-- TAB 1: Deck A Classic View -->
+    <div id="popupTabDeckABody" class="popup-body">
       <div class="popup-cover-wrap">
         <img id="popupCover" class="popup-cover" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Crect width='200' height='200' fill='%23111'/%3E%3C/svg%3E">
         <div id="popupDisguisedBadge" class="disguised-overlay" style="display:none;"><span class="disguised-badge">🎭 Disguised SFW</span></div>
@@ -3709,12 +4158,11 @@ const INDEX_HTML = `<!DOCTYPE html>
 
       <div class="popup-secondary-row">
         <div style="display: flex; align-items: center; gap: 8px;">
-          <button id="popupMuteBtn" class="ctrl-btn" onclick="toggleMute()" style="font-size: 1rem;" title="Mute / Unmute">🔊</button>
+          <button id="popupMuteBtn" class="ctrl-btn" onclick="cycleSlotVolume('A')" style="font-size: 1rem;" title="Deck A Volume: 100% (Click to step)">🔊</button>
         </div>
-        <div style="display: flex; align-items: center; gap: 8px;">
-          <span id="popupFavBtn" style="font-size: 1.15rem; cursor: pointer;" title="Toggle Favorite" onclick="toggleCurrentWorkFav()">🤍</span>
-          <button class="btn-outline" style="padding: 4px 10px; font-size: 0.78rem;" onclick="addCurrentTrackToPlaylist()">➕ Playlist</button>
-          <button class="btn-outline" style="padding: 4px 10px; font-size: 0.78rem;" onclick="jumpToCurrentWorkDetail()" title="View Work Details">👁️ Work</button>
+        <div class="popup-secondary-actions">
+          <button class="btn-outline" onclick="addCurrentTrackToPlaylist()">➕ Playlist</button>
+          <button class="btn-outline" onclick="jumpToCurrentWorkDetail()" title="View Work Details">👁️ Work</button>
         </div>
       </div>
 
@@ -3724,6 +4172,116 @@ const INDEX_HTML = `<!DOCTYPE html>
           <span id="popupChapterChevron">▼</span>
         </button>
         <div id="popupChaptersList" class="popup-chapters-list" style="display: none;"></div>
+      </div>
+    </div>
+
+    <!-- TAB 2: Deck B View -->
+    <div id="popupTabDeckBBody" class="popup-body" style="display: none;">
+      <div class="popup-cover-wrap">
+        <img id="popupCoverB" class="popup-cover" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Crect width='200' height='200' fill='%23111'/%3E%3C/svg%3E">
+      </div>
+
+      <div class="popup-meta">
+        <div id="popupTitleB" class="popup-title">Deck B Empty</div>
+        <div id="popupSubB" class="popup-sub">Click [🎚️ Deck B] on any work or track to mix</div>
+        <div id="popupCvRowB" class="popup-cv-row"></div>
+      </div>
+
+      <div class="scrubber-row">
+        <span id="popupCurrTimeB" class="time-text">00:00</span>
+        <input type="range" id="popupScrubberB" class="scrubber" min="0" max="100" value="0" oninput="onSlotBScrub(this.value)">
+        <span id="popupTotalTimeB" class="time-text">00:00</span>
+      </div>
+
+      <div class="popup-controls">
+        <button id="popupShuffleBtnB" class="ctrl-btn" title="Toggle Shuffle (Deck B)" onclick="toggleShuffleB()">🔀</button>
+        <button id="popupPrevTrackBtnB" class="ctrl-btn" title="Previous Track (Deck B)" onclick="playPrevTrackB()">⏮</button>
+        <button id="popupPlayPauseBtnB" class="popup-play-btn" onclick="toggleSlotBPlayPause()">▶</button>
+        <button id="popupNextTrackBtnB" class="ctrl-btn" title="Next Track (Deck B)" onclick="playNextTrackB()">⏭</button>
+      </div>
+
+      <div class="popup-secondary-row">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <button id="popupMuteBtnB" class="ctrl-btn" onclick="cycleSlotVolume('B')" style="font-size: 1rem;" title="Deck B Volume: 100% (Click to step)">🔊</button>
+        </div>
+        <div class="popup-secondary-actions">
+          <button class="btn-outline" onclick="addSlotBPlayingTrackToPlaylist()">➕ Playlist</button>
+          <button class="btn-outline" onclick="jumpToSlotBWorkDetail()" title="View Work Details">👁️ Work</button>
+          <button class="btn-outline" style="border-color: rgba(239,68,68,0.4); color: #ef4444;" onclick="clearSlotB()" title="Eject Track from Deck B">✕ Eject</button>
+        </div>
+      </div>
+
+      <div>
+        <button class="popup-drawer-toggle" onclick="toggleChapterDrawerB()">
+          <span id="popupChapterToggleLabelB">📑 Deck B Tracks (0)</span>
+          <span id="popupChapterChevronB">▼</span>
+        </button>
+        <div id="popupChaptersListB" class="popup-chapters-list" style="display: none;"></div>
+      </div>
+    </div>
+
+    <!-- TAB 3: Mixer Console View -->
+    <div id="popupTabMixerBody" class="popup-body" style="display: none; gap: 10px;">
+      <!-- 3-in-1 Unified Mixer Mode Row -->
+      <div class="mixer-presets-row" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-items: stretch;">
+        <button id="popupMixerModeBtn" class="mixer-preset-btn mixer-mode-btn" onclick="cycleMixerPresetMode()" style="font-weight: 700; padding: 8px 12px; font-size: 0.85rem; width: 100%; justify-content: center;" title="Click to cycle Mixer Mode (Center -> A Left/B Right -> A Right/B Left)">
+          ⚖️ Center
+        </button>
+        <button class="mixer-preset-btn" onclick="toggleBothPlayPause()" style="padding: 8px 12px; font-weight: 700; font-size: 0.85rem; width: 100%; justify-content: center; display: inline-flex; align-items: center;" title="Play or pause both decks simultaneously">⏯️ Both Decks</button>
+      </div>
+
+      <!-- Deck A Channel Strip -->
+      <div class="mixer-channel-card deck-a">
+        <div class="mixer-channel-header">
+          <div style="display:flex; align-items:center; gap:6px; min-width:0;">
+            <span class="badge-deck-a">DECK A</span>
+            <span id="mixerDeckARj" style="font-size:0.75rem; font-weight:700; color:#cbd5e1;">--</span>
+          </div>
+          <div id="mixerDeckAPlayState" style="font-size:0.75rem; color:#94a3b8; display:flex; align-items:center; gap:4px;">
+            <button class="ctrl-btn" style="padding:2px 6px; font-size:0.85rem;" onclick="togglePlayPause()" title="Play/Pause Deck A">⏯️</button>
+          </div>
+        </div>
+        <div id="mixerDeckATitle" style="font-size:0.82rem; font-weight:700; color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">No Track Selected</div>
+        <div class="mixer-control-row">
+          <span class="mixer-control-label">Vol</span>
+          <input type="range" id="mixerFaderA" class="mixer-fader deck-a" min="0" max="100" value="100" oninput="setSlotAVolume(this.value)">
+          <span id="mixerValA" class="mixer-control-val">100%</span>
+          <button id="mixerMuteBtnA" class="ctrl-btn" style="font-size:0.85rem; padding:2px;" onclick="cycleSlotVolume('A')" title="Deck A Volume: 100% (Click to step)">🔊</button>
+        </div>
+        <div class="mixer-control-row">
+          <span class="mixer-control-label">Pan</span>
+          <input type="range" id="mixerPanA" class="mixer-fader mixer-pan-fader" min="-100" max="100" value="0" oninput="setSlotAPan(this.value / 100)">
+          <span id="mixerPanValA" class="mixer-control-val">Center</span>
+        </div>
+      </div>
+
+      <!-- Deck B Channel Strip -->
+      <div class="mixer-channel-card deck-b">
+        <div class="mixer-channel-header">
+          <div style="display:flex; align-items:center; gap:6px; min-width:0;">
+            <span class="badge-deck-b">DECK B</span>
+            <span id="mixerDeckBRj" style="font-size:0.75rem; font-weight:700; color:#cbd5e1;">--</span>
+          </div>
+          <div style="display:flex; align-items:center; gap:4px;">
+            <button class="ctrl-btn" style="padding:2px 6px; font-size:0.85rem;" onclick="toggleSlotBPlayPause()" title="Play/Pause Deck B">⏯️</button>
+            <button class="ctrl-btn" style="padding:2px 4px; font-size:0.75rem; color:#ef4444;" onclick="clearSlotB()" title="Eject Deck B">✕</button>
+          </div>
+        </div>
+        <div id="mixerDeckBTitle" style="font-size:0.82rem; font-weight:700; color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Deck B Empty</div>
+        <div class="mixer-control-row">
+          <span class="mixer-control-label">Vol</span>
+          <input type="range" id="mixerFaderB" class="mixer-fader deck-b" min="0" max="100" value="100" oninput="setSlotBVolume(this.value)">
+          <span id="mixerValB" class="mixer-control-val">100%</span>
+          <button id="mixerMuteBtnB" class="ctrl-btn" style="font-size:0.85rem; padding:2px;" onclick="cycleSlotVolume('B')" title="Deck B Volume: 100% (Click to step)">🔊</button>
+        </div>
+        <div class="mixer-control-row">
+          <span class="mixer-control-label">Pan</span>
+          <input type="range" id="mixerPanB" class="mixer-fader mixer-pan-fader" min="-100" max="100" value="0" oninput="setSlotBPan(this.value / 100)">
+          <span id="mixerPanValB" class="mixer-control-val">Center</span>
+        </div>
+        <div id="mixerDeckBLoadPrompt" style="display:none; text-align:center; padding:4px 0;">
+          <button class="btn-outline" style="padding:4px 10px; font-size:0.75rem; color:#38bdf8; border-color:rgba(56,189,248,0.4);" onclick="loadCurrentWorkIntoSlotB()">+ Load Current Work into Deck B</button>
+        </div>
       </div>
     </div>
   </div>
@@ -3845,51 +4403,79 @@ const INDEX_HTML = `<!DOCTYPE html>
     <div id="viewContainer" class="view-container"></div>
   </main>
 
-  <!-- Persistent Bottom Player Bar -->
-  <footer class="player-bar">
-    <div class="player-left" onclick="togglePopupPlayer()" title="Click to expand/collapse floating player">
-      <img id="playerCover" class="player-thumb" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48'%3E%3Crect width='48' height='48' fill='%23222'/%3E%3C/svg%3E">
-      <div class="player-track-info">
-        <div id="playerTitle" class="player-title">Select track to play</div>
-        <div id="playerSub" class="player-sub">aStreamer Cloudflare Edition</div>
+  <!-- Persistent Bottom Player Bar (Adaptive Stacked Dual Deck) -->
+  <footer class="player-bar" id="appPlayerBar">
+    <!-- Tier B: Deck B (Adaptive, sits on top when Deck B has audio) -->
+    <div id="playerBarTierB" class="player-tier player-tier-b">
+      <div class="player-left" onclick="openPopupPlayerTab('deckB')" title="Click to view Deck B in popup">
+        <img id="playerCoverBBar" class="player-thumb" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48'%3E%3Crect width='48' height='48' fill='%23111'/%3E%3C/svg%3E">
+        <div class="player-track-info">
+          <div style="display:flex; align-items:center; gap:6px;">
+            <span style="font-size:0.68rem; font-weight:800; background:rgba(56,189,248,0.2); color:#38bdf8; border:1px solid rgba(56,189,248,0.4); padding:1px 5px; border-radius:4px;">DECK B</span>
+            <div id="playerTitleBBar" class="player-title">Deck B Empty</div>
+          </div>
+          <div id="playerSubBBar" class="player-sub">Click to mix</div>
+        </div>
       </div>
-      <button id="btnExpandPlayerMobile" class="player-expand-btn" title="Expand Floating Player" onclick="event.stopPropagation(); togglePopupPlayer()">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="15 3 21 3 21 9"></polyline>
-          <polyline points="9 21 3 21 3 15"></polyline>
-          <line x1="21" y1="3" x2="14" y2="10"></line>
-          <line x1="3" y1="21" x2="10" y2="14"></line>
-        </svg>
-      </button>
+      <div class="player-center">
+        <div class="scrubber-row">
+          <span id="currTimeBBar" class="time-text">00:00</span>
+          <input type="range" id="scrubberBBar" class="scrubber" min="0" max="100" value="0" oninput="onSlotBScrub(this.value)">
+          <span id="totalTimeBBar" class="time-text">00:00</span>
+        </div>
+        <div class="player-controls">
+          <button id="loopBtnBBar" class="ctrl-btn" title="Loop Deck B" onclick="toggleLoopB()">🔁</button>
+          <button class="ctrl-btn" title="Previous Track (Deck B)" onclick="playPrevTrackB()">⏮</button>
+          <button id="playPauseBtnBBar" class="play-btn-circle" style="width:38px; height:38px; font-size:1.1rem;" title="Play/Pause Deck B" onclick="toggleSlotBPlayPause()">▶</button>
+          <button class="ctrl-btn" title="Next Track (Deck B)" onclick="playNextTrackB()">⏭</button>
+          <button class="ctrl-btn" title="Add Deck B Track to Playlist" onclick="addSlotBPlayingTrackToPlaylist()">➕</button>
+        </div>
+      </div>
+      <div class="player-right">
+        <button class="ctrl-btn" title="View Deck B Work Details" onclick="jumpToSlotBWorkDetail()">👁️</button>
+        <button id="muteBtnBBar" class="ctrl-btn" onclick="cycleSlotVolume('B')" title="Deck B Volume: 100%">🔊</button>
+        <button id="barMixerModeBtn" class="mixer-mode-btn" onclick="cycleMixerPresetMode()" title="Mixer Mode: Center / Mono">⚖️ Center</button>
+      </div>
     </div>
-    <div class="player-center">
-      <div class="scrubber-row">
-        <span id="currTime" class="time-text">00:00</span>
-        <input type="range" id="scrubber" class="scrubber" min="0" max="100" value="0" oninput="onScrub(this.value)">
-        <span id="totalTime" class="time-text">00:00</span>
+
+    <!-- Tier A: Deck A (Primary Player Deck) -->
+    <div id="playerBarTierA" class="player-tier player-tier-a">
+      <div class="player-left" onclick="togglePopupPlayer()" title="Click to expand/collapse floating player">
+        <img id="playerCover" class="player-thumb" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48'%3E%3Crect width='48' height='48' fill='%23222'/%3E%3C/svg%3E">
+        <div class="player-track-info">
+          <div style="display:flex; align-items:center; gap:6px;">
+            <span style="font-size:0.68rem; font-weight:800; background:rgba(255,51,102,0.15); color:var(--accent); border:1px solid rgba(255,51,102,0.3); padding:1px 5px; border-radius:4px;">DECK A</span>
+            <div id="playerTitle" class="player-title">Select track to play</div>
+          </div>
+          <div id="playerSub" class="player-sub">aStreamer Cloudflare Edition</div>
+        </div>
       </div>
-      <div class="player-controls">
-        <button id="shuffleBtn" class="ctrl-btn" title="Toggle Shuffle / Random" onclick="toggleShuffle()">🔀</button>
-        <button id="prevTrackBtn" class="ctrl-btn" title="Previous Track" onclick="playPrevTrack()">⏮</button>
-        <button id="playPauseBtn" class="play-btn-circle" onclick="togglePlayPause()">▶</button>
-        <button id="nextTrackBtn" class="ctrl-btn" title="Next Track" onclick="playNextTrack()">⏭</button>
-        <button id="playerBarWorkBtnMobile" class="ctrl-btn" title="View Playing Work Details" onclick="jumpToCurrentWorkDetail()">👁️</button>
-        <button id="playerBarChapterBtnMobile" class="ctrl-btn" title="View Chapters & Cue Points" onclick="openPopupPlayerWithChapters()">📑</button>
+      <div class="player-center">
+        <div class="scrubber-row">
+          <span id="currTime" class="time-text">00:00</span>
+          <input type="range" id="scrubber" class="scrubber" min="0" max="100" value="0" oninput="onScrub(this.value)">
+          <span id="totalTime" class="time-text">00:00</span>
+        </div>
+        <div class="player-controls">
+          <button id="shuffleBtn" class="ctrl-btn" title="Toggle Shuffle / Random" onclick="toggleShuffle()">🔀</button>
+          <button id="prevTrackBtn" class="ctrl-btn" title="Previous Track" onclick="playPrevTrack()">⏮</button>
+          <button id="playPauseBtn" class="play-btn-circle" onclick="togglePlayPause()">▶</button>
+          <button id="nextTrackBtn" class="ctrl-btn" title="Next Track" onclick="playNextTrack()">⏭</button>
+          <button id="playerBarAddPlaylistBtn" class="ctrl-btn" title="Add Playing Track to Playlist" onclick="addCurrentPlayingTrackToPlaylist()">➕</button>
+        </div>
       </div>
-    </div>
-    <div class="player-right">
-      <button class="ctrl-btn" title="Add Playing Track to Playlist" onclick="addCurrentPlayingTrackToPlaylist()" style="font-size: 1.05rem; margin-right: 2px;">➕</button>
-      <button class="ctrl-btn" title="View Playing Work Details" onclick="jumpToCurrentWorkDetail()" style="font-size: 1.05rem; margin-right: 2px;">👁️</button>
-      <button id="playerBarChapterBtn" class="ctrl-btn" onclick="openPopupPlayerWithChapters()" title="View Chapters & Cue Points" style="font-size: 1.1rem; margin-right: 4px;">📑</button>
-      <button id="muteBtn" class="ctrl-btn" onclick="toggleMute()" title="Mute / Unmute">🔊</button>
-      <button class="player-expand-btn" style="margin-left: 6px;" title="Expand/Collapse Floating Player" onclick="togglePopupPlayer()">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="15 3 21 3 21 9"></polyline>
-          <polyline points="9 21 3 21 3 15"></polyline>
-          <line x1="21" y1="3" x2="14" y2="10"></line>
-          <line x1="3" y1="21" x2="10" y2="14"></line>
-        </svg>
-      </button>
+      <div class="player-right">
+        <button class="ctrl-btn" title="View Playing Work Details" onclick="jumpToCurrentWorkDetail()">👁️</button>
+        <button id="muteBtn" class="ctrl-btn" onclick="cycleSlotVolume('A')" title="Deck A Volume: 100%">🔊</button>
+        <button class="player-expand-btn" title="Expand/Collapse Floating Player" onclick="togglePopupPlayer()">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="15 3 21 3 21 9"></polyline>
+            <polyline points="9 21 3 21 3 15"></polyline>
+            <line x1="21" y1="3" x2="14" y2="10"></line>
+            <line x1="3" y1="21" x2="10" y2="14"></line>
+          </svg>
+        </button>
+      </div>
     </div>
   </footer>
 
@@ -3933,7 +4519,8 @@ const INDEX_HTML = `<!DOCTYPE html>
     <button class="scroll-jump-btn" onclick="window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' })" title="Jump to Bottom">▼</button>
   </div>
 
-  <audio id="coreAudio" preload="metadata"></audio>
+  <audio id="coreAudio" preload="metadata" crossorigin="anonymous"></audio>
+  <audio id="slotBAudio" preload="metadata" crossorigin="anonymous"></audio>
 
   <script>
     const CLIENT_BASE_TAG_DICT = ${JSON.stringify(db.BASE_TAG_DICT || {})};
@@ -4587,6 +5174,108 @@ const INDEX_HTML = `<!DOCTYPE html>
       }).catch(() => {});
     }
 
+    // --- Blacklist / Snooze System Helpers ---
+    function getBlacklistDurationSetting() {
+      const val = parseInt(localStorage.getItem('astreamer_blacklist_hours'), 10);
+      return (!isNaN(val) && val > 0) ? val : 48; // default 48h (2 days)
+    }
+
+    function setBlacklistDurationSetting(hours) {
+      const val = parseInt(hours, 10);
+      const finalVal = (!isNaN(val) && val > 0) ? val : 48;
+      localStorage.setItem('astreamer_blacklist_hours', String(finalVal));
+      apiFetch('/api/settings', {
+        method: 'POST',
+        body: JSON.stringify({ blacklistDurationHours: finalVal })
+      }).catch(() => {});
+      if (typeof showToast === 'function') {
+        const days = (finalVal / 24).toFixed(1).replace(/\.0$/, '');
+        showToast('🕒 Blacklist snooze set to ' + finalVal + 'h (' + days + ' days)');
+      }
+    }
+
+    let globalBlacklistMap = new Map();
+    async function loadGlobalBlacklist() {
+      try {
+        const res = await apiFetch('/api/blacklist');
+        if (res.ok) {
+          const list = await res.json();
+          globalBlacklistMap.clear();
+          const now = Date.now();
+          if (Array.isArray(list)) {
+            list.forEach(b => {
+              if (b && b.rjCode && (!b.expiresAt || b.expiresAt > now)) {
+                const code = String(b.rjCode).toUpperCase().trim();
+                globalBlacklistMap.set(code, b);
+                const norm = normRjKey(code);
+                if (norm) globalBlacklistMap.set(norm, b);
+              }
+            });
+          }
+        }
+      } catch (e) {
+        console.warn('[Blacklist Load Error]', e);
+      }
+      return globalBlacklistMap;
+    }
+
+    async function snoozeUncheckedWorks(items, sourceName = 'Import') {
+      if (!items || items.length === 0) return;
+      const hours = getBlacklistDurationSetting();
+      try {
+        await apiFetch('/api/blacklist', {
+          method: 'POST',
+          body: JSON.stringify({ items, durationHours: hours })
+        });
+        items.forEach(it => {
+          const rj = String(it.rj || it.rjCode || '').toUpperCase().trim();
+          if (rj) {
+            const entry = { rjCode: rj, title: it.title, expiresAt: Date.now() + (hours * 3600000) };
+            globalBlacklistMap.set(rj, entry);
+            const norm = normRjKey(rj);
+            if (norm) globalBlacklistMap.set(norm, entry);
+          }
+        });
+        showToast('💤 Snoozed ' + items.length + ' unchecked work(s) for ' + hours + ' hours');
+      } catch(e) {
+        console.error('[Snooze Error]', e);
+      }
+    }
+
+    async function unblacklistWork(rjCode, onSuccess) {
+      if (!isAdmin) {
+        openAdminModal('Please unlock Admin access first.');
+        return;
+      }
+      const cleanRj = String(rjCode || '').toUpperCase().trim();
+      const norm = normRjKey(cleanRj);
+      try {
+        await apiFetch('/api/blacklist/' + encodeURIComponent(cleanRj), { method: 'DELETE' });
+        globalBlacklistMap.delete(cleanRj);
+        if (norm) globalBlacklistMap.delete(norm);
+        showToast('✨ Removed ' + cleanRj + ' from blacklist');
+        if (typeof onSuccess === 'function') onSuccess();
+      } catch (err) {
+        alert('Failed to remove from blacklist: ' + err.message);
+      }
+    }
+
+    async function clearAllBlacklistedWorks(onSuccess) {
+      if (!isAdmin) {
+        openAdminModal('Please unlock Admin access first.');
+        return;
+      }
+      if (!confirm('Clear all snoozed works from blacklist? They will become eligible for import again immediately.')) return;
+      try {
+        await apiFetch('/api/blacklist/CLEAR_ALL', { method: 'DELETE' });
+        globalBlacklistMap.clear();
+        showToast('✨ Cleared all snoozed works');
+        if (typeof onSuccess === 'function') onSuccess();
+      } catch(err) {
+        alert('Failed to clear blacklist: ' + err.message);
+      }
+    }
+
     function getCoverQualitySetting() {
       return localStorage.getItem('astreamer_cover_quality') || 'standard';
     }
@@ -4680,7 +5369,7 @@ const INDEX_HTML = `<!DOCTYPE html>
             role = String(item[3] || '');
           } else if (typeof item === 'object') {
             title = String(item.title || item.name || ('Page #' + (i + 1)));
-            url = String(item.url || item.proxyUrl || item.source || '');
+            url = typeof item.url === 'string' ? item.url : String(item.url || item.proxyUrl || item.source || '');
             role = String(item.role || '');
           }
 
@@ -4824,8 +5513,13 @@ const INDEX_HTML = `<!DOCTYPE html>
         }
 
         candidates.forEach(function(candObj) {
-          const url = candObj.url;
-          const candTitle = candObj.title || url.split('/').pop().split('?')[0];
+          const url = typeof candObj === 'string' ? candObj : (candObj && candObj.url ? String(candObj.url) : '');
+          if (!url) {
+            pendingCount--;
+            if (pendingCount <= 0) applyBestMatch();
+            return;
+          }
+          const candTitle = (candObj && candObj.title) || url.split('/').pop().split('?')[0];
 
           const testImg = new Image();
           testImg.onload = function() {
@@ -5432,6 +6126,21 @@ const INDEX_HTML = `<!DOCTYPE html>
 
     let currentView = 'library';
     let allWorks = [];
+    try {
+      const cachedWorks = sessionStorage.getItem('astreamer_library_cache');
+      if (cachedWorks) {
+        const parsed = JSON.parse(cachedWorks);
+        if (Array.isArray(parsed) && parsed.length > 0) allWorks = parsed;
+      }
+    } catch(e) {}
+    let allPlaylists = [];
+    try {
+      const cachedPl = sessionStorage.getItem('astreamer_playlists_cache');
+      if (cachedPl) {
+        const parsed = JSON.parse(cachedPl);
+        if (Array.isArray(parsed) && parsed.length > 0) allPlaylists = parsed;
+      }
+    } catch(e) {}
     let shuffledLibraryWorks = null;
     let currentWork = null;
     let currentWorkChapters = [];
@@ -5441,6 +6150,34 @@ const INDEX_HTML = `<!DOCTYPE html>
     let pendingPlaylistItem = null;
     let isChapterDrawerOpen = false;
     const audio = document.getElementById('coreAudio');
+    const slotBAudio = document.getElementById('slotBAudio');
+
+    // Dual Audio "Slot" Mixer Engine State
+    const audioDeck = {
+      ctx: null,
+      A: {
+        audioEl: audio,
+        sourceNode: null,
+        gainNode: null,
+        panNode: null,
+        volume: 1.0,
+        pan: 0.0,
+        muted: false
+      },
+      B: {
+        audioEl: slotBAudio,
+        sourceNode: null,
+        gainNode: null,
+        panNode: null,
+        volume: 1.0,
+        pan: 0.0,
+        muted: false,
+        currentWork: null,
+        currentTrackIndex: -1,
+        hls: null,
+        loadedHlsUrl: null
+      }
+    };
 
     const SFW_DISGUISE_LIST = ['RJ01681691','RJ01678330','RJ01694805','RJ01688728','RJ01693711','RJ335043','RJ01360841','RJ346413','RJ01229288','RJ321035','RJ317278','RJ387519','RJ370190','RJ343025','RJ373001','RJ01144236','RJ336447','RJ329940','RJ403038','RJ370099','RJ299717','RJ01323001','RJ363741','RJ333531','RJ357211','RJ01040461'];
 
@@ -5547,6 +6284,7 @@ const INDEX_HTML = `<!DOCTYPE html>
         return { coverUrl: '/image-proxy?url=' + encodeURIComponent('https://pic.weeabo0.xyz/' + sfwRj + '_img_main.jpg'), isDisguised: true };
       }
 
+      rawCover = typeof rawCover === 'string' ? rawCover : String(rawCover || '');
       while (rawCover && (rawCover.startsWith('/image-proxy?url=') || (rawCover.startsWith('http') && rawCover.includes('/image-proxy?url=')))) {
         const match = rawCover.match(/[?&]url=([^&]+)/);
         if (match) {
@@ -5580,6 +6318,7 @@ const INDEX_HTML = `<!DOCTYPE html>
           });
           if (asmrItem) {
             let u = asmrItem.url || asmrItem.proxyUrl || (Array.isArray(asmrItem) ? asmrItem[1] : '');
+            u = typeof u === 'string' ? u : String(u || '');
             if (u.startsWith('/image-proxy?url=')) {
               try { u = decodeURIComponent(u.replace('/image-proxy?url=', '')); } catch(e) {}
             }
@@ -6067,9 +6806,98 @@ const INDEX_HTML = `<!DOCTYPE html>
       showToast('🗑️ Cleared diagnostic activity logs');
     }
 
+    // Temporal Session Cache & In-Flight Promise Deduping for GET requests
+    const apiSessionCache = new Map();
+    const apiInFlightPromises = new Map();
+    const CACHEABLE_ROUTES = [
+      '/api/library',
+      '/api/tags',
+      '/api/artists',
+      '/api/playlists',
+      '/api/waitlist',
+      '/api/wishlist',
+      '/api/history'
+    ];
+
+    function invalidateApiSessionCache(prefix = null) {
+      if (!prefix) {
+        apiSessionCache.clear();
+        try { sessionStorage.removeItem('astreamer_library_cache'); } catch(e) {}
+        try { sessionStorage.removeItem('astreamer_playlists_cache'); } catch(e) {}
+        return;
+      }
+      for (const key of apiSessionCache.keys()) {
+        if (key.includes(prefix)) {
+          apiSessionCache.delete(key);
+        }
+      }
+      if (prefix.includes('/api/library')) {
+        try { sessionStorage.removeItem('astreamer_library_cache'); } catch(e) {}
+      }
+      if (prefix.includes('/api/playlists')) {
+        try { sessionStorage.removeItem('astreamer_playlists_cache'); } catch(e) {}
+      }
+    }
+
     async function apiFetch(url, options = {}) {
-      const method = (options.method || 'GET').toUpperCase();
-      devLog('INFO', 'API', method + ' ' + url);
+      let urlStr = '';
+      if (typeof url === 'string') {
+        urlStr = url;
+      } else if (url && typeof url === 'object') {
+        if (url.pathname) {
+          urlStr = url.pathname + (url.search || '');
+        } else if (url.url) {
+          urlStr = url.url;
+        } else if (url.href) {
+          try {
+            const uObj = new URL(url.href);
+            urlStr = uObj.pathname + uObj.search;
+          } catch(e) {
+            urlStr = url.href;
+          }
+        } else {
+          urlStr = String(url);
+        }
+      } else {
+        urlStr = String(url || '');
+      }
+
+      const method = (options.method || (url && url.method) || 'GET').toUpperCase();
+      const isGet = method === 'GET';
+
+      // Auto-invalidate cache on state-mutating requests (POST, DELETE, PUT)
+      if (!isGet) {
+        if (urlStr.includes('/api/tags')) invalidateApiSessionCache('/api/tags');
+        else if (urlStr.includes('/api/artists')) invalidateApiSessionCache('/api/artists');
+        else if (urlStr.includes('/api/waitlist')) invalidateApiSessionCache('/api/waitlist');
+        else if (urlStr.includes('/api/wishlist')) invalidateApiSessionCache('/api/wishlist');
+        else if (urlStr.includes('/api/playlists')) invalidateApiSessionCache('/api/playlists');
+        else if (urlStr.includes('/api/history')) invalidateApiSessionCache('/api/history');
+        else if (urlStr.includes('/api/library')) invalidateApiSessionCache();
+      }
+
+      // Check cache for GET requests
+      const isCacheable = isGet && CACHEABLE_ROUTES.some(r => urlStr === r || urlStr.startsWith(r + '?'));
+      if (isCacheable && !options.noCache) {
+        const cached = apiSessionCache.get(urlStr);
+        const now = Date.now();
+        if (cached && (now - cached.timestamp < (cached.ttl || 1800000))) {
+          // Serve from short-term session cache
+          return new Response(cached.body, {
+            status: cached.status,
+            statusText: cached.statusText,
+            headers: new Headers(cached.headers)
+          });
+        }
+
+        // In-flight Promise Deduping: If exact same GET is already pending, latch onto it!
+        if (apiInFlightPromises.has(urlStr)) {
+          const inFlightRes = await apiInFlightPromises.get(urlStr);
+          return inFlightRes.clone();
+        }
+      }
+
+      devLog('INFO', 'API', method + ' ' + urlStr);
       options.headers = options.headers || { 'Content-Type': 'application/json' };
       const savedPass = localStorage.getItem('astreamer_admin_passcode') || '';
       if (savedPass) {
@@ -6079,36 +6907,66 @@ const INDEX_HTML = `<!DOCTYPE html>
           options.headers['x-admin-passcode'] = savedPass;
         }
       }
-      try {
-        const res = await fetch(url, options);
-        if (!res.ok) {
-          let errDetail = res.statusText || 'Error';
-          try {
-            const clone = res.clone();
-            const errJson = await clone.json();
-            if (errJson && errJson.error) errDetail = errJson.error;
-            else if (errJson && errJson.message) errDetail = errJson.message;
-          } catch(e) {
+
+      const fetchPromise = (async () => {
+        try {
+          const res = await fetch(url, options);
+          if (!res.ok) {
+            let errDetail = res.statusText || 'Error';
             try {
               const clone = res.clone();
-              const errTxt = await clone.text();
-              if (errTxt && errTxt.length < 120) errDetail = errTxt;
-            } catch(e2) {}
+              const errJson = await clone.json();
+              if (errJson && errJson.error) errDetail = errJson.error;
+              else if (errJson && errJson.message) errDetail = errJson.message;
+            } catch(e) {
+              try {
+                const clone = res.clone();
+                const errTxt = await clone.text();
+                if (errTxt && errTxt.length < 120) errDetail = errTxt;
+              } catch(e2) {}
+            }
+            devLog(res.status >= 500 ? 'ERROR' : 'WARN', 'API', method + ' ' + urlStr + ' -> HTTP ' + res.status + ' (' + errDetail + ')');
+          } else {
+            devLog('INFO', 'API', method + ' ' + urlStr + ' -> HTTP ' + res.status);
           }
-          devLog(res.status >= 500 ? 'ERROR' : 'WARN', 'API', method + ' ' + url + ' -> HTTP ' + res.status + ' (' + errDetail + ')');
-        } else {
-          devLog('INFO', 'API', method + ' ' + url + ' -> HTTP ' + res.status);
+          if (res.status === 401) {
+            isAdmin = false;
+            updateAdminUI(false);
+            openAdminModal('Admin authorization required to perform this action.');
+          }
+
+          // If cacheable 200 GET, store response body in session cache (30 min TTL)
+          if (isCacheable && res.ok) {
+            try {
+              const clone = res.clone();
+              const bodyText = await clone.text();
+              const headerObj = {};
+              res.headers.forEach((v, k) => { headerObj[k] = v; });
+              apiSessionCache.set(urlStr, {
+                body: bodyText,
+                status: res.status,
+                statusText: res.statusText,
+                headers: headerObj,
+                timestamp: Date.now(),
+                ttl: 1800000 // 30 minutes temporal session cache
+              });
+            } catch (e) {}
+          }
+
+          return res;
+        } catch (err) {
+          devLog('ERROR', 'API', method + ' ' + urlStr + ' -> Network Error: ' + err.message);
+          throw err;
+        } finally {
+          apiInFlightPromises.delete(urlStr);
         }
-        if (res.status === 401) {
-          isAdmin = false;
-          updateAdminUI(false);
-          openAdminModal('Admin authorization required to perform this action.');
-        }
-        return res;
-      } catch (err) {
-        devLog('ERROR', 'API', method + ' ' + url + ' -> Network Error: ' + err.message);
-        throw err;
+      })();
+
+      if (isCacheable) {
+        apiInFlightPromises.set(urlStr, fetchPromise);
       }
+
+      return fetchPromise;
     }
 
     async function apiFetchJson(url, options = {}) {
@@ -6306,7 +7164,10 @@ const INDEX_HTML = `<!DOCTYPE html>
         }
         if (!Array.isArray(works)) works = [];
         if (contentMode === 'SFW') works = works.filter(w => !isWorkNsfw(w));
+        const prevCount = hasCachedWorks ? allWorks.length : -1;
+        const countChanged = prevCount !== works.length;
         allWorks = works;
+        try { sessionStorage.setItem('astreamer_library_cache', JSON.stringify(works)); } catch(e) {}
         try { restoreLastPlaybackSession(); } catch(e) {}
         if (shuffledLibraryWorks && (!filterParams || Object.keys(filterParams).length === 0)) {
           const workMap = new Map(works.map(w => [w.rjCode, w]));
@@ -6317,10 +7178,14 @@ const INDEX_HTML = `<!DOCTYPE html>
           works.forEach(w => {
             if (!existingSet.has(w.rjCode)) shuffledLibraryWorks.push(w);
           });
-          renderLibraryGrid(shuffledLibraryWorks, filterParams);
+          if (countChanged || !hasCachedWorks) {
+            renderLibraryGrid(shuffledLibraryWorks, filterParams);
+          }
         } else {
           shuffledLibraryWorks = null;
-          renderLibraryGrid(works, filterParams);
+          if (countChanged || !hasCachedWorks || !isPlainLibrary) {
+            renderLibraryGrid(works, filterParams);
+          }
         }
       } catch (e) {
         if (!hasCachedWorks) {
@@ -6596,12 +7461,14 @@ const INDEX_HTML = `<!DOCTYPE html>
 
       if (libraryViewMode === 'list') {
         html += '<table class="works-list-table"><thead><tr><th style="width:50px;">Cover</th><th style="width:110px;">RJ Code</th><th>Title</th><th>Voice Actor (CV)</th><th>Circle</th><th style="width:70px; text-align:center;">Tracks</th><th style="width:90px; text-align:right;">Actions</th></tr></thead><tbody>';
-        paginatedWorks.forEach(function(w) {
+        paginatedWorks.forEach(function(w, idx) {
           const display = getDisplayCover(w);
           const cvDisplay = formatCV(getWorkCV(w));
           const metaLine = (cvDisplay ? '<span style="color:#38bdf8; font-weight:600;">' + cvDisplay + '</span>' : '') + (cvDisplay && w.circle ? ' • ' : '') + (w.circle ? '<span>' + w.circle + '</span>' : '') + ' • <span class="card-rj" style="padding:1px 5px; font-size:0.7rem;">' + w.rjCode + '</span>';
+          const isCoverLoaded = isCoverCached(display.coverUrl);
+          const loadAttr = (isCoverLoaded || idx < 20) ? 'loading="eager"' : 'loading="lazy"';
           html += '<tr class="works-list-row" data-rj="' + w.rjCode + '" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); navWork(this.dataset.rj); }">';
-          html += '<td class="w-col-cover"><a href="#/work/' + w.rjCode + '" data-rj="' + w.rjCode + '" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); navWork(this.dataset.rj); }"><img class="list-thumb" src="' + display.coverUrl + '" data-rj="' + w.rjCode + '" onerror="handleImgError(this)"></a></td>';
+          html += '<td class="w-col-cover"><a href="#/work/' + w.rjCode + '" data-rj="' + w.rjCode + '" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); navWork(this.dataset.rj); }"><img class="list-thumb" src="' + display.coverUrl + '" data-rj="' + w.rjCode + '" ' + loadAttr + ' decoding="async" onload="markCoverLoaded(this.src)" onerror="handleImgError(this)"></a></td>';
           html += '<td class="w-col-rj"><a href="#/work/' + w.rjCode + '" data-rj="' + w.rjCode + '" class="card-rj" style="text-decoration:none; display:inline-block;" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); navWork(this.dataset.rj); }">' + w.rjCode + '</a></td>';
           html += '<td class="w-col-title"><a href="#/work/' + w.rjCode + '" data-rj="' + w.rjCode + '" style="color:inherit; text-decoration:none;" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); navWork(this.dataset.rj); }"><strong>' + w.title + '</strong></a>' + (display.isDisguised ? ' <span class="disguised-badge">🎭 SFW</span>' : '') + '</td>';
           html += '<td class="w-col-meta"><div class="w-meta-inner">' + metaLine + '</div></td>';
@@ -6613,12 +7480,14 @@ const INDEX_HTML = `<!DOCTYPE html>
         html += '</tbody></table>';
       } else {
         html += '<div class="works-grid mode-' + libraryViewMode + '">';
-        paginatedWorks.forEach(function(w) {
+        paginatedWorks.forEach(function(w, idx) {
           const display = getDisplayCover(w);
           const cvDisplay = formatCV(getWorkCV(w));
           const subText = cvDisplay || w.circle || 'ASMR';
+          const isCoverLoaded = isCoverCached(display.coverUrl);
+          const loadAttr = (isCoverLoaded || idx < 20) ? 'loading="eager"' : 'loading="lazy"';
           html += '<a class="work-card" href="#/work/' + w.rjCode + '" data-rj="' + w.rjCode + '" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); navWork(this.dataset.rj); }">';
-          html += '<div class="card-cover-wrapper"><img class="card-cover" src="' + display.coverUrl + '" data-rj="' + w.rjCode + '" onerror="handleImgError(this)">' + (display.isDisguised ? '<div class="disguised-overlay"><span class="disguised-badge">🎭 Disguised SFW</span></div>' : '') + '</div>';
+          html += '<div class="card-cover-wrapper"><img class="card-cover" src="' + display.coverUrl + '" data-rj="' + w.rjCode + '" ' + loadAttr + ' decoding="async" onload="markCoverLoaded(this.src)" onerror="handleImgError(this)">' + (display.isDisguised ? '<div class="disguised-overlay"><span class="disguised-badge">🎭 Disguised SFW</span></div>' : '') + '</div>';
           html += '<div class="card-badge-row"><span class="card-rj">' + w.rjCode + '</span><span class="card-fav card-fav-' + w.rjCode + '" data-rj="' + w.rjCode + '" title="' + (w.favorite ? 'Favorited' : 'Add to Favorites') + '" onclick="event.stopPropagation(); event.preventDefault(); toggleFav(this.dataset.rj, event)" style="transition: transform 0.15s ease-out; display: inline-block;">' + (w.favorite ? '❤️' : '🤍') + '</span></div>';
           html += '<div class="card-title" title="' + w.title.replace(/"/g, '&quot;') + '">' + w.title + '</div>';
           html += '<div class="card-sub">' + subText + '</div>';
@@ -6649,6 +7518,11 @@ const INDEX_HTML = `<!DOCTYPE html>
 
       container.innerHTML = html;
 
+      // Schedule background precaching of adjacent pages (Pages N+1, N+2) during idle time
+      if (libraryPerPage > 0 && totalPages > 1) {
+        scheduleIdleCoverPrecache(orderedWorks, libraryCurrentPage, perPage, totalPages);
+      }
+
       if (savedScrollPositions['library'] && savedScrollPositions['library'] > 0) {
         const targetScroll = savedScrollPositions['library'];
         window.scrollTo({ top: targetScroll, behavior: 'instant' });
@@ -6661,6 +7535,172 @@ const INDEX_HTML = `<!DOCTYPE html>
             window.scrollTo({ top: targetScroll, behavior: 'instant' });
           }, 180);
         });
+      }
+    }
+
+    // Temporal Idle Precache & Memory Retain Engine: Warms browser memory & image cache for instant display
+    function normUrlKey(u) {
+      if (!u) return '';
+      try {
+        const p = new URL(u, window.location.origin);
+        if (p.origin === window.location.origin) {
+          return p.pathname + p.search;
+        }
+        return p.href;
+      } catch(e) {
+        return String(u || '');
+      }
+    }
+
+    const loadedCoverUrls = new Set();
+    try {
+      const savedCovers = sessionStorage.getItem('astreamer_cached_covers');
+      if (savedCovers) {
+        const list = JSON.parse(savedCovers);
+        if (Array.isArray(list)) list.forEach(u => loadedCoverUrls.add(u));
+      }
+    } catch(e) {}
+    const precachedCoverUrls = new Set();
+    const memoryImageCache = new Map(); // Retain decoded Image objects in memory to prevent GC eviction
+    let idlePrecacheTimeout = null;
+
+    function isCoverCached(url) {
+      if (!url) return false;
+      const key = normUrlKey(url);
+      return loadedCoverUrls.has(key) || memoryImageCache.has(key);
+    }
+
+    function markCoverLoaded(src) {
+      if (!src) return;
+      const key = normUrlKey(src);
+      loadedCoverUrls.add(key);
+      try {
+        if (loadedCoverUrls.size <= 500) {
+          sessionStorage.setItem('astreamer_cached_covers', JSON.stringify(Array.from(loadedCoverUrls)));
+        }
+      } catch(e) {}
+      if (!memoryImageCache.has(key)) {
+        const img = new Image();
+        img.src = src;
+        memoryImageCache.set(key, img);
+        if (memoryImageCache.size > 300) {
+          const oldestKey = memoryImageCache.keys().next().value;
+          memoryImageCache.delete(oldestKey);
+        }
+      }
+    }
+
+    function precacheSingleImage(url) {
+      if (!url) return;
+      const key = normUrlKey(url);
+      if (precachedCoverUrls.has(key) || loadedCoverUrls.has(key)) return;
+      precachedCoverUrls.add(key);
+      const img = new Image();
+      img.decoding = 'async';
+      img.onload = () => {
+        markCoverLoaded(url);
+      };
+      img.src = url;
+      memoryImageCache.set(key, img);
+      if (memoryImageCache.size > 300) {
+        const oldestKey = memoryImageCache.keys().next().value;
+        memoryImageCache.delete(oldestKey);
+      }
+    }
+
+    function schedulePlaylistCoverPrecache(items) {
+      if (!Array.isArray(items) || items.length === 0) return;
+      const urlsToPreload = [];
+      items.forEach(it => {
+        const disp = getDisplayCover(it);
+        const u = disp ? disp.coverUrl : '';
+        if (u && !isCoverCached(u) && !precachedCoverUrls.has(normUrlKey(u))) {
+          urlsToPreload.push(u);
+        }
+      });
+      if (urlsToPreload.length === 0) return;
+      let idx = 0;
+      function stepPreload() {
+        for (let k = 0; k < 3 && idx < urlsToPreload.length; k++, idx++) {
+          precacheSingleImage(urlsToPreload[idx]);
+        }
+        if (idx < urlsToPreload.length) {
+          setTimeout(stepPreload, 80);
+        }
+      }
+      if (typeof window.requestIdleCallback === 'function') {
+        window.requestIdleCallback(stepPreload, { timeout: 1500 });
+      } else {
+        setTimeout(stepPreload, 200);
+      }
+    }
+
+    function scheduleIdleCoverPrecache(orderedWorks, currentPage, perPage, totalPages) {
+      if (idlePrecacheTimeout) clearTimeout(idlePrecacheTimeout);
+      const runPrecache = () => {
+        // 1. Collect next 2 pages (N+1, N+2) and previous 1 page (N-1)
+        const targetPages = [currentPage + 1, currentPage + 2, currentPage - 1].filter(p => p >= 1 && p <= totalPages);
+        const urlsToPreload = [];
+        targetPages.forEach(p => {
+          const s = (p - 1) * perPage;
+          const slice = orderedWorks.slice(s, s + perPage);
+          slice.forEach(w => {
+            const display = getDisplayCover(w);
+            if (display && display.coverUrl && !isCoverCached(display.coverUrl) && !precachedCoverUrls.has(normUrlKey(display.coverUrl))) {
+              urlsToPreload.push(display.coverUrl);
+            }
+          });
+        });
+
+        // 2. Precache playlist items during idle time for instant switching
+        if (Array.isArray(allPlaylists)) {
+          allPlaylists.forEach(pl => {
+            if (Array.isArray(pl.items)) {
+              pl.items.forEach(it => {
+                const disp = getDisplayCover(it);
+                if (disp && disp.coverUrl && !isCoverCached(disp.coverUrl) && !precachedCoverUrls.has(normUrlKey(disp.coverUrl))) {
+                  urlsToPreload.push(disp.coverUrl);
+                }
+              });
+            }
+          });
+        }
+
+        // 3. Also precache recent History items during idle time for instant switching
+        try {
+          const histRaw = localStorage.getItem('astreamer_play_history');
+          if (histRaw) {
+            const hist = JSON.parse(histRaw);
+            if (Array.isArray(hist)) {
+              hist.slice(0, 20).forEach(item => {
+                const display = getDisplayCover(item);
+                if (display && display.coverUrl && !isCoverCached(display.coverUrl) && !precachedCoverUrls.has(normUrlKey(display.coverUrl))) {
+                  urlsToPreload.push(display.coverUrl);
+                }
+              });
+            }
+          }
+        } catch(e) {}
+
+        // Stagger load 3 images every 100ms to keep main thread completely smooth
+        let idx = 0;
+        function stepPreload() {
+          for (let k = 0; k < 3 && idx < urlsToPreload.length; k++, idx++) {
+            precacheSingleImage(urlsToPreload[idx]);
+          }
+          if (idx < urlsToPreload.length) {
+            setTimeout(stepPreload, 100);
+          }
+        }
+        stepPreload();
+      };
+
+      if (typeof window.requestIdleCallback === 'function') {
+        idlePrecacheTimeout = setTimeout(() => {
+          window.requestIdleCallback(runPrecache, { timeout: 2000 });
+        }, 400);
+      } else {
+        idlePrecacheTimeout = setTimeout(runPrecache, 500);
       }
     }
 
@@ -6774,14 +7814,14 @@ const INDEX_HTML = `<!DOCTYPE html>
         : 'background:rgba(234,179,8,0.15); border:1px solid rgba(234,179,8,0.5); color:#facc15;';
 
       let html = '<div id="workDetailHdDebugBar" class="hd-debug-bar" style="display:' + (getHdDebugLogSetting() ? 'block' : 'none') + '; width:100%; margin-bottom:12px; background:rgba(15,23,42,0.92); border:1px solid rgba(56,189,248,0.4); color:#38bdf8; font-family:monospace; font-size:0.75rem; padding:10px 16px; border-radius:10px; line-height:1.45; word-break:break-all;">🔍 HD Debug: Evaluating candidates...</div>';
-      html += '<div class="work-detail-banner"><div class="detail-cover-col" style="display:flex; flex-direction:column; align-items:stretch; gap:10px; flex-shrink:0;"><div class="detail-cover-wrapper" style="position:relative; width:100%;"><img class="detail-cover" id="workDetailCoverImg" src="' + initialCoverSrc + '" data-rj="' + work.rjCode + '" onerror="handleImgError(this)" onclick="' + playAllAction + '" title="Click to Play All"></div><div style="display:flex; gap:6px; width:100%;"><span id="workDetailRjBadge" class="card-rj" style="flex:1; display:flex; align-items:center; justify-content:center; padding:6px 8px; font-size:0.82rem; font-weight:700; border-radius:8px; ' + rjBadgeStyle + '">' + work.rjCode + '</span><button class="btn-outline btn-remove" style="flex:1; justify-content:center; padding:6px 8px; font-size:0.82rem; border-radius:8px;" data-rj="' + work.rjCode + '" onclick="deleteWorkItem(this.dataset.rj)">🗑️ Remove</button></div></div><div class="detail-info"><div class="detail-title-wrapper"><h1 class="detail-title title-clamped" id="workDetailTitle" onclick="toggleWorkDetailTitle()" title="' + (work.title || '').replace(/"/g, '&quot;') + '">' + work.title + '</h1><button id="btnToggleTitleExpand" class="btn-title-expand" onclick="toggleWorkDetailTitle()" title="Toggle full title">...</button></div><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Voice Actor (CV):</strong> ' + cvPills + '</div><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:8px 16px;"><div style="display:inline-flex; align-items:center; gap:6px; min-width:0;"><strong>Circle:</strong> ' + circlePill + '</div>' + (releasePill ? '<div style="display:inline-flex; align-items:center; gap:6px; min-width:0;"><strong>Release:</strong> ' + releasePill + '</div>' : '') + '</div><div class="tags-container" style="margin-top:14px; display:flex; flex-direction:column; align-items:flex-start;"><div id="workDetailTagsRow" class="tags-row tags-row-clamped" style="margin-top:0;">' + tagPills + '</div><button id="btnToggleMoreTags" class="tag-pill" onclick="toggleWorkDetailTags()" style="display:none; margin-top:6px; background:rgba(255,255,255,0.08); border:1px dashed var(--accent); color:var(--accent); font-weight:700; cursor:pointer; align-items:center; gap:4px; font-size:0.76rem;"><span>+ Show more (' + filteredTags.length + ' tags)</span></button></div><div style="margin-top:auto; padding-top:16px; display:flex; flex-wrap:wrap; gap:10px;"><button class="btn-primary" onclick="' + playAllAction + '">' + playAllBtnText + '</button><button class="btn-outline btn-gallery" id="btnWorkGallery" data-rj="' + work.rjCode + '" onclick="openWorkGalleryModal()" style="display:' + (galleryCount > 0 ? 'inline-flex' : 'none') + ';">🖼️ Gallery (<span id="btnWorkGalleryCount">' + galleryCount + '</span>)</button><button class="btn-outline" data-rj="' + work.rjCode + '" onclick="addWorkToPlaylistAction(this.dataset.rj)">➕ Playlist</button><button class="btn-outline" id="btnWorkRefresh"' + refreshBtnDisabled + ' data-rj="' + work.rjCode + '" onclick="refreshSingleWork(this.dataset.rj, this)">' + refreshBtnContent + '</button><button class="btn-outline" onclick="navBack()">← Back</button></div></div></div>';
+      html += '<div class="work-detail-banner"><div class="detail-cover-col" style="display:flex; flex-direction:column; align-items:stretch; gap:10px; flex-shrink:0;"><div class="detail-cover-wrapper" style="position:relative; width:100%;"><img class="detail-cover" id="workDetailCoverImg" src="' + initialCoverSrc + '" data-rj="' + work.rjCode + '" loading="eager" decoding="async" onload="markCoverLoaded(this.src)" onerror="handleImgError(this)" onclick="' + playAllAction + '" title="Click to Play All"></div><div style="display:flex; gap:6px; width:100%;"><span id="workDetailRjBadge" class="card-rj" style="flex:1; display:flex; align-items:center; justify-content:center; padding:6px 8px; font-size:0.82rem; font-weight:700; border-radius:8px; ' + rjBadgeStyle + '">' + work.rjCode + '</span><button class="btn-outline btn-remove" style="flex:1; justify-content:center; padding:6px 8px; font-size:0.82rem; border-radius:8px;" data-rj="' + work.rjCode + '" onclick="deleteWorkItem(this.dataset.rj)">🗑️ Remove</button></div></div><div class="detail-info"><div class="detail-title-wrapper"><h1 class="detail-title title-clamped" id="workDetailTitle" onclick="toggleWorkDetailTitle()" title="' + (work.title || '').replace(/"/g, '&quot;') + '">' + work.title + '</h1><button id="btnToggleTitleExpand" class="btn-title-expand" onclick="toggleWorkDetailTitle()" title="Toggle full title">...</button></div><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;"><strong>Voice Actor (CV):</strong> ' + cvPills + '</div><div class="detail-meta" style="margin-top:6px; display:flex; align-items:center; flex-wrap:wrap; gap:8px 16px;"><div style="display:inline-flex; align-items:center; gap:6px; min-width:0;"><strong>Circle:</strong> ' + circlePill + '</div>' + (releasePill ? '<div style="display:inline-flex; align-items:center; gap:6px; min-width:0;"><strong>Release:</strong> ' + releasePill + '</div>' : '') + '</div><div class="tags-container" style="margin-top:14px; display:flex; flex-direction:column; align-items:flex-start;"><div id="workDetailTagsRow" class="tags-row tags-row-clamped" style="margin-top:0;">' + tagPills + '</div><button id="btnToggleMoreTags" class="tag-pill" onclick="toggleWorkDetailTags()" style="display:none; margin-top:6px; background:rgba(255,255,255,0.08); border:1px dashed var(--accent); color:var(--accent); font-weight:700; cursor:pointer; align-items:center; gap:4px; font-size:0.76rem;"><span>+ Show more (' + filteredTags.length + ' tags)</span></button></div>      <div style="margin-top:auto; padding-top:16px; display:flex; flex-wrap:wrap; gap:10px;"><button class="btn-primary" onclick="' + playAllAction + '">' + playAllBtnText + '</button><button class="btn-outline" style="border-color: rgba(56,189,248,0.5); color: #38bdf8;" onclick="loadCurrentWorkIntoSlotB()" title="Load work into Deck B / Secondary Slot">🎚️ Deck B</button><button class="btn-outline btn-gallery" id="btnWorkGallery" data-rj="' + work.rjCode + '" onclick="openWorkGalleryModal()" style="display:' + (galleryCount > 0 ? 'inline-flex' : 'none') + ';">🖼️ Gallery (<span id="btnWorkGalleryCount">' + galleryCount + '</span>)</button><button class="btn-outline" data-rj="' + work.rjCode + '" onclick="addWorkToPlaylistAction(this.dataset.rj)">➕ Playlist</button><button class="btn-outline" id="btnWorkRefresh"' + refreshBtnDisabled + ' data-rj="' + work.rjCode + '" onclick="refreshSingleWork(this.dataset.rj, this)">' + refreshBtnContent + '</button><button class="btn-outline" onclick="navBack()">← Back</button></div></div></div>';
 
       // 1. Physical Audio Tracklist Section
       if (hasFullCommunityTracks) {
         const audioSource = getWorkAudioSource(work, fullCommunityTracks);
         const audioSourceBadge = audioSource ? ('<span style="font-size:0.75rem; background:rgba(255,122,0,0.15); color:var(--accent); border:1px solid var(--accent-glow); padding:2px 8px; border-radius:4px; font-weight:700;">' + audioSource + '</span>') : '';
         html += '<h3 style="font-size:1.2rem; font-weight:700; margin-top:24px; margin-bottom:12px; display:flex; align-items:center; gap:8px;"><span>🎵 Full Audio Tracks (' + fullCommunityTracks.length + ')</span>' + audioSourceBadge + '</h3>';
-        html += '<table class="tracks-table audio-tracks-table"><thead><tr><th style="width: 40px;">#</th><th>Track Title</th><th style="width: 120px;">Stream Format</th><th style="width: 160px; text-align:right;">Action</th></tr></thead><tbody>';
+        html += '<table class="tracks-table audio-tracks-table"><thead><tr><th style="width: 40px;">#</th><th>Track Title</th><th style="width: 120px;">Stream Format</th><th style="width: 200px; text-align:right;">Action</th></tr></thead><tbody>';
 
         fullCommunityTracks.forEach(function(t, i) {
           let catBadge = '';
@@ -6793,7 +7833,7 @@ const INDEX_HTML = `<!DOCTYPE html>
             catBadge = '<span style="font-size:0.75rem; background:rgba(59,130,246,0.15); color:#60a5fa; border:1px solid rgba(96,165,250,0.3); padding:2px 8px; border-radius:4px; font-weight:700; margin-right:6px;">🎵 Main</span>';
           }
           const formatBadge = t.isHls ? '<span style="font-size:0.75rem; background:rgba(14,116,144,0.2); color:#38bdf8; border:1px solid rgba(56,189,248,0.3); padding:2px 8px; border-radius:4px; font-weight:700;">HLS Master</span>' : '<span style="font-size:0.75rem; background:rgba(255,255,255,0.06); color:#d1d5db; border:1px solid var(--border); padding:2px 8px; border-radius:4px; font-weight:700;">Direct MP3</span>';
-          html += '<tr class="track-row" id="track-row-' + i + '" data-idx="' + i + '" onclick="playTrack(parseInt(this.dataset.idx), true, currentWork)"><td>' + (t.id || (i + 1)) + '</td><td><div style="display:flex; align-items:center; flex-wrap:wrap; gap:4px;">' + catBadge + '<strong>' + t.title + '</strong></div></td><td>' + formatBadge + '</td><td style="text-align:right;"><div style="display:inline-flex; gap:6px;"><button class="btn-primary" style="padding: 4px 10px; font-size: 0.75rem;" data-idx="' + i + '" onclick="event.stopPropagation(); playTrack(parseInt(this.dataset.idx), true, currentWork)">▶ Play</button><button class="btn-outline" style="padding: 4px 10px; font-size: 0.75rem;" data-idx="' + i + '" onclick="event.stopPropagation(); addTrackToPlaylistAction(parseInt(this.dataset.idx))">➕ Playlist</button></div></td></tr>';
+          html += '<tr class="track-row" id="track-row-' + i + '" data-idx="' + i + '" onclick="playTrack(parseInt(this.dataset.idx), true, currentWork)"><td>' + (t.id || (i + 1)) + '</td><td><div style="display:flex; align-items:center; flex-wrap:wrap; gap:4px;">' + catBadge + '<strong>' + t.title + '</strong></div></td><td>' + formatBadge + '</td><td style="text-align:right;"><div style="display:inline-flex; gap:6px;"><button class="btn-primary" style="padding: 4px 10px; font-size: 0.75rem;" data-idx="' + i + '" onclick="event.stopPropagation(); playTrack(parseInt(this.dataset.idx), true, currentWork)">▶ Play</button><button class="btn-outline" style="padding: 4px 10px; font-size: 0.75rem; border-color: rgba(56,189,248,0.4); color: #38bdf8;" data-idx="' + i + '" onclick="event.stopPropagation(); playSlotBTrack(parseInt(this.dataset.idx), currentWork)" title="Play this track in Deck B">🎚️ B</button><button class="btn-outline" style="padding: 4px 10px; font-size: 0.75rem;" data-idx="' + i + '" onclick="event.stopPropagation(); addTrackToPlaylistAction(parseInt(this.dataset.idx))">➕ Playlist</button></div></td></tr>';
         });
         html += '</tbody></table>';
       } else {
@@ -6803,10 +7843,10 @@ const INDEX_HTML = `<!DOCTYPE html>
       // 1.5. Official DLsite Preview Audio Section (DLsite Chobit)
       if (sampleTracks.length > 0 && previewAudioMode !== 'disabled') {
         html += '<h3 style="font-size:1.2rem; font-weight:700; margin-top:28px; margin-bottom:12px; display:flex; align-items:center; gap:8px;"><span>🎧 Preview Audio (' + sampleTracks.length + ')</span><span style="font-size:0.75rem; background:rgba(255,122,0,0.15); color:var(--accent); border:1px solid var(--accent-glow); padding:2px 8px; border-radius:4px; font-weight:700;">DLsite Chobit</span></h3>';
-        html += '<table class="tracks-table sample-tracks-table"><thead><tr><th style="width: 40px;">#</th><th>Sample Track Title</th><th style="width: 160px; text-align:right;">Action</th></tr></thead><tbody>';
+        html += '<table class="tracks-table sample-tracks-table"><thead><tr><th style="width: 40px;">#</th><th>Sample Track Title</th><th style="width: 200px; text-align:right;">Action</th></tr></thead><tbody>';
         sampleTracks.forEach(function(st, sIdx) {
           const stJson = JSON.stringify(st).replace(/"/g, '&quot;');
-          html += '<tr class="track-row" id="sample-track-row-' + sIdx + '" onclick="playDirectAudioTrack(' + stJson + ', ' + sIdx + ', currentWork)"><td>' + (sIdx + 1) + '</td><td><div style="display:flex; align-items:center; flex-wrap:wrap; gap:4px;"><strong>' + st.title + '</strong></div></td><td style="text-align:right;"><div style="display:inline-flex; gap:6px;"><button class="btn-primary" style="padding: 4px 10px; font-size: 0.75rem;" onclick="event.stopPropagation(); playDirectAudioTrack(' + stJson + ', ' + sIdx + ', currentWork)">▶ Play Sample</button><button class="btn-outline" style="padding: 4px 10px; font-size: 0.75rem;" onclick="event.stopPropagation(); addSampleTrackToPlaylistAction(' + stJson + ')">➕ Playlist</button></div></td></tr>';
+          html += '<tr class="track-row" id="sample-track-row-' + sIdx + '" onclick="playDirectAudioTrack(' + stJson + ', ' + sIdx + ', currentWork)"><td>' + (sIdx + 1) + '</td><td><div style="display:flex; align-items:center; flex-wrap:wrap; gap:4px;"><strong>' + st.title + '</strong></div></td><td style="text-align:right;"><div style="display:inline-flex; gap:6px;"><button class="btn-primary" style="padding: 4px 10px; font-size: 0.75rem;" onclick="event.stopPropagation(); playDirectAudioTrack(' + stJson + ', ' + sIdx + ', currentWork)">▶ Play Sample</button><button class="btn-outline" style="padding: 4px 10px; font-size: 0.75rem; border-color: rgba(56,189,248,0.4); color: #38bdf8;" onclick="event.stopPropagation(); playDirectAudioTrackB(' + stJson + ', ' + sIdx + ', currentWork)" title="Play sample in Deck B">🎚️ B</button><button class="btn-outline" style="padding: 4px 10px; font-size: 0.75rem;" onclick="event.stopPropagation(); addSampleTrackToPlaylistAction(' + stJson + ')">➕ Playlist</button></div></td></tr>';
         });
         html += '</tbody></table>';
       }
@@ -7079,11 +8119,12 @@ const INDEX_HTML = `<!DOCTYPE html>
         source = g[2] || '';
         role = g[3] || '';
       } else {
-        url = g.url || g.proxyUrl || '';
+        url = typeof g.url === 'string' ? g.url : (typeof g.proxyUrl === 'string' ? g.proxyUrl : String(g.url || g.proxyUrl || ''));
         title = g.title || '';
         source = g.source || '';
         role = g.role || '';
       }
+      url = typeof url === 'string' ? url : String(url || '');
 
       if (url.startsWith('/image-proxy?url=')) {
         try {
@@ -7790,6 +8831,7 @@ const INDEX_HTML = `<!DOCTYPE html>
         html += '<div><h1 class="section-title">📋 Wishlist & Pending Ingestion (' + list.length + ')</h1>';
         html += '<p style="color: var(--text-muted); font-size: 0.85rem; margin-top: 4px;">Works that were skipped during single/batch import (e.g. pending crawler or audio stream on CDN) are kept here for quick re-import.</p></div>';
         html += '<div style="display:flex; gap:10px; flex-wrap:wrap;">';
+        html += '<button class="btn-primary" id="btnViewWaitlist" onclick="openWaitlistModal()" style="background: linear-gradient(135deg, #0284c7, #38bdf8); border: none; font-weight: 700;">📑 View WaitList <span id="waitlistBtnBadge" style="display:none; background: #fff; color: #0369a1; padding: 1px 6px; border-radius: 999px; font-size: 0.72rem; margin-left: 4px;">0</span></button>';
         if (list.length > 0) {
           html += '<button class="btn-primary" id="btnRetryAllWishlist" onclick="retryAllWishlist()">🔄 Re-try All Ingestion</button>';
           html += '<button class="btn-outline" onclick="cleanWishlistDuplicates()">🧹 Clean Imported</button>';
@@ -7937,23 +8979,49 @@ const INDEX_HTML = `<!DOCTYPE html>
       } catch(e) { alert('Error: ' + e.message); }
     }
 
-    async function updateWishlistBadge(count = null) {
-      const badge = document.getElementById('wishlistCountBadge');
-      if (!badge) return;
+    async function updateWaitlistBadge(count = null) {
+      const btnBadge = document.getElementById('waitlistBtnBadge');
       if (count !== null) {
-        badge.innerText = count;
-        badge.style.display = count > 0 ? 'inline-block' : 'none';
+        if (btnBadge) {
+          btnBadge.innerText = count;
+          btnBadge.style.display = count > 0 ? 'inline-block' : 'none';
+        }
         return;
       }
       if (!isAdmin) {
-        badge.style.display = 'none';
+        if (btnBadge) btnBadge.style.display = 'none';
+        return;
+      }
+      try {
+        const list = await apiFetchJson('/api/waitlist');
+        const c = Array.isArray(list) ? list.length : 0;
+        if (btnBadge) {
+          btnBadge.innerText = c;
+          btnBadge.style.display = c > 0 ? 'inline-block' : 'none';
+        }
+      } catch(e) {}
+    }
+
+    async function updateWishlistBadge(count = null) {
+      const badge = document.getElementById('wishlistCountBadge');
+      if (count !== null) {
+        if (badge) {
+          badge.innerText = count;
+          badge.style.display = count > 0 ? 'inline-block' : 'none';
+        }
+        return;
+      }
+      if (!isAdmin) {
+        if (badge) badge.style.display = 'none';
         return;
       }
       try {
         const list = await apiFetchJson('/api/wishlist');
         const c = Array.isArray(list) ? list.length : 0;
-        badge.innerText = c;
-        badge.style.display = c > 0 ? 'inline-block' : 'none';
+        if (badge) {
+          badge.innerText = c;
+          badge.style.display = c > 0 ? 'inline-block' : 'none';
+        }
       } catch(e) {}
     }
 
@@ -8028,12 +9096,54 @@ const INDEX_HTML = `<!DOCTYPE html>
       }
     }
 
+    function renderPlaylistsGrid(playlists) {
+      const container = document.getElementById('viewContainer');
+      if (!container) return;
+      let html = '<div class="section-header"><h1 class="section-title">📜 Playlists (' + playlists.length + ')</h1><button class="btn-primary" style="font-size:0.85rem; padding:8px 16px;" onclick="openPlaylistModal()">➕ Create New Playlist</button></div>';
+
+      if (playlists.length === 0) {
+        html += '<div style="padding: 3.5rem 2rem; text-align: center; color: var(--text-muted); background: var(--bg-card); border-radius: 12px; border: 1px solid var(--border);"><div style="font-size: 2.5rem; margin-bottom: 8px;">📜</div><p style="margin-bottom: 16px; font-weight:600;">No playlists yet</p><button class="btn-primary" onclick="openPlaylistModal()">➕ Create Playlist</button></div>';
+      } else {
+        html += '<div class="works-grid mode-medium">';
+        playlists.forEach(function(p) {
+          let cover = p.coverUrl;
+          let firstItem = p.items && p.items[0];
+          let isDisguised = false;
+          if (!cover && firstItem) {
+            const display = getDisplayCover(firstItem);
+            cover = display.coverUrl;
+            isDisguised = display.isDisguised;
+          } else if (cover) {
+            const display = getDisplayCover({ rjCode: (firstItem && firstItem.rjCode) || p.id, coverUrl: cover });
+            cover = display.coverUrl;
+            isDisguised = display.isDisguised;
+          } else {
+            cover = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" fill="%23181a24"/><text x="50%" y="50%" font-size="40" fill="%239ca3af" text-anchor="middle" dominant-baseline="middle">📜</text></svg>';
+          }
+          const count = p.items ? p.items.length : 0;
+          const isCoverLoaded = isCoverCached(cover);
+          const loadAttr = isCoverLoaded ? 'loading="eager"' : 'loading="lazy"';
+          html += '<a class="work-card" href="#/playlist/' + encodeURIComponent(p.id) + '" data-pl="' + p.id + '" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); navPlaylist(this.dataset.pl); }">';
+          html += '<div class="card-cover-wrapper"><img class="card-cover" src="' + cover + '" data-rj="' + ((firstItem && firstItem.rjCode) || '') + '" ' + loadAttr + ' decoding="async" onload="markCoverLoaded(this.src)" onerror="handleImgError(this)">' + (isDisguised ? '<div class="disguised-overlay"><span class="disguised-badge">🎭 Disguised SFW</span></div>' : '') + '</div>';
+          html += '<div class="card-badge-row"><span class="card-rj">' + (p.id === 'pl-favorites' ? 'FAVORITES' : 'PLAYLIST') + '</span><span style="font-size:0.8rem; color:var(--text-muted); font-weight:700;">' + count + ' tracks</span></div>';
+          html += '<div class="card-title">' + p.name + '</div>';
+          html += '<div class="card-sub">' + (p.description || 'Personal curated playlist') + '</div>';
+          html += '</a>';
+        });
+        html += '</div>';
+      }
+      container.innerHTML = html;
+    }
+
     async function loadPlaylists() {
       updatePageTitle('Playlists');
       const container = document.getElementById('viewContainer');
       if (!isAdmin) {
         container.innerHTML = renderLockedState('Playlists Locked', 'Unlock admin access to view and manage playlists.');
         return;
+      }
+      if (Array.isArray(allPlaylists) && allPlaylists.length > 0) {
+        renderPlaylistsGrid(allPlaylists);
       }
       try {
         const rawPlaylists = await apiFetchJson('/api/playlists');
@@ -8042,46 +9152,20 @@ const INDEX_HTML = `<!DOCTYPE html>
         if (!playlists.some(p => p.id === 'pl-favorites')) {
           playlists.unshift({ id: 'pl-favorites', name: '❤️ Favorites', description: 'Your favorited works & tracks', coverUrl: '', items: [] });
         }
-
-        let html = '<div class="section-header"><h1 class="section-title">📜 Playlists (' + playlists.length + ')</h1><button class="btn-primary" style="font-size:0.85rem; padding:8px 16px;" onclick="openPlaylistModal()">➕ Create New Playlist</button></div>';
-
-        if (playlists.length === 0) {
-          html += '<div style="padding: 3.5rem 2rem; text-align: center; color: var(--text-muted); background: var(--bg-card); border-radius: 12px; border: 1px solid var(--border);"><div style="font-size: 2.5rem; margin-bottom: 8px;">📜</div><p style="margin-bottom: 16px; font-weight:600;">No playlists yet</p><button class="btn-primary" onclick="openPlaylistModal()">➕ Create Playlist</button></div>';
-        } else {
-          html += '<div class="works-grid mode-medium">';
-          playlists.forEach(function(p) {
-            let cover = p.coverUrl;
-            let firstItem = p.items && p.items[0];
-            let isDisguised = false;
-            if (!cover && firstItem) {
-              const display = getDisplayCover(firstItem);
-              cover = display.coverUrl;
-              isDisguised = display.isDisguised;
-            } else if (cover) {
-              const display = getDisplayCover({ rjCode: (firstItem && firstItem.rjCode) || p.id, coverUrl: cover });
-              cover = display.coverUrl;
-              isDisguised = display.isDisguised;
-            } else {
-              cover = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" fill="%23181a24"/><text x="50%" y="50%" font-size="40" fill="%239ca3af" text-anchor="middle" dominant-baseline="middle">📜</text></svg>';
-            }
-            const count = p.items ? p.items.length : 0;
-            html += '<a class="work-card" href="#/playlist/' + encodeURIComponent(p.id) + '" data-pl="' + p.id + '" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); navPlaylist(this.dataset.pl); }">';
-            html += '<div class="card-cover-wrapper"><img class="card-cover" src="' + cover + '" data-rj="' + ((firstItem && firstItem.rjCode) || '') + '" onerror="handleImgError(this)">' + (isDisguised ? '<div class="disguised-overlay"><span class="disguised-badge">🎭 Disguised SFW</span></div>' : '') + '</div>';
-            html += '<div class="card-badge-row"><span class="card-rj">' + (p.id === 'pl-favorites' ? 'FAVORITES' : 'PLAYLIST') + '</span><span style="font-size:0.8rem; color:var(--text-muted); font-weight:700;">' + count + ' tracks</span></div>';
-            html += '<div class="card-title">' + p.name + '</div>';
-            html += '<div class="card-sub">' + (p.description || 'Personal curated playlist') + '</div>';
-            html += '</a>';
-          });
-          html += '</div>';
-        }
-        container.innerHTML = html;
+        allPlaylists = playlists;
+        try { sessionStorage.setItem('astreamer_playlists_cache', JSON.stringify(playlists)); } catch(e) {}
+        renderPlaylistsGrid(playlists);
       } catch(e) {}
     }
 
     function setPlaylistViewMode(mode, plId) {
       playlistViewMode = mode;
       try { localStorage.setItem('astreamer_pl_view_mode', mode); } catch(e) {}
-      loadPlaylistDetail(plId);
+      if (currentPlaylist && currentPlaylist.id === plId) {
+        renderPlaylistDetailContent(currentPlaylist);
+      } else {
+        loadPlaylistDetail(plId);
+      }
     }
 
     function setPlaylistPage(page, plId) {
@@ -8090,96 +9174,119 @@ const INDEX_HTML = `<!DOCTYPE html>
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
 
+    function renderPlaylistDetailContent(pl) {
+      if (!pl) return;
+      currentPlaylist = pl;
+      updatePageTitle(pl.name ? (pl.name.replace(/^[^\w\s\d]+/, '').trim() || pl.name) : 'Playlist');
+
+      const container = document.getElementById('viewContainer');
+      if (!container) return;
+      const items = pl.items || [];
+      let cover = pl.coverUrl;
+      let firstItem = items[0];
+      if (!cover && firstItem) {
+        cover = getDisplayCover(firstItem).coverUrl;
+      } else if (cover) {
+        cover = getDisplayCover({ rjCode: (firstItem && firstItem.rjCode) || pl.id, coverUrl: cover }).coverUrl;
+      } else {
+        cover = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" fill="%23181a24"/><text x="50%" y="50%" font-size="40" fill="%239ca3af" text-anchor="middle" dominant-baseline="middle">📜</text></svg>';
+      }
+
+      let html = '<div class="work-detail-banner"><img class="detail-cover" src="' + cover + '" id="playlistDetailCover" data-rj="' + ((firstItem && firstItem.rjCode) || '') + '" loading="eager" decoding="async" onload="markCoverLoaded(this.src)" onerror="handleImgError(this)"><div class="detail-info"><span class="card-rj" style="width:fit-content; margin-bottom:8px;">' + (pl.id === 'pl-favorites' ? 'FAVORITES' : 'PLAYLIST') + '</span><h1 class="detail-title" id="playlistDetailTitle">' + pl.name + '</h1><div class="detail-meta" id="playlistDetailDesc">' + (pl.description || 'Custom audio playlist') + '</div><div class="detail-meta" id="playlistDetailCount"><strong>Total Tracks:</strong> ' + items.length + '</div><div style="margin-top:auto; padding-top:16px; display:flex; flex-wrap:wrap; gap:10px;">' + (items.length > 0 ? '<button class="btn-primary" id="playAllPlaylistBtn" data-pl="' + pl.id + '" onclick="playPlaylistItem(0, this.dataset.pl)">▶ Play All</button>' : '') + (pl.id !== 'pl-favorites' ? '<button class="btn-outline" data-pl="' + pl.id + '" onclick="deletePlaylistAction(this.dataset.pl)">🗑️ Delete Playlist</button>' : '') + '<button class="btn-outline" data-view="playlists" onclick="switchView(this.dataset.view)">← Back to Playlists</button></div></div></div>';
+
+      html += '<div class="view-modes-bar">';
+      html += '<div style="display:flex; align-items:center; gap:8px;"><span style="font-size:0.82rem; color:var(--text-muted); font-weight:700;">VIEW:</span>';
+      html += '<div class="view-mode-buttons">';
+      html += '<button class="view-btn ' + (playlistViewMode === 'list' ? 'active' : '') + '" data-mode="list" data-pl="' + pl.id + '" onclick="setPlaylistViewMode(this.dataset.mode, this.dataset.pl)">📋 List</button>';
+      html += '<button class="view-btn ' + (playlistViewMode === 'grid' ? 'active' : '') + '" data-mode="grid" data-pl="' + pl.id + '" onclick="setPlaylistViewMode(this.dataset.mode, this.dataset.pl)">🎴 Grid</button>';
+      html += '</div></div>';
+      html += '<div style="font-size:0.85rem; color:var(--text-muted); font-weight:700;">' + items.length + ' tracks in playlist</div>';
+      html += '</div>';
+
+      if (items.length === 0) {
+        html += '<div style="padding:3rem; text-align:center; color:var(--text-muted); background:var(--bg-card); border-radius:12px; border:1px solid var(--border);">Playlist is empty. Add tracks from any work in your Library!</div>';
+      } else if (playlistViewMode === 'grid') {
+        html += '<div class="works-grid mode-medium">';
+        items.forEach(function(item, index) {
+          const itemDisplay = getDisplayCover(item);
+          const itemPoster = itemDisplay.coverUrl || cover;
+          const isRowActive = currentPlaylistItemIndex === index && currentPlayingWork && normRj(currentPlayingWork.rjCode) === normRj(item.rjCode);
+          const cvDisplay = item.cv ? formatCV(item.cv) : '';
+          const isCoverLoaded = isCoverCached(itemPoster);
+          const loadAttr = (isCoverLoaded || index < 20) ? 'loading="eager"' : 'loading="lazy"';
+          html += '<a class="work-card playlist-card-row ' + (isRowActive ? 'active' : '') + '" href="#/work/' + (item.rjCode || '') + '" data-rj="' + (item.rjCode || '') + '" data-pl-idx="' + index + '" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); navWork(this.dataset.rj); }">';
+          html += '<div class="card-cover-wrapper"><img class="card-cover" src="' + itemPoster + '" data-rj="' + (item.rjCode || '') + '" ' + loadAttr + ' decoding="async" onload="markCoverLoaded(this.src)" onerror="handleImgError(this)">' + (itemDisplay.isDisguised ? '<div class="disguised-overlay"><span class="disguised-badge">🎭 Disguised SFW</span></div>' : '') + '</div>';
+          html += '<div class="card-badge-row"><span class="card-rj">' + (item.rjCode || '#' + (index + 1)) + '</span><div style="display:flex; gap:6px; align-items:center;">';
+          html += '<button class="btn-primary" style="padding:2px 8px; font-size:0.75rem;" data-pl="' + pl.id + '" data-idx="' + index + '" onclick="event.stopPropagation(); event.preventDefault(); playPlaylistItem(parseInt(this.dataset.idx), this.dataset.pl)">▶ Play</button>';
+          html += '<span data-pl="' + pl.id + '" data-idx="' + index + '" onclick="event.stopPropagation(); event.preventDefault(); removePlaylistItem(this.dataset.pl, parseInt(this.dataset.idx))" title="Remove Track" style="cursor:pointer; font-size:0.9rem; margin-left:2px;">🗑️</span>';
+          html += '</div></div>';
+          html += '<div class="card-title">' + item.title + '</div>';
+          html += '<div class="card-sub">' + (item.workTitle || cvDisplay || 'Track ' + (index + 1)) + '</div>';
+          html += '</a>';
+        });
+        html += '</div>';
+      } else {
+        html += '<table class="tracks-table playlist-tracks-table"><thead><tr><th style="width: 40px;">#</th><th style="width: 50px;">Art</th><th>Track Title</th><th>Work / RJ</th><th>CV</th><th style="width: 90px; text-align:right;">Actions</th></tr></thead><tbody>';
+        items.forEach(function(item, index) {
+          const itemDisplay = getDisplayCover(item);
+          const itemPoster = itemDisplay.coverUrl || cover;
+          const isRowActive = currentPlaylistItemIndex === index && currentPlayingWork && normRj(currentPlayingWork.rjCode) === normRj(item.rjCode);
+          const workCvText = (item.workTitle || item.rjCode) + (item.cv ? ' • ' + formatCV(item.cv) : '');
+          const isCoverLoaded = isCoverCached(itemPoster);
+          const loadAttr = (isCoverLoaded || index < 20) ? 'loading="eager"' : 'loading="lazy"';
+          html += '<tr class="playlist-track-row ' + (isRowActive ? 'active' : '') + '" draggable="true" ondragstart="handlePlaylistDragStart(event, ' + index + ')" ondragover="handlePlaylistDragOver(event)" ondragleave="handlePlaylistDragLeave(event)" ondragend="handlePlaylistDragEnd(event)" ondrop="handlePlaylistDrop(event, this.dataset.pl, ' + index + ')" data-pl="' + pl.id + '" data-rj="' + (item.rjCode || '') + '" data-pl-idx="' + index + '" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); navWork(this.dataset.rj); }">';
+          html += '<td style="cursor:grab; user-select:none; width:40px;" title="Drag to reorder"><span style="opacity:0.5; font-size:0.8rem; margin-right:4px;">⋮⋮</span> ' + (index + 1) + '</td>';
+          html += '<td style="width:50px;"><a href="#/work/' + (item.rjCode || '') + '" data-rj="' + (item.rjCode || '') + '" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); navWork(this.dataset.rj); }"><img src="' + itemPoster + '" data-rj="' + (item.rjCode || '') + '" ' + loadAttr + ' decoding="async" onload="markCoverLoaded(this.src)" onerror="handleImgError(this)" style="width:44px; height:44px; border-radius:8px; object-fit:cover;"></a></td>';
+          html += '<td class="pl-track-title"><a href="#/work/' + (item.rjCode || '') + '" data-rj="' + (item.rjCode || '') + '" style="color:inherit; text-decoration:none;" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); navWork(this.dataset.rj); }"><strong>' + item.title + '</strong></a></td>';
+          html += '<td class="pl-work-title" style="color:var(--text-muted);">' + workCvText + '</td>';
+          html += '<td class="pl-cv-col" style="color:#38bdf8;">' + (item.cv ? formatCV(item.cv) : '—') + '</td>';
+          html += '<td class="pl-actions-col" style="text-align:right;"><div style="display:inline-flex; gap:6px; align-items:center; justify-content:flex-end;">';
+          html += '<button class="btn-primary" style="padding: 4px 10px; font-size: 0.75rem;" data-pl="' + pl.id + '" data-idx="' + index + '" onclick="event.stopPropagation(); playPlaylistItem(parseInt(this.dataset.idx), this.dataset.pl)">▶ Play</button>';
+          html += '<button class="btn-outline" style="padding: 4px 8px; font-size: 0.75rem;" title="Remove Track" data-pl="' + pl.id + '" data-idx="' + index + '" onclick="event.stopPropagation(); removePlaylistItem(this.dataset.pl, parseInt(this.dataset.idx))">🗑️</button>';
+          html += '</div></td>';
+          html += '</tr>';
+        });
+        html += '</tbody></table>';
+      }
+      container.innerHTML = html;
+
+      const plScrollKey = 'playlist_' + pl.id;
+      if (savedScrollPositions[plScrollKey] && savedScrollPositions[plScrollKey] > 0) {
+        const targetScroll = savedScrollPositions[plScrollKey];
+        window.scrollTo({ top: targetScroll, behavior: 'instant' });
+        requestAnimationFrame(() => {
+          window.scrollTo({ top: targetScroll, behavior: 'instant' });
+          setTimeout(() => {
+            window.scrollTo({ top: targetScroll, behavior: 'instant' });
+          }, 60);
+          setTimeout(() => {
+            window.scrollTo({ top: targetScroll, behavior: 'instant' });
+          }, 180);
+        });
+      }
+
+      schedulePlaylistCoverPrecache(items);
+    }
+
     async function loadPlaylistDetail(plId) {
       try {
+        let pl = (Array.isArray(allPlaylists) ? allPlaylists : []).find(function(p) { return p.id === plId; });
+        if (!pl && currentPlaylist && currentPlaylist.id === plId) {
+          pl = currentPlaylist;
+        }
+        if (pl) {
+          renderPlaylistDetailContent(pl);
+        }
+
         const res = await apiFetch('/api/playlists');
         const playlists = await res.json();
         if (!Array.isArray(playlists)) return;
-        const pl = playlists.find(function(p) { return p.id === plId; });
-        if (!pl) return;
-        currentPlaylist = pl;
-        updatePageTitle(pl.name ? (pl.name.replace(/^[^\w\s\d]+/, '').trim() || pl.name) : 'Playlist');
+        allPlaylists = playlists;
+        try { sessionStorage.setItem('astreamer_playlists_cache', JSON.stringify(playlists)); } catch(e) {}
 
-        const container = document.getElementById('viewContainer');
-        const items = pl.items || [];
-        let cover = pl.coverUrl;
-        let firstItem = items[0];
-        if (!cover && firstItem) {
-          cover = getDisplayCover(firstItem).coverUrl;
-        } else if (cover) {
-          cover = getDisplayCover({ rjCode: (firstItem && firstItem.rjCode) || pl.id, coverUrl: cover }).coverUrl;
-        } else {
-          cover = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" fill="%23181a24"/><text x="50%" y="50%" font-size="40" fill="%239ca3af" text-anchor="middle" dominant-baseline="middle">📜</text></svg>';
-        }
-
-        let html = '<div class="work-detail-banner"><img class="detail-cover" src="' + cover + '" id="playlistDetailCover" data-rj="' + ((firstItem && firstItem.rjCode) || '') + '" onerror="handleImgError(this)"><div class="detail-info"><span class="card-rj" style="width:fit-content; margin-bottom:8px;">' + (pl.id === 'pl-favorites' ? 'FAVORITES' : 'PLAYLIST') + '</span><h1 class="detail-title" id="playlistDetailTitle">' + pl.name + '</h1><div class="detail-meta" id="playlistDetailDesc">' + (pl.description || 'Custom audio playlist') + '</div><div class="detail-meta" id="playlistDetailCount"><strong>Total Tracks:</strong> ' + items.length + '</div><div style="margin-top:auto; padding-top:16px; display:flex; flex-wrap:wrap; gap:10px;">' + (items.length > 0 ? '<button class="btn-primary" id="playAllPlaylistBtn" data-pl="' + pl.id + '" onclick="playPlaylistItem(0, this.dataset.pl)">▶ Play All</button>' : '') + (pl.id !== 'pl-favorites' ? '<button class="btn-outline" data-pl="' + pl.id + '" onclick="deletePlaylistAction(this.dataset.pl)">🗑️ Delete Playlist</button>' : '') + '<button class="btn-outline" data-view="playlists" onclick="switchView(this.dataset.view)">← Back to Playlists</button></div></div></div>';
-
-        html += '<div class="view-modes-bar">';
-        html += '<div style="display:flex; align-items:center; gap:8px;"><span style="font-size:0.82rem; color:var(--text-muted); font-weight:700;">VIEW:</span>';
-        html += '<div class="view-mode-buttons">';
-        html += '<button class="view-btn ' + (playlistViewMode === 'list' ? 'active' : '') + '" data-mode="list" data-pl="' + pl.id + '" onclick="setPlaylistViewMode(this.dataset.mode, this.dataset.pl)">📋 List</button>';
-        html += '<button class="view-btn ' + (playlistViewMode === 'grid' ? 'active' : '') + '" data-mode="grid" data-pl="' + pl.id + '" onclick="setPlaylistViewMode(this.dataset.mode, this.dataset.pl)">🎴 Grid</button>';
-        html += '</div></div>';
-        html += '<div style="font-size:0.85rem; color:var(--text-muted); font-weight:700;">' + items.length + ' tracks in playlist</div>';
-        html += '</div>';
-
-        if (items.length === 0) {
-          html += '<div style="padding:3rem; text-align:center; color:var(--text-muted); background:var(--bg-card); border-radius:12px; border:1px solid var(--border);">Playlist is empty. Add tracks from any work in your Library!</div>';
-        } else if (playlistViewMode === 'grid') {
-          html += '<div class="works-grid mode-medium">';
-          items.forEach(function(item, index) {
-            const itemDisplay = getDisplayCover(item);
-            const itemPoster = itemDisplay.coverUrl || cover;
-            const isRowActive = currentPlaylistItemIndex === index && currentPlayingWork && normRj(currentPlayingWork.rjCode) === normRj(item.rjCode);
-            const cvDisplay = item.cv ? formatCV(item.cv) : '';
-            html += '<a class="work-card playlist-card-row ' + (isRowActive ? 'active' : '') + '" href="#/work/' + (item.rjCode || '') + '" data-rj="' + (item.rjCode || '') + '" data-pl-idx="' + index + '" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); navWork(this.dataset.rj); }">';
-            html += '<div class="card-cover-wrapper"><img class="card-cover" src="' + itemPoster + '" data-rj="' + (item.rjCode || '') + '" onerror="handleImgError(this)">' + (itemDisplay.isDisguised ? '<div class="disguised-overlay"><span class="disguised-badge">🎭 Disguised SFW</span></div>' : '') + '</div>';
-            html += '<div class="card-badge-row"><span class="card-rj">' + (item.rjCode || '#' + (index + 1)) + '</span><div style="display:flex; gap:6px; align-items:center;">';
-            html += '<button class="btn-primary" style="padding:2px 8px; font-size:0.75rem;" data-pl="' + pl.id + '" data-idx="' + index + '" onclick="event.stopPropagation(); event.preventDefault(); playPlaylistItem(parseInt(this.dataset.idx), this.dataset.pl)">▶ Play</button>';
-            html += '<span data-pl="' + pl.id + '" data-idx="' + index + '" onclick="event.stopPropagation(); event.preventDefault(); removePlaylistItem(this.dataset.pl, parseInt(this.dataset.idx))" title="Remove Track" style="cursor:pointer; font-size:0.9rem; margin-left:2px;">🗑️</span>';
-            html += '</div></div>';
-            html += '<div class="card-title">' + item.title + '</div>';
-            html += '<div class="card-sub">' + (item.workTitle || cvDisplay || 'Track ' + (index + 1)) + '</div>';
-            html += '</a>';
-          });
-          html += '</div>';
-        } else {
-          html += '<table class="tracks-table playlist-tracks-table"><thead><tr><th style="width: 40px;">#</th><th style="width: 50px;">Art</th><th>Track Title</th><th>Work / RJ</th><th>CV</th><th style="width: 90px; text-align:right;">Actions</th></tr></thead><tbody>';
-          items.forEach(function(item, index) {
-            const itemDisplay = getDisplayCover(item);
-            const itemPoster = itemDisplay.coverUrl || cover;
-            const isRowActive = currentPlaylistItemIndex === index && currentPlayingWork && normRj(currentPlayingWork.rjCode) === normRj(item.rjCode);
-            const workCvText = (item.workTitle || item.rjCode) + (item.cv ? ' • ' + formatCV(item.cv) : '');
-            html += '<tr class="playlist-track-row ' + (isRowActive ? 'active' : '') + '" draggable="true" ondragstart="handlePlaylistDragStart(event, ' + index + ')" ondragover="handlePlaylistDragOver(event)" ondragleave="handlePlaylistDragLeave(event)" ondragend="handlePlaylistDragEnd(event)" ondrop="handlePlaylistDrop(event, this.dataset.pl, ' + index + ')" data-pl="' + pl.id + '" data-rj="' + (item.rjCode || '') + '" data-pl-idx="' + index + '" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); navWork(this.dataset.rj); }">';
-            html += '<td style="cursor:grab; user-select:none; width:40px;" title="Drag to reorder"><span style="opacity:0.5; font-size:0.8rem; margin-right:4px;">⋮⋮</span> ' + (index + 1) + '</td>';
-            html += '<td style="width:50px;"><a href="#/work/' + (item.rjCode || '') + '" data-rj="' + (item.rjCode || '') + '" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); navWork(this.dataset.rj); }"><img src="' + itemPoster + '" data-rj="' + (item.rjCode || '') + '" onerror="handleImgError(this)" style="width:44px; height:44px; border-radius:8px; object-fit:cover;"></a></td>';
-            html += '<td class="pl-track-title"><a href="#/work/' + (item.rjCode || '') + '" data-rj="' + (item.rjCode || '') + '" style="color:inherit; text-decoration:none;" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); navWork(this.dataset.rj); }"><strong>' + item.title + '</strong></a></td>';
-            html += '<td class="pl-work-title" style="color:var(--text-muted);">' + workCvText + '</td>';
-            html += '<td class="pl-cv-col" style="color:#38bdf8;">' + (item.cv ? formatCV(item.cv) : '—') + '</td>';
-            html += '<td class="pl-actions-col" style="text-align:right;"><div style="display:inline-flex; gap:6px; align-items:center; justify-content:flex-end;">';
-            html += '<button class="btn-primary" style="padding: 4px 10px; font-size: 0.75rem;" data-pl="' + pl.id + '" data-idx="' + index + '" onclick="event.stopPropagation(); playPlaylistItem(parseInt(this.dataset.idx), this.dataset.pl)">▶ Play</button>';
-            html += '<button class="btn-outline" style="padding: 4px 8px; font-size: 0.75rem;" title="Remove Track" data-pl="' + pl.id + '" data-idx="' + index + '" onclick="event.stopPropagation(); removePlaylistItem(this.dataset.pl, parseInt(this.dataset.idx))">🗑️</button>';
-            html += '</div></td>';
-            html += '</tr>';
-          });
-          html += '</tbody></table>';
-        }
-        container.innerHTML = html;
-
-        const plScrollKey = 'playlist_' + pl.id;
-        if (savedScrollPositions[plScrollKey] && savedScrollPositions[plScrollKey] > 0) {
-          const targetScroll = savedScrollPositions[plScrollKey];
-          window.scrollTo({ top: targetScroll, behavior: 'instant' });
-          requestAnimationFrame(() => {
-            window.scrollTo({ top: targetScroll, behavior: 'instant' });
-            setTimeout(() => {
-              window.scrollTo({ top: targetScroll, behavior: 'instant' });
-            }, 60);
-            setTimeout(() => {
-              window.scrollTo({ top: targetScroll, behavior: 'instant' });
-            }, 180);
-          });
-        }
+        const freshPl = playlists.find(function(p) { return p.id === plId; });
+        if (!freshPl) return;
+        renderPlaylistDetailContent(freshPl);
       } catch (e) {}
     }
 
@@ -8511,7 +9618,7 @@ const INDEX_HTML = `<!DOCTYPE html>
         const cvDisplay = formatCV(item.cv);
         const metaLine = (cvDisplay ? '<span style="color:#38bdf8; font-weight:600;">' + cvDisplay + '</span>' : '') + (cvDisplay && item.circle ? ' • ' : '') + (item.circle ? '<span>' + item.circle + '</span>' : '') + ' • <span class="card-rj" style="padding:1px 5px; font-size:0.7rem;">' + item.rjCode + '</span>';
         html += '<tr class="works-list-row" data-rj="' + item.rjCode + '" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); navWork(this.dataset.rj); }">';
-        html += '<td class="w-col-cover"><a href="#/work/' + item.rjCode + '" data-rj="' + item.rjCode + '" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); navWork(this.dataset.rj); }"><img class="list-thumb" src="' + displayCover.coverUrl + '" data-rj="' + item.rjCode + '" onerror="handleImgError(this)"></a></td>';
+        html += '<td class="w-col-cover"><a href="#/work/' + item.rjCode + '" data-rj="' + item.rjCode + '" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); navWork(this.dataset.rj); }"><img class="list-thumb" src="' + displayCover.coverUrl + '" data-rj="' + item.rjCode + '" loading="eager" decoding="async" onload="markCoverLoaded(this.src)" onerror="handleImgError(this)"></a></td>';
         html += '<td class="w-col-rj"><a href="#/work/' + item.rjCode + '" data-rj="' + item.rjCode + '" class="card-rj" style="text-decoration:none; display:inline-block;" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); navWork(this.dataset.rj); }">' + item.rjCode + '</a></td>';
         html += '<td class="w-col-title"><a href="#/work/' + item.rjCode + '" data-rj="' + item.rjCode + '" style="color:inherit; text-decoration:none;" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); navWork(this.dataset.rj); }"><strong>' + item.title + '</strong>' + (item.trackTitle ? '<div style="font-size:0.75rem; color:var(--text-muted); margin-top:2px;">Track: ' + item.trackTitle + '</div>' : '') + '</a></td>';
         html += '<td class="w-col-meta"><div class="w-meta-inner">' + metaLine + '<span class="history-mobile-date" style="color:var(--text-muted); font-size:0.72rem; margin-left:4px;" title="' + fullDate + '"> • 🕒 ' + relTime + '</span></div></td>';
@@ -8601,8 +9708,46 @@ const INDEX_HTML = `<!DOCTYPE html>
       html += '<div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center;"><button class="btn-primary" onclick="openDevLogModal()">📋 Open Activity Log Viewer</button><button class="btn-outline" onclick="clearDevLogs()">🗑️ Clear Log Cache</button><button class="btn-outline" onclick="exportDevLogs()">💾 Download .log File</button></div>';
       html += '</div></div>';
 
-      html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🚀 aStreamer v2.5 Milestone Release</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Cloudflare D1 Native SQLite Database, Isolated Dedicated KV Collections, Sub-Millisecond Search &amp; Infinite Scaling.</p>';
-      html += '<button class="btn-outline" onclick="openChangelogModal()">📜 View Version 2.5 Release Notes & Architecture</button></div>';
+      // 💤 Blacklist & Import Snooze Duration
+      const snoozeHours = getBlacklistDurationSetting();
+      const uniqueSnoozedRjs = new Set();
+      globalBlacklistMap.forEach(b => {
+        if (b && b.rjCode) uniqueSnoozedRjs.add(b.rjCode);
+      });
+      const snoozeCount = uniqueSnoozedRjs.size;
+      // Refresh blacklist in background if opening settings and update counter if needed
+      if (isAdmin) {
+        loadGlobalBlacklist().then(() => {
+          const countEl = document.getElementById('settingsSnoozeCountBadge');
+          if (countEl) {
+            const freshSet = new Set();
+            globalBlacklistMap.forEach(b => { if (b && b.rjCode) freshSet.add(b.rjCode); });
+            countEl.innerText = '📊 Currently Active Snoozed Works: ' + freshSet.size;
+          }
+        }).catch(() => {});
+      }
+      html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">💤 Short-Term Blacklist &amp; Import Snooze</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">When you uncheck works in the Visual Page Import or Automated WaitList modal and proceed to import other works, the unchecked works are temporarily snoozed so scrapers will not re-propose them.</p>';
+      html += '<div style="display:flex; flex-direction:column; gap:12px;">';
+      html += '<div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; background:rgba(255,255,255,0.03); border:1px solid var(--border); padding:12px 16px; border-radius:10px;">';
+      html += '<div><div style="font-weight:700; color:#fff; font-size:0.95rem;">Snooze Expiration Duration</div><div style="font-size:0.8rem; color:var(--text-muted); margin-top:2px;">How long excluded works remain blacklisted before they can be discovered again.</div></div>';
+      html += '<select id="selectBlacklistHours" class="modal-select" style="max-width:180px; padding:7px 12px; font-size:0.88rem; border-radius:8px; background:#0c0d12; border:1px solid var(--border); color:#38bdf8; font-weight:700;" onchange="setBlacklistDurationSetting(this.value)">';
+      html += '<option value="24" ' + (snoozeHours === 24 ? 'selected' : '') + '>1 Day (24 hrs)</option>';
+      html += '<option value="48" ' + (snoozeHours === 48 ? 'selected' : '') + '>2 Days (48 hrs - Default)</option>';
+      html += '<option value="72" ' + (snoozeHours === 72 ? 'selected' : '') + '>3 Days (72 hrs)</option>';
+      html += '<option value="168" ' + (snoozeHours === 168 ? 'selected' : '') + '>7 Days (1 week)</option>';
+      html += '<option value="720" ' + (snoozeHours === 720 ? 'selected' : '') + '>30 Days (1 month)</option>';
+      html += '</select>';
+      html += '</div>';
+      html += '<div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">';
+      html += '<span id="settingsSnoozeCountBadge" style="font-size:0.85rem; color:#38bdf8; font-weight:700;">📊 Currently Active Snoozed Works: ' + snoozeCount + '</span>';
+      if (snoozeCount > 0) {
+        html += '<button class="btn-outline" style="border-color:rgba(239,68,68,0.4); color:#f87171; padding:5px 12px; font-size:0.8rem;" onclick="clearAllBlacklistedWorks(() => loadSettings())">🗑️ Wipe Active Blacklist</button>';
+      }
+      html += '</div>';
+      html += '</div></div>';
+
+      html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🚀 aStreamer v2.5.1 Release</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Dual-Deck Mobile Polish, Cloudflare D1 Native SQLite Database, Sub-Millisecond Search &amp; Infinite Scaling.</p>';
+      html += '<button class="btn-outline" onclick="openChangelogModal()">📜 View Version 2.5.1 Release Notes & Architecture</button></div>';
 
       container.innerHTML = html;
     }
@@ -8610,13 +9755,50 @@ const INDEX_HTML = `<!DOCTYPE html>
     function openChangelogModal() { document.getElementById('changelogModal').style.display = 'flex'; }
     function closeChangelogModal() { document.getElementById('changelogModal').style.display = 'none'; }
 
-    // Floating Corner Player Controls
+    // Floating Corner Player & Audio Mixer Deck Controls
+    let currentPopupTab = 'deckA';
+    let isChapterDrawerOpenB = false;
+
+    function switchPopupTab(tabName) {
+      currentPopupTab = tabName;
+      const tabs = ['deckA', 'deckB', 'mixer'];
+      tabs.forEach(t => {
+        const bodyEl = document.getElementById('popupTab' + t.charAt(0).toUpperCase() + t.slice(1) + 'Body');
+        const btnEl = document.getElementById('popupTab' + t.charAt(0).toUpperCase() + t.slice(1) + 'Btn');
+        if (bodyEl) bodyEl.style.display = (t === tabName) ? 'flex' : 'none';
+        if (btnEl) {
+          if (t === tabName) btnEl.classList.add('active');
+          else btnEl.classList.remove('active');
+        }
+      });
+      if (tabName === 'mixer') {
+        updateMixerUI();
+      } else if (tabName === 'deckB') {
+        updatePopupPlayerBUI();
+      } else {
+        updatePopupPlayerUI();
+      }
+    }
+    window.switchPopupTab = switchPopupTab;
+
+    function openPopupPlayerTab(tabName) {
+      openPopupPlayer();
+      switchPopupTab(tabName);
+    }
+    window.openPopupPlayerTab = openPopupPlayerTab;
+
     function openPopupPlayer() {
       if (!currentWork && allWorks.length > 0) {
         currentWork = allWorks[0];
         playTrack(0, false);
       }
-      updatePopupPlayerUI();
+      if (currentPopupTab === 'mixer') {
+        updateMixerUI();
+      } else if (currentPopupTab === 'deckB') {
+        updatePopupPlayerBUI();
+      } else {
+        updatePopupPlayerUI();
+      }
       const el = document.getElementById('popupPlayerModal');
       if (el) el.style.display = 'flex';
       const playerBar = document.querySelector('.player-bar');
@@ -8624,6 +9806,7 @@ const INDEX_HTML = `<!DOCTYPE html>
       document.body.classList.add('popup-player-open');
       updateScrollWidgetVisibility();
     }
+    window.openPopupPlayer = openPopupPlayer;
 
     function closePopupPlayer() {
       const el = document.getElementById('popupPlayerModal');
@@ -8633,15 +9816,18 @@ const INDEX_HTML = `<!DOCTYPE html>
       document.body.classList.remove('popup-player-open');
       updateScrollWidgetVisibility();
     }
+    window.closePopupPlayer = closePopupPlayer;
 
     function openPopupPlayerWithChapters() {
       openPopupPlayer();
+      switchPopupTab('deckA');
       isChapterDrawerOpen = true;
       const listEl = document.getElementById('popupChaptersList');
       const chevEl = document.getElementById('popupChapterChevron');
       if (listEl) listEl.style.display = 'flex';
       if (chevEl) chevEl.innerText = '▲';
     }
+    window.openPopupPlayerWithChapters = openPopupPlayerWithChapters;
 
     function togglePopupPlayer() {
       const el = document.getElementById('popupPlayerModal');
@@ -8651,14 +9837,25 @@ const INDEX_HTML = `<!DOCTYPE html>
         openPopupPlayer();
       }
     }
+    window.togglePopupPlayer = togglePopupPlayer;
 
     function toggleChapterDrawer() {
       isChapterDrawerOpen = !isChapterDrawerOpen;
       const listEl = document.getElementById('popupChaptersList');
       const chevEl = document.getElementById('popupChapterChevron');
-      listEl.style.display = isChapterDrawerOpen ? 'flex' : 'none';
-      chevEl.innerText = isChapterDrawerOpen ? '▲' : '▼';
+      if (listEl) listEl.style.display = isChapterDrawerOpen ? 'flex' : 'none';
+      if (chevEl) chevEl.innerText = isChapterDrawerOpen ? '▲' : '▼';
     }
+    window.toggleChapterDrawer = toggleChapterDrawer;
+
+    function toggleChapterDrawerB() {
+      isChapterDrawerOpenB = !isChapterDrawerOpenB;
+      const listEl = document.getElementById('popupChaptersListB');
+      const chevEl = document.getElementById('popupChapterChevronB');
+      if (listEl) listEl.style.display = isChapterDrawerOpenB ? 'flex' : 'none';
+      if (chevEl) chevEl.innerText = isChapterDrawerOpenB ? '▲' : '▼';
+    }
+    window.toggleChapterDrawerB = toggleChapterDrawerB;
 
     function updatePopupPlayerUI() {
       const activeWork = currentPlayingWork || currentWork;
@@ -8666,26 +9863,30 @@ const INDEX_HTML = `<!DOCTYPE html>
       const track = (activeWork.tracks && activeWork.tracks[currentTrackIndex]) || (activeWork.tracks && activeWork.tracks[0]);
       const display = getDisplayCover(activeWork);
 
-      document.getElementById('popupTitle').innerText = track ? track.title : activeWork.title;
-      document.getElementById('popupSub').innerText = (activeWork.rjCode || '') + ' • ' + (activeWork.circle || 'Circle N/A');
-      const popupCover = document.getElementById('popupCover');
-      if (popupCover) {
-        popupCover.src = display.coverUrl;
-        popupCover.setAttribute('data-rj', activeWork.rjCode || '');
+      const titleEl = document.getElementById('popupTitle');
+      const subEl = document.getElementById('popupSub');
+      const coverEl = document.getElementById('popupCover');
+      const disguiseBadge = document.getElementById('popupDisguisedBadge');
+
+      if (titleEl) titleEl.innerText = track ? track.title : activeWork.title;
+      if (subEl) subEl.innerText = (activeWork.rjCode || '') + ' • ' + (activeWork.circle || 'Circle N/A');
+      if (coverEl) {
+        coverEl.src = display.coverUrl;
+        coverEl.setAttribute('data-rj', activeWork.rjCode || '');
       }
-      document.getElementById('popupHlsBadge').innerText = (track && track.isHls) ? 'HLS Stream' : 'Direct Audio';
-      document.getElementById('popupDisguisedBadge').style.display = display.isDisguised ? 'block' : 'none';
-      document.getElementById('popupFavBtn').innerText = activeWork.favorite ? '❤️' : '🤍';
+      if (disguiseBadge) disguiseBadge.style.display = display.isDisguised ? 'block' : 'none';
 
       // CV Badges in Popup
       const cvContainer = document.getElementById('popupCvRow');
-      const activeWorkCV = getWorkCV(activeWork);
-      if (activeWorkCV && activeWorkCV !== 'N/A') {
-        const cvs = activeWorkCV.split(/[,、/&＋+;・\\n|]/).map(s => cleanCVName(s)).filter(Boolean);
-        const uniqueCvs = Array.from(new Set(cvs));
-        cvContainer.innerHTML = uniqueCvs.map(c => '<span class="tag-pill" style="font-size:0.75rem; background:rgba(56,189,248,0.15); color:#38bdf8; border-color:rgba(56,189,248,0.3); font-weight:700;" data-cv="' + c.replace(/"/g, '&quot;') + '" onclick="closePopupPlayer(); navCv(this.dataset.cv)">🎙️ ' + formatCV(c) + '</span>').join('');
-      } else {
-        cvContainer.innerHTML = '';
+      if (cvContainer) {
+        const activeWorkCV = getWorkCV(activeWork);
+        if (activeWorkCV && activeWorkCV !== 'N/A') {
+          const cvs = activeWorkCV.split(/[,、/&＋+;・\\n|]/).map(s => cleanCVName(s)).filter(Boolean);
+          const uniqueCvs = Array.from(new Set(cvs));
+          cvContainer.innerHTML = uniqueCvs.map(c => '<span class="tag-pill" style="font-size:0.75rem; background:rgba(56,189,248,0.15); color:#38bdf8; border-color:rgba(56,189,248,0.3); font-weight:700;" data-cv="' + c.replace(/"/g, '&quot;') + '" onclick="closePopupPlayer(); navCv(this.dataset.cv)">🎙️ ' + formatCV(c) + '</span>').join('');
+        } else {
+          cvContainer.innerHTML = '';
+        }
       }
 
       // Populate Tracklist Drawer
@@ -8705,6 +9906,671 @@ const INDEX_HTML = `<!DOCTYPE html>
         });
       }
     }
+    window.updatePopupPlayerUI = updatePopupPlayerUI;
+
+    function updatePopupPlayerBUI() {
+      const workB = audioDeck.B.currentWork;
+      const titleB = document.getElementById('popupTitleB');
+      const subB = document.getElementById('popupSubB');
+      const coverB = document.getElementById('popupCoverB');
+      const playBtnB = document.getElementById('popupPlayPauseBtnB');
+      const muteBtnB = document.getElementById('popupMuteBtnB');
+      const audioB = audioDeck.B.audioEl;
+
+      const titleBBar = document.getElementById('playerTitleBBar');
+      const subBBar = document.getElementById('playerSubBBar');
+      const coverBBar = document.getElementById('playerCoverBBar');
+      const playBtnBBar = document.getElementById('playPauseBtnBBar');
+
+      const hasDeckB = !!workB;
+      document.body.classList.toggle('has-deck-b', hasDeckB);
+
+      if (playBtnB) {
+        playBtnB.innerText = (audioB && !audioB.paused) ? '⏸' : '▶';
+      }
+      if (playBtnBBar) {
+        playBtnBBar.innerText = (audioB && !audioB.paused) ? '⏸' : '▶';
+      }
+
+      if (!workB) {
+        if (titleB) titleB.innerText = 'Deck B Empty';
+        if (subB) subB.innerText = 'Click [🎚️ Deck B] on any work or track to mix';
+        if (coverB) coverB.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Crect width='200' height='200' fill='%23111'/%3E%3C/svg%3E";
+        if (titleBBar) titleBBar.innerText = 'Deck B Empty';
+        if (subBBar) subBBar.innerText = 'Click to mix';
+        if (coverBBar) coverBBar.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48'%3E%3Crect width='48' height='48' fill='%23111'/%3E%3C/svg%3E";
+        const cvContainerB = document.getElementById('popupCvRowB');
+        if (cvContainerB) cvContainerB.innerHTML = '';
+        const shuffleBtnB = document.getElementById('popupShuffleBtnB');
+        if (shuffleBtnB) {
+          shuffleBtnB.classList.remove('active');
+          shuffleBtnB.style.color = '#fff';
+        }
+        const drawerListB = document.getElementById('popupChaptersListB');
+        if (drawerListB) drawerListB.innerHTML = '';
+        updateMuteUI();
+        if (typeof updateMixerModeButtonsUI === 'function') updateMixerModeButtonsUI();
+        return;
+      }
+
+      const track = (workB.tracks && workB.tracks[audioDeck.B.currentTrackIndex]) || (workB.tracks && workB.tracks[0]);
+      const display = getDisplayCover(workB);
+      const trackTitle = track ? track.title : workB.title;
+      const subText = (workB.rjCode || '') + ' • ' + (workB.circle || 'Circle N/A');
+
+      if (titleB) titleB.innerText = trackTitle;
+      if (subB) subB.innerText = subText;
+      if (coverB) {
+        coverB.src = display.coverUrl;
+        coverB.setAttribute('data-rj', workB.rjCode || '');
+      }
+
+      // CV Badges in Deck B Popup
+      const cvContainerB = document.getElementById('popupCvRowB');
+      if (cvContainerB) {
+        const workB_CV = getWorkCV(workB);
+        if (workB_CV && workB_CV !== 'N/A') {
+          const cvs = workB_CV.split(/[,、/&＋+;・\\n|]/).map(s => cleanCVName(s)).filter(Boolean);
+          const uniqueCvs = Array.from(new Set(cvs));
+          cvContainerB.innerHTML = uniqueCvs.map(c => '<span class="tag-pill" style="font-size:0.75rem; background:rgba(56,189,248,0.15); color:#38bdf8; border-color:rgba(56,189,248,0.3); font-weight:700;" data-cv="' + c.replace(/"/g, '&quot;') + '" onclick="closePopupPlayer(); navCv(this.dataset.cv)">🎙️ ' + formatCV(c) + '</span>').join('');
+        } else {
+          cvContainerB.innerHTML = '';
+        }
+      }
+
+      const shuffleBtnB = document.getElementById('popupShuffleBtnB');
+      if (shuffleBtnB) {
+        shuffleBtnB.classList.toggle('active', !!audioDeck.B.isShuffle);
+        shuffleBtnB.style.color = audioDeck.B.isShuffle ? 'var(--accent)' : '#fff';
+      }
+
+      if (titleBBar) titleBBar.innerText = trackTitle;
+      if (subBBar) subBBar.innerText = subText;
+      if (coverBBar) coverBBar.src = display.coverUrl;
+
+      const tracks = workB.tracks || [];
+      const drawerListB = document.getElementById('popupChaptersListB');
+      if (drawerListB) {
+        drawerListB.innerHTML = '';
+        const toggleLabelB = document.getElementById('popupChapterToggleLabelB');
+        if (toggleLabelB) toggleLabelB.innerText = '🎵 Tracks (' + tracks.length + ')';
+        tracks.forEach((t, i) => {
+          const item = document.createElement('div');
+          item.className = 'popup-chapter-item' + (i === audioDeck.B.currentTrackIndex ? ' active' : '');
+          item.innerHTML = '<span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + (t.id || (i + 1)) + '. ' + t.title + '</span><span style="color:#38bdf8; font-variant-numeric:tabular-nums; flex-shrink:0; margin-left:8px;">' + (t.formattedTime || '') + '</span>';
+          item.onclick = () => { playSlotBTrack(i, workB); };
+          drawerListB.appendChild(item);
+        });
+      }
+
+      updateMuteUI();
+      if (typeof updateMixerModeButtonsUI === 'function') updateMixerModeButtonsUI();
+    }
+    window.updatePopupPlayerBUI = updatePopupPlayerBUI;
+
+    // Dual Audio WebAudio Routing & Spatial Pan Engine
+    function getAudioContext() {
+      if (!audioDeck.ctx) {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (AudioCtx) {
+          audioDeck.ctx = new AudioCtx();
+        }
+      }
+      if (audioDeck.ctx && audioDeck.ctx.state === 'suspended') {
+        audioDeck.ctx.resume().catch(() => {});
+      }
+      return audioDeck.ctx;
+    }
+
+    function initSlotWebAudio(slotKey) {
+      const ctx = getAudioContext();
+      if (!ctx) return;
+      const slot = audioDeck[slotKey];
+      if (!slot || slot.sourceNode) return;
+      if (!slot.audioEl) {
+        slot.audioEl = document.getElementById(slotKey === 'A' ? 'coreAudio' : 'slotBAudio');
+      }
+      if (!slot.audioEl) return;
+      try {
+        slot.sourceNode = ctx.createMediaElementSource(slot.audioEl);
+        slot.gainNode = ctx.createGain();
+        slot.gainNode.gain.value = slot.muted ? 0 : slot.volume;
+        if (ctx.createStereoPanner) {
+          slot.panNode = ctx.createStereoPanner();
+          slot.panNode.pan.value = slot.pan;
+          slot.sourceNode.connect(slot.gainNode);
+          slot.gainNode.connect(slot.panNode);
+          slot.panNode.connect(ctx.destination);
+        } else {
+          slot.sourceNode.connect(slot.gainNode);
+          slot.gainNode.connect(ctx.destination);
+        }
+      } catch (err) {
+        console.warn('WebAudio setup warning for Slot ' + slotKey + ':', err);
+      }
+    }
+
+    function formatPanText(p) {
+      if (Math.abs(p) < 0.05) return 'Center';
+      if (p < 0) return 'L ' + Math.round(Math.abs(p) * 100) + '%';
+      return 'R ' + Math.round(p * 100) + '%';
+    }
+
+    function setSlotAVolume(val) {
+      const v = Math.max(0, Math.min(100, parseFloat(val) || 0)) / 100;
+      audioDeck.A.volume = v;
+      if (v === 0) {
+        audioDeck.A.muted = true;
+        audio.muted = true;
+      } else if (audioDeck.A.muted) {
+        audioDeck.A.muted = false;
+        audio.muted = false;
+      }
+      initSlotWebAudio('A');
+      if (audioDeck.A.gainNode) {
+        audioDeck.A.gainNode.gain.value = audioDeck.A.muted ? 0 : v;
+      } else {
+        audio.volume = audioDeck.A.muted ? 0 : v;
+      }
+      const el = document.getElementById('mixerValA');
+      if (el) el.innerText = Math.round(v * 100) + '%';
+      const fader = document.getElementById('mixerFaderA');
+      if (fader && fader.value != Math.round(v * 100)) fader.value = Math.round(v * 100);
+      updateMuteUI();
+    }
+    window.setSlotAVolume = setSlotAVolume;
+
+    function setSlotBVolume(val) {
+      const v = Math.max(0, Math.min(100, parseFloat(val) || 0)) / 100;
+      audioDeck.B.volume = v;
+      if (v === 0) {
+        audioDeck.B.muted = true;
+      } else if (audioDeck.B.muted) {
+        audioDeck.B.muted = false;
+      }
+      initSlotWebAudio('B');
+      if (audioDeck.B.gainNode) {
+        audioDeck.B.gainNode.gain.value = audioDeck.B.muted ? 0 : v;
+      } else if (audioDeck.B.audioEl) {
+        audioDeck.B.audioEl.volume = audioDeck.B.muted ? 0 : v;
+      }
+      const el = document.getElementById('mixerValB');
+      if (el) el.innerText = Math.round(v * 100) + '%';
+      const fader = document.getElementById('mixerFaderB');
+      if (fader && fader.value != Math.round(v * 100)) fader.value = Math.round(v * 100);
+      updateMuteUI();
+    }
+    window.setSlotBVolume = setSlotBVolume;
+
+    function setSlotAPan(p) {
+      p = Math.max(-1, Math.min(1, parseFloat(p) || 0));
+      audioDeck.A.pan = p;
+      initSlotWebAudio('A');
+      if (audioDeck.A.panNode) audioDeck.A.panNode.pan.value = p;
+      const el = document.getElementById('mixerPanValA');
+      if (el) el.innerText = formatPanText(p);
+      const fader = document.getElementById('mixerPanA');
+      if (fader && fader.value != Math.round(p * 100)) fader.value = Math.round(p * 100);
+      updateMixerModeButtonsUI();
+    }
+    window.setSlotAPan = setSlotAPan;
+
+    function setSlotBPan(p) {
+      p = Math.max(-1, Math.min(1, parseFloat(p) || 0));
+      audioDeck.B.pan = p;
+      initSlotWebAudio('B');
+      if (audioDeck.B.panNode) audioDeck.B.panNode.pan.value = p;
+      const el = document.getElementById('mixerPanValB');
+      if (el) el.innerText = formatPanText(p);
+      const fader = document.getElementById('mixerPanB');
+      if (fader && fader.value != Math.round(p * 100)) fader.value = Math.round(p * 100);
+      updateMixerModeButtonsUI();
+    }
+    window.setSlotBPan = setSlotBPan;
+
+    function swapSlotsPan() {
+      initSlotWebAudio('A');
+      initSlotWebAudio('B');
+      const prevA = audioDeck.A.pan;
+      const prevB = audioDeck.B.pan;
+
+      if (Math.abs(prevA) < 0.05 && Math.abs(prevB) < 0.05) {
+        setSlotAPan(1.0);
+        setSlotBPan(-1.0);
+      } else {
+        setSlotAPan(prevB);
+        setSlotBPan(prevA);
+      }
+      updateMixerUI();
+      showToast('⇄ Swapped channels: Deck A (' + formatPanText(audioDeck.A.pan) + ') | Deck B (' + formatPanText(audioDeck.B.pan) + ')');
+    }
+    window.swapSlotsPan = swapSlotsPan;
+
+    function applyStereoSplitPreset() {
+      setSlotAPan(-1.0);
+      setSlotBPan(1.0);
+      updateMixerUI();
+      showToast('🎧 Stereo Split: Deck A (Left) | Deck B (Right)');
+    }
+    window.applyStereoSplitPreset = applyStereoSplitPreset;
+
+    function applyCenterMonoPreset() {
+      setSlotAPan(0.0);
+      setSlotBPan(0.0);
+      updateMixerUI();
+      showToast('⚖️ Center Mono: Both decks centered');
+    }
+    window.applyCenterMonoPreset = applyCenterMonoPreset;
+
+    function getMixerPresetMode() {
+      const panA = audioDeck.A.pan;
+      const panB = audioDeck.B.pan;
+      if (Math.abs(panA) < 0.2 && Math.abs(panB) < 0.2) return 0;
+      if (panA <= -0.5 && panB >= 0.5) return 1;
+      if (panA >= 0.5 && panB <= -0.5) return 2;
+      return 0;
+    }
+
+    function cycleMixerPresetMode() {
+      const cur = getMixerPresetMode();
+      const nextMode = (cur + 1) % 3;
+      if (nextMode === 0) {
+        applyCenterMonoPreset();
+      } else if (nextMode === 1) {
+        applyStereoSplitPreset();
+      } else {
+        setSlotAPan(1.0);
+        setSlotBPan(-1.0);
+        updateMixerUI();
+        showToast('🎧 Stereo Split: Deck A (Right) | Deck B (Left)');
+      }
+      updateMixerModeButtonsUI();
+    }
+    window.cycleMixerPresetMode = cycleMixerPresetMode;
+
+    function updateMixerModeButtonsUI() {
+      const mode = getMixerPresetMode();
+      const barBtn = document.getElementById('barMixerModeBtn');
+      const popupBtn = document.getElementById('popupMixerModeBtn');
+
+      let label = '';
+      let fullTitle = '';
+
+      if (mode === 0) {
+        label = '⚖️ Center';
+        fullTitle = 'Mixer Mode: Center / Mono (Click for Deck A Left | Deck B Right)';
+      } else if (mode === 1) {
+        label = '🅰️◀️ ▶️🅱️';
+        fullTitle = 'Mixer Mode: Deck A Left | Deck B Right (Click for Deck A Right | Deck B Left)';
+      } else {
+        label = '🅱️◀️ ▶️🅰️';
+        fullTitle = 'Mixer Mode: Deck A Right | Deck B Left (Click for Center / Mono)';
+      }
+
+      if (barBtn) {
+        barBtn.innerText = label;
+        barBtn.title = fullTitle;
+      }
+      if (popupBtn) {
+        popupBtn.innerText = label;
+        popupBtn.title = fullTitle;
+      }
+    }
+    window.updateMixerModeButtonsUI = updateMixerModeButtonsUI;
+
+    function toggleBothPlayPause() {
+      const isAPlaying = !audio.paused && audio.currentTime > 0;
+      const audioB = audioDeck.B.audioEl;
+      const isBPlaying = audioB && !audioB.paused && audioB.currentTime > 0;
+
+      if (isAPlaying || isBPlaying) {
+        if (!audio.paused) audio.pause();
+        if (audioB && !audioB.paused) audioB.pause();
+      } else {
+        if (audio.paused && (currentPlayingWork || audio.src)) {
+          audio.play().catch(() => {});
+        }
+        if (audioB && audioB.paused && (audioDeck.B.currentWork || audioB.src)) {
+          audioB.play().catch(() => {});
+        }
+      }
+      updateMixerUI();
+    }
+    window.toggleBothPlayPause = toggleBothPlayPause;
+
+    function updateMixerUI() {
+      const workA = currentPlayingWork || currentWork;
+      const rjA = document.getElementById('mixerDeckARj');
+      const titleA = document.getElementById('mixerDeckATitle');
+      const faderA = document.getElementById('mixerFaderA');
+      const valA = document.getElementById('mixerValA');
+      const panA = document.getElementById('mixerPanA');
+      const panValA = document.getElementById('mixerPanValA');
+      const muteA = document.getElementById('mixerMuteBtnA');
+
+      if (rjA) rjA.innerText = workA ? (workA.rjCode || '--') : '--';
+      if (titleA) {
+        const trackA = (workA && workA.tracks && workA.tracks[currentTrackIndex]) || (workA && workA.tracks && workA.tracks[0]);
+        titleA.innerText = trackA ? trackA.title : (workA ? workA.title : 'No Track Selected');
+      }
+      if (faderA) faderA.value = Math.round(audioDeck.A.volume * 100);
+      if (valA) valA.innerText = Math.round(audioDeck.A.volume * 100) + '%';
+      if (panA) panA.value = Math.round(audioDeck.A.pan * 100);
+      if (panValA) panValA.innerText = formatPanText(audioDeck.A.pan);
+      if (muteA) muteA.innerText = (audioDeck.A.muted || audio.muted) ? '🔇' : '🔊';
+
+      const workB = audioDeck.B.currentWork;
+      const rjB = document.getElementById('mixerDeckBRj');
+      const titleB = document.getElementById('mixerDeckBTitle');
+      const faderB = document.getElementById('mixerFaderB');
+      const valB = document.getElementById('mixerValB');
+      const panB = document.getElementById('mixerPanB');
+      const panValB = document.getElementById('mixerPanValB');
+      const muteB = document.getElementById('mixerMuteBtnB');
+      const loadPromptB = document.getElementById('mixerDeckBLoadPrompt');
+
+      if (rjB) rjB.innerText = workB ? (workB.rjCode || '--') : '--';
+      if (titleB) {
+        const trackB = (workB && workB.tracks && workB.tracks[audioDeck.B.currentTrackIndex]) || (workB && workB.tracks && workB.tracks[0]);
+        titleB.innerText = trackB ? trackB.title : (workB ? workB.title : 'Deck B Empty');
+      }
+      if (faderB) faderB.value = Math.round(audioDeck.B.volume * 100);
+      if (valB) valB.innerText = Math.round(audioDeck.B.volume * 100) + '%';
+      if (panB) panB.value = Math.round(audioDeck.B.pan * 100);
+      if (panValB) panValB.innerText = formatPanText(audioDeck.B.pan);
+      if (muteB) muteB.innerText = audioDeck.B.muted ? '🔇' : '🔊';
+      if (loadPromptB) loadPromptB.style.display = workB ? 'none' : 'block';
+
+      const barDeckBPill = document.getElementById('barDeckBPill');
+      if (barDeckBPill) {
+        barDeckBPill.style.display = workB ? 'inline-flex' : 'none';
+      }
+
+      document.body.classList.toggle('has-deck-b', !!workB);
+      updateMixerModeButtonsUI();
+      updateMuteUI();
+    }
+    window.updateMixerUI = updateMixerUI;
+
+    // Deck B Audio Playback Handlers
+    window.playSlotBTrack = function(index, targetWork = null, startTime = 0) {
+      index = Math.max(0, parseInt(index, 10) || 0);
+      startTime = Math.max(0, parseFloat(startTime) || 0);
+      initSlotWebAudio('B');
+      const audioB = audioDeck.B.audioEl;
+      if (!audioB) return;
+
+      const work = targetWork || audioDeck.B.currentWork || currentWork || currentPlayingWork;
+      if (!work) return;
+      audioDeck.B.currentWork = work;
+
+      if (!work.tracks || work.tracks.length === 0) {
+        if (work.sampleTracks && work.sampleTracks.length > 0 && !work.hasHls) {
+          playDirectAudioTrackB(work.sampleTracks[0], 0, work);
+          return;
+        }
+        const cleanRj = work.rjCode || '';
+        const m3u8Url = 'https://v.weeab0o.xyz/' + cleanRj + '.m3u8';
+        work.tracks = [{
+          id: 1,
+          title: work.title ? ('01. ' + work.title) : '01. Audio Track',
+          formattedTime: '00:00:00',
+          startTime: 0,
+          isHls: true,
+          rawUrl: m3u8Url,
+          streamUrl: '/stream?url=' + encodeURIComponent(m3u8Url),
+          poster: work.coverUrl || ''
+        }];
+        work.hasHls = true;
+      }
+
+      if (index >= work.tracks.length) {
+        index = work.hasHls ? 0 : Math.min(index, work.tracks.length - 1);
+      }
+      audioDeck.B.currentTrackIndex = index;
+      const track = work.tracks[index];
+
+      const knownDur = track.duration || 0;
+      const initialTotal = knownDur > 0 ? formatTime(knownDur) : (track.formattedTime || '--:--');
+      const currTimeB = document.getElementById('popupCurrTimeB');
+      const totalTimeB = document.getElementById('popupTotalTimeB');
+      const scrubberB = document.getElementById('popupScrubberB');
+      if (currTimeB) currTimeB.innerText = formatTime(startTime);
+      if (totalTimeB) totalTimeB.innerText = initialTotal;
+      if (scrubberB) scrubberB.value = (knownDur > 0 && startTime > 0) ? (startTime / knownDur) * 100 : 0;
+
+      let streamUrl = normalizeStreamUrl(track.streamUrl || track.rawUrl, work.rjCode);
+      const isM3u8 = (track.isHls === true) || (streamUrl && streamUrl.toLowerCase().includes('.m3u8'));
+
+      if (isM3u8) {
+        playHlsStreamB(streamUrl, startTime, true);
+      } else {
+        playDirectAudioB(streamUrl, true, startTime);
+      }
+
+      updateMixerUI();
+      updatePopupPlayerBUI();
+      showToast('🎚️ Loaded into Deck B: ' + (work.rjCode || 'Track'));
+    };
+
+    function playHlsStreamB(m3u8Url, startTime = 0, userTriggered = true) {
+      startTime = Math.max(0, parseFloat(startTime) || 0);
+      const audioB = audioDeck.B.audioEl;
+      if (!audioB) return;
+      m3u8Url = normalizeStreamUrl(m3u8Url, audioDeck.B.currentWork ? audioDeck.B.currentWork.rjCode : '');
+
+      if (audioDeck.B.hls && audioDeck.B.loadedHlsUrl === m3u8Url) {
+        try { audioB.currentTime = startTime; } catch(e) {}
+        if (userTriggered) audioB.play().catch(e => console.log('Deck B play:', e));
+        return;
+      }
+      if (audioDeck.B.hls) { audioDeck.B.hls.destroy(); audioDeck.B.hls = null; }
+      audioDeck.B.loadedHlsUrl = m3u8Url;
+
+      if (Hls.isSupported()) {
+        audioDeck.B.hls = new Hls({
+          enableWorker: true,
+          lowLatencyMode: false,
+          maxBufferLength: 60,
+          startPosition: startTime >= 0 ? startTime : -1
+        });
+        audioDeck.B.hls.loadSource(m3u8Url);
+        audioDeck.B.hls.attachMedia(audioB);
+        audioDeck.B.hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          if (startTime > 0) {
+            try { audioB.currentTime = startTime; } catch(e) {}
+          }
+          if (userTriggered) {
+            audioB.play().catch(e => console.log('Deck B autoplay:', e));
+          }
+        });
+      } else if (audioB.canPlayType('application/vnd.apple.mpegurl')) {
+        audioB.src = m3u8Url;
+        audioB.addEventListener('loadedmetadata', () => {
+          try { audioB.currentTime = startTime; } catch(e) {}
+          if (userTriggered) audioB.play().catch(e => console.log('Deck B play:', e));
+        }, { once: true });
+      }
+    }
+
+    function playDirectAudioB(srcUrl, userTriggered = true, startTime = 0) {
+      startTime = Math.max(0, parseFloat(startTime) || 0);
+      const audioB = audioDeck.B.audioEl;
+      if (!audioB) return;
+      srcUrl = normalizeStreamUrl(srcUrl, audioDeck.B.currentWork ? audioDeck.B.currentWork.rjCode : '');
+      if (audioDeck.B.hls) { audioDeck.B.hls.destroy(); audioDeck.B.hls = null; audioDeck.B.loadedHlsUrl = null; }
+
+      audioB.src = srcUrl;
+      audioB.addEventListener('loadedmetadata', () => {
+        try { audioB.currentTime = startTime; } catch(e) {}
+      }, { once: true });
+
+      if (userTriggered) {
+        audioB.play().catch(e => {
+          console.log('Deck B direct play deferred:', e);
+          audioB.addEventListener('canplay', () => audioB.play().catch(() => {}), { once: true });
+        });
+      }
+    }
+
+    window.playDirectAudioTrackB = function(trackObj, targetIndex = 0, sourceWork = null) {
+      if (!trackObj || (!trackObj.rawUrl && !trackObj.streamUrl)) return;
+      const activeWork = sourceWork || ((currentWork && currentWork.rjCode) ? currentWork : {
+        rjCode: 'DLsite Preview',
+        title: trackObj.title,
+        coverUrl: trackObj.poster || ''
+      });
+      const allSamples = (Array.isArray(activeWork.sampleTracks) && activeWork.sampleTracks.length > 0)
+        ? activeWork.sampleTracks
+        : [trackObj];
+
+      let foundIdx = 0;
+      if (typeof targetIndex === 'number' && targetIndex >= 0 && targetIndex < allSamples.length) {
+        foundIdx = targetIndex;
+      } else {
+        const idx = allSamples.findIndex(s => (s.rawUrl === trackObj.rawUrl || s.streamUrl === trackObj.streamUrl || s.title === trackObj.title));
+        if (idx !== -1) foundIdx = idx;
+      }
+
+      const convertedTracks = allSamples.map(function(st, idx) {
+        const stream = st.streamUrl || ('/stream?url=' + encodeURIComponent(st.rawUrl) + '&referer=' + encodeURIComponent('https://chobit.cc/'));
+        return {
+          id: idx + 1,
+          title: st.title + ' (Sample Preview)',
+          duration: st.duration || 0,
+          formattedTime: st.formattedTime || formatTime(st.duration || 0),
+          startTime: 0,
+          isHls: false,
+          isSamplePreview: true,
+          streamUrl: stream,
+          rawUrl: st.rawUrl,
+          poster: st.poster || activeWork.coverUrl || ''
+        };
+      });
+
+      const mockWork = {
+        ...activeWork,
+        tracks: convertedTracks,
+        sampleTracks: allSamples,
+        _isSampleWork: true,
+        _originalWork: activeWork
+      };
+      playSlotBTrack(foundIdx, mockWork);
+    };
+
+    window.loadCurrentWorkIntoSlotB = function() {
+      const target = currentWork || currentPlayingWork;
+      if (!target) {
+        showToast('⚠️ No work selected to load into Deck B');
+        return;
+      }
+      playSlotBTrack(0, target);
+    };
+
+    window.toggleSlotBPlayPause = function() {
+      const audioB = audioDeck.B.audioEl;
+      if (!audioB) return;
+      initSlotWebAudio('B');
+      if (!audioDeck.B.currentWork) {
+        loadCurrentWorkIntoSlotB();
+        return;
+      }
+      if (audioB.paused) {
+        audioB.play().catch(e => console.log('Deck B play error:', e));
+      } else {
+        audioB.pause();
+      }
+    };
+
+    window.toggleSlotBMute = function() {
+      audioDeck.B.muted = !audioDeck.B.muted;
+      initSlotWebAudio('B');
+      if (audioDeck.B.gainNode) {
+        audioDeck.B.gainNode.gain.value = audioDeck.B.muted ? 0 : audioDeck.B.volume;
+      } else if (audioDeck.B.audioEl) {
+        audioDeck.B.audioEl.muted = audioDeck.B.muted;
+      }
+      updateMixerUI();
+      updatePopupPlayerBUI();
+    };
+
+    window.onSlotBScrub = function(val) {
+      const audioB = audioDeck.B.audioEl;
+      if (audioB && audioB.duration) {
+        audioB.currentTime = (val / 100) * audioB.duration;
+      }
+    };
+
+    window.playPrevTrackB = function() {
+      if (!audioDeck.B.currentWork) return;
+      const tracks = audioDeck.B.currentWork.tracks || [];
+      if (tracks.length === 0) return;
+      const newIdx = (audioDeck.B.currentTrackIndex - 1 + tracks.length) % tracks.length;
+      playSlotBTrack(newIdx, audioDeck.B.currentWork);
+    };
+
+    window.toggleShuffleB = function() {
+      audioDeck.B.isShuffle = !audioDeck.B.isShuffle;
+      const btn = document.getElementById('popupShuffleBtnB');
+      if (btn) {
+        btn.classList.toggle('active', !!audioDeck.B.isShuffle);
+        btn.style.color = audioDeck.B.isShuffle ? 'var(--accent)' : '#fff';
+      }
+      showToast('Deck B Shuffle: ' + (audioDeck.B.isShuffle ? 'ON' : 'OFF'));
+    };
+
+    window.playNextTrackB = function() {
+      if (!audioDeck.B.currentWork) return;
+      const tracks = audioDeck.B.currentWork.tracks || [];
+      if (tracks.length === 0) return;
+      let newIdx;
+      if (audioDeck.B.isShuffle && tracks.length > 1) {
+        do {
+          newIdx = Math.floor(Math.random() * tracks.length);
+        } while (newIdx === audioDeck.B.currentTrackIndex && tracks.length > 1);
+      } else {
+        newIdx = (audioDeck.B.currentTrackIndex + 1) % tracks.length;
+      }
+      playSlotBTrack(newIdx, audioDeck.B.currentWork);
+    };
+
+    window.clearSlotB = function() {
+      const audioB = audioDeck.B.audioEl;
+      if (audioB) {
+        audioB.pause();
+        audioB.removeAttribute('src');
+        audioB.load();
+      }
+      if (audioDeck.B.hls) {
+        audioDeck.B.hls.destroy();
+        audioDeck.B.hls = null;
+        audioDeck.B.loadedHlsUrl = null;
+      }
+      audioDeck.B.currentWork = null;
+      audioDeck.B.currentTrackIndex = -1;
+      document.body.classList.remove('has-deck-b');
+      updateMixerUI();
+      updatePopupPlayerBUI();
+      showToast('Deck B ejected');
+    };
+
+    window.jumpToSlotBWorkDetail = function() {
+      if (!audioDeck.B.currentWork) return;
+      closePopupPlayer();
+      switchView('work-detail', audioDeck.B.currentWork.rjCode);
+    };
+
+    window.toggleLoopB = function() {
+      const audioB = audioDeck.B.audioEl;
+      if (!audioB) return;
+      audioB.loop = !audioB.loop;
+      const loopBtn = document.getElementById('loopBtnBBar');
+      if (loopBtn) {
+        loopBtn.classList.toggle('active', audioB.loop);
+        loopBtn.style.color = audioB.loop ? 'var(--accent)' : '#fff';
+      }
+      showToast('Deck B Loop: ' + (audioB.loop ? 'ON' : 'OFF'));
+    };
 
     function jumpToCurrentWorkDetail() {
       if (!currentPlayingWork) return;
@@ -8727,6 +10593,24 @@ const INDEX_HTML = `<!DOCTYPE html>
         cv: currentPlayingWork.cv || ''
       });
     }
+
+    function addSlotBPlayingTrackToPlaylist() {
+      const workB = audioDeck.B.currentWork;
+      if (!workB) return;
+      const track = (workB.tracks && workB.tracks[audioDeck.B.currentTrackIndex]) || (workB.tracks && workB.tracks[0]) || {};
+      openAddToPlaylistModal({
+        rjCode: workB.rjCode,
+        trackId: track.id || 1,
+        title: track.title || workB.title,
+        workTitle: workB.title,
+        startTime: 0,
+        streamUrl: track.streamUrl,
+        isHls: track.isHls,
+        poster: workB.coverUrl,
+        cv: workB.cv || ''
+      });
+    }
+    window.addSlotBPlayingTrackToPlaylist = addSlotBPlayingTrackToPlaylist;
 
     function toggleCurrentWorkFav() {
       if (!currentPlayingWork) return;
@@ -10247,6 +12131,8 @@ const INDEX_HTML = `<!DOCTYPE html>
       document.getElementById('popupPlayPauseBtn').innerText = userTriggered ? '⏸' : '▶';
 
       updatePopupPlayerUI();
+      initSlotWebAudio('A');
+      updateMixerUI();
       if (userTriggered) {
         recordTrackPlayStart(currentPlayingWork, index);
         recordPlayHistory(currentPlayingWork, index);
@@ -10534,6 +12420,55 @@ const INDEX_HTML = `<!DOCTYPE html>
         } catch(e) {}
       }
     });
+
+    if (slotBAudio) {
+      slotBAudio.addEventListener('play', () => {
+        const btn = document.getElementById('popupPlayPauseBtnB');
+        if (btn) btn.innerText = '⏸';
+        const barBtn = document.getElementById('playPauseBtnBBar');
+        if (barBtn) barBtn.innerText = '⏸';
+        updateMixerUI();
+      });
+      slotBAudio.addEventListener('pause', () => {
+        const btn = document.getElementById('popupPlayPauseBtnB');
+        if (btn) btn.innerText = '▶';
+        const barBtn = document.getElementById('playPauseBtnBBar');
+        if (barBtn) barBtn.innerText = '▶';
+        updateMixerUI();
+      });
+      slotBAudio.addEventListener('ended', () => {
+        devLog('INFO', 'PLAYER', 'Deck B track finished naturally -> auto-advancing Deck B');
+        playNextTrackB();
+      });
+      slotBAudio.addEventListener('timeupdate', () => {
+        const ct = slotBAudio.currentTime;
+        const dur = slotBAudio.duration || 0;
+        const currTimeB = document.getElementById('popupCurrTimeB');
+        const totalTimeB = document.getElementById('popupTotalTimeB');
+        const scrubberB = document.getElementById('popupScrubberB');
+        if (currTimeB) currTimeB.innerText = formatTime(ct);
+        if (totalTimeB) totalTimeB.innerText = formatTime(dur);
+        if (scrubberB && dur > 0) scrubberB.value = (ct / dur) * 100;
+
+        const currTimeBBar = document.getElementById('currTimeBBar');
+        const totalTimeBBar = document.getElementById('totalTimeBBar');
+        const scrubberBBar = document.getElementById('scrubberBBar');
+        if (currTimeBBar) currTimeBBar.innerText = formatTime(ct);
+        if (totalTimeBBar) totalTimeBBar.innerText = formatTime(dur);
+        if (scrubberBBar && dur > 0) scrubberBBar.value = (ct / dur) * 100;
+      });
+      slotBAudio.addEventListener('loadedmetadata', () => {
+        const dur = slotBAudio.duration;
+        if (dur && !isNaN(dur) && dur > 0 && audioDeck.B.currentWork) {
+          const roundedDur = Math.round(dur);
+          if (audioDeck.B.currentWork.tracks && audioDeck.B.currentWork.tracks[audioDeck.B.currentTrackIndex]) {
+            audioDeck.B.currentWork.tracks[audioDeck.B.currentTrackIndex].duration = roundedDur;
+            audioDeck.B.currentWork.tracks[audioDeck.B.currentTrackIndex].formattedTime = formatTime(roundedDur);
+          }
+          updatePopupPlayerBUI();
+        }
+      });
+    }
 
     window.addEventListener('beforeunload', () => {
       saveCurrentPlaybackSession();
@@ -11002,23 +12937,86 @@ const INDEX_HTML = `<!DOCTYPE html>
       }
     }
     window.playPrevTrack = playPrevTrack;
-    function toggleMute() {
-      audio.muted = !audio.muted;
-      updateMuteUI();
+    function getVolumeIcon(vol, isMuted) {
+      if (isMuted || vol <= 0.01) return '🔇';
+      if (vol <= 0.35) return '🔈';
+      if (vol <= 0.65) return '🔉';
+      return '🔊';
     }
 
+    function cycleSlotVolume(slot = 'A') {
+      const deck = (slot === 'B') ? audioDeck.B : audioDeck.A;
+      const audioEl = (slot === 'B') ? audioDeck.B.audioEl : audio;
+      initSlotWebAudio(slot);
+
+      let cur = (deck.muted || (audioEl && audioEl.muted)) ? 0.0 : (deck.volume != null ? deck.volume : 1.0);
+      let nextVol = 1.0;
+      if (cur >= 0.88) nextVol = 0.75;
+      else if (cur >= 0.63) nextVol = 0.50;
+      else if (cur >= 0.38) nextVol = 0.25;
+      else if (cur >= 0.12) nextVol = 0.0;
+      else nextVol = 1.0;
+
+      if (slot === 'A') {
+        setSlotAVolume(Math.round(nextVol * 100));
+      } else {
+        setSlotBVolume(Math.round(nextVol * 100));
+      }
+      updateMuteUI();
+      showToast((slot === 'A' ? 'Deck A' : 'Deck B') + ' Volume: ' + Math.round(nextVol * 100) + '%');
+    }
+    window.cycleSlotVolume = cycleSlotVolume;
+
+    function toggleMute() {
+      cycleSlotVolume('A');
+    }
+    window.toggleMute = toggleMute;
+
+    window.toggleSlotBMute = function() {
+      cycleSlotVolume('B');
+    };
+
     function updateMuteUI() {
-      const isMuted = audio.muted || audio.volume === 0;
-      const icon = isMuted ? '🔇' : '🔊';
+      const isMutedA = audio.muted || audioDeck.A.muted || audioDeck.A.volume === 0;
+      const volA = audioDeck.A.volume != null ? audioDeck.A.volume : 1.0;
+      const iconA = getVolumeIcon(volA, isMutedA);
+      const pctA = isMutedA ? 0 : Math.round(volA * 100);
+
       const mBtn = document.getElementById('muteBtn');
       const pmBtn = document.getElementById('popupMuteBtn');
+      const mixMuteA = document.getElementById('mixerMuteBtnA');
       if (mBtn) {
-        mBtn.innerText = icon;
-        mBtn.title = isMuted ? 'Unmute' : 'Mute';
+        mBtn.innerText = iconA;
+        mBtn.title = 'Deck A Volume: ' + pctA + '% (Click to step)';
       }
       if (pmBtn) {
-        pmBtn.innerText = icon;
-        pmBtn.title = isMuted ? 'Unmute' : 'Mute';
+        pmBtn.innerText = iconA;
+        pmBtn.title = 'Deck A Volume: ' + pctA + '% (Click to step)';
+      }
+      if (mixMuteA) {
+        mixMuteA.innerText = iconA;
+        mixMuteA.title = 'Deck A Volume: ' + pctA + '% (Click to step)';
+      }
+
+      const isMutedB = audioDeck.B.muted || audioDeck.B.volume === 0;
+      const volB = audioDeck.B.volume != null ? audioDeck.B.volume : 1.0;
+      const iconB = getVolumeIcon(volB, isMutedB);
+      const pctB = isMutedB ? 0 : Math.round(volB * 100);
+
+      const mBtnB = document.getElementById('muteBtnBBar');
+      const pmBtnB = document.getElementById('popupMuteBtnB');
+      const mixMuteB = document.getElementById('mixerMuteBtnB');
+      if (mBtnB) {
+        mBtnB.innerText = iconB;
+        mBtnB.title = 'Deck B Volume: ' + pctB + '% (Click to step)';
+      }
+      if (pmBtnB) {
+        pmBtnB.innerText = iconB;
+        pmBtnB.title = 'Deck B Volume: ' + pctB + '% (Click to step)';
+      }
+      if (mixMuteB) {
+        mixMuteB.innerText = iconB;
+        mixMuteB.title = 'Deck B Volume: ' + pctB + '% (Click to step)';
       }
     }
     audio.addEventListener('volumechange', updateMuteUI);
@@ -12136,6 +14134,8 @@ const INDEX_HTML = `<!DOCTYPE html>
           }
         }
 
+        const isSnoozed = globalBlacklistMap.has(rj) || globalBlacklistMap.has(normRjKey(rj));
+
         return {
           rj: rj,
           rjCode: rj,
@@ -12143,9 +14143,17 @@ const INDEX_HTML = `<!DOCTYPE html>
           circle: circle,
           cv: cv,
           inLibrary: inLibrary,
-          selected: !inLibrary
+          isBlacklisted: isSnoozed,
+          selected: !inLibrary && !isSnoozed
         };
       });
+    }
+
+    let pageImportShowSnoozed = false;
+
+    function togglePageImportShowSnoozed(checked) {
+      pageImportShowSnoozed = !!checked;
+      renderPageImportPreview();
     }
 
     async function parseAndShowPagePreview() {
@@ -12155,6 +14163,8 @@ const INDEX_HTML = `<!DOCTYPE html>
         alert('Please paste some webpage text or catalog text first.');
         return;
       }
+
+      await loadGlobalBlacklist();
 
       if (!allWorks || allWorks.length === 0) {
         try {
@@ -12172,10 +14182,13 @@ const INDEX_HTML = `<!DOCTYPE html>
       pageImportItems = parsed;
       pageImportShowOriginalArt = (contentMode === 'NSFW');
       pageImportHideImported = true;
+      pageImportShowSnoozed = false;
       const chkArt = document.getElementById('pageImportOriginalArtCheck');
       if (chkArt) chkArt.checked = pageImportShowOriginalArt;
       const chkHide = document.getElementById('pageImportHideImportedCheck');
       if (chkHide) chkHide.checked = true;
+      const chkSnoozed = document.getElementById('pageImportShowSnoozedCheck');
+      if (chkSnoozed) chkSnoozed.checked = false;
       document.getElementById('pageImportStepInput').style.display = 'none';
       document.getElementById('pageImportStepPreview').style.display = 'flex';
       
@@ -12189,14 +14202,26 @@ const INDEX_HTML = `<!DOCTYPE html>
 
       const total = pageImportItems.length;
       const visibleItems = pageImportItems.filter(function(x) {
-        return !pageImportHideImported || !x.inLibrary;
+        if (pageImportHideImported && x.inLibrary) return false;
+        if (!pageImportShowSnoozed && x.isBlacklisted) return false;
+        return true;
       });
       const selectedCount = pageImportItems.filter(function(x) { return x.selected; }).length;
 
       const countBadge = document.getElementById('pageImportSelectionCount');
       if (countBadge) {
         const hiddenCount = total - visibleItems.length;
-        countBadge.innerText = selectedCount + '/' + total + ' works selected' + (pageImportHideImported && hiddenCount > 0 ? ' (' + hiddenCount + ' in-library hidden)' : '');
+        let badgeNotes = [];
+        if (pageImportHideImported) {
+          const inLibCount = pageImportItems.filter(x => x.inLibrary).length;
+          if (inLibCount > 0) badgeNotes.push(inLibCount + ' library');
+        }
+        if (!pageImportShowSnoozed) {
+          const snoozedCount = pageImportItems.filter(x => x.isBlacklisted && (!pageImportHideImported || !x.inLibrary)).length;
+          if (snoozedCount > 0) badgeNotes.push(snoozedCount + ' snoozed');
+        }
+        const noteStr = badgeNotes.length > 0 ? ' (' + badgeNotes.join(', ') + ' hidden)' : '';
+        countBadge.innerText = selectedCount + '/' + total + ' works selected' + noteStr;
       }
 
       const finalBtnCount = document.getElementById('pageImportFinalBtnCount');
@@ -12215,7 +14240,7 @@ const INDEX_HTML = `<!DOCTYPE html>
       }
 
       if (visibleItems.length === 0) {
-        container.innerHTML = '<div style="text-align: center; color: var(--text-muted); padding: 40px; background: rgba(16,185,129,0.06); border: 1px solid rgba(16,185,129,0.25); border-radius: 12px; margin: 20px;"><div style="font-size: 2rem; margin-bottom: 8px;">📚</div><div style="font-weight: 700; color: #fff; font-size: 1rem; margin-bottom: 6px;">All ' + total + ' works are already in your library!</div><div style="font-size: 0.85rem; color: #94a3b8;">Uncheck "✨ Unimported Only" above if you wish to review or re-import them.</div></div>';
+        container.innerHTML = '<div style="text-align: center; color: var(--text-muted); padding: 40px; background: rgba(16,185,129,0.06); border: 1px solid rgba(16,185,129,0.25); border-radius: 12px; margin: 20px;"><div style="font-size: 2rem; margin-bottom: 8px;">📚</div><div style="font-weight: 700; color: #fff; font-size: 1rem; margin-bottom: 6px;">All ' + total + ' works are filtered (in library or snoozed)!</div><div style="font-size: 0.85rem; color: #94a3b8;">Toggle "✨ Unimported Only" or "💤 Show Snoozed" above to review them.</div></div>';
         return;
       }
 
@@ -12249,6 +14274,8 @@ const INDEX_HTML = `<!DOCTYPE html>
         }
         if (item.inLibrary) {
           html += '    <div style="position: absolute; bottom: 6px; left: 6px; background: rgba(16, 185, 129, 0.9); color: #fff; font-size: 0.68rem; font-weight: 800; padding: 2px 7px; border-radius: 4px; box-shadow: 0 2px 6px rgba(0,0,0,0.5); backdrop-filter: blur(4px);">📚 In Library</div>';
+        } else if (item.isBlacklisted) {
+          html += '    <div style="position: absolute; bottom: 6px; left: 6px; background: rgba(245, 158, 11, 0.9); color: #000; font-size: 0.68rem; font-weight: 800; padding: 2px 7px; border-radius: 4px; box-shadow: 0 2px 6px rgba(0,0,0,0.5); backdrop-filter: blur(4px);">💤 Snoozed</div>';
         } else {
           html += '    <div style="position: absolute; bottom: 6px; left: 6px; background: rgba(56, 189, 248, 0.9); color: #000; font-size: 0.68rem; font-weight: 800; padding: 2px 7px; border-radius: 4px; box-shadow: 0 2px 6px rgba(0,0,0,0.5); backdrop-filter: blur(4px);">✨ New</div>';
         }
@@ -12283,7 +14310,9 @@ const INDEX_HTML = `<!DOCTYPE html>
     function pageImportSelectAll(selectVal) {
       pageImportItems.forEach(function(x) {
         if (!pageImportHideImported || !x.inLibrary) {
-          x.selected = !!selectVal;
+          if (pageImportShowSnoozed || !x.isBlacklisted) {
+            x.selected = !!selectVal;
+          }
         }
       });
       renderPageImportPreview();
@@ -12299,8 +14328,364 @@ const INDEX_HTML = `<!DOCTYPE html>
         alert('Please select at least 1 work to import.');
         return;
       }
+
+      // Short-Term Blacklist: Unchecked visible works get snoozed
+      const uncheckedItems = pageImportItems.filter(x => !x.selected && !x.inLibrary);
+      if (uncheckedItems.length > 0) {
+        await snoozeUncheckedWorks(uncheckedItems, 'Page Import');
+      }
+
       closePageImportModal();
       await executeBatchImportRjList(selectedItems, 'Page Import (' + selectedItems.length + ' works)', { keepModalOpen: false, rawItems: selectedItems });
+    }
+
+    // ==========================================
+    // WAITLIST DISCOVERY PREVIEW & CONTROLLER
+    // ==========================================
+    let waitlistItems = [];
+    let waitlistViewMode = 'grid';
+    let waitlistShowOriginalArt = false;
+    let waitlistHideImported = true;
+    let waitlistShowSnoozed = false;
+
+    function toggleWaitlistShowSnoozed(checked) {
+      waitlistShowSnoozed = !!checked;
+      renderWaitlistPreview();
+    }
+
+    async function openWaitlistModal() {
+      if (!isAdmin) {
+        openAdminModal('Please unlock Admin access first to view WaitList.');
+        return;
+      }
+      const modal = document.getElementById('waitlistModal');
+      if (!modal) return;
+      waitlistShowOriginalArt = (contentMode === 'NSFW');
+      waitlistHideImported = true;
+      waitlistShowSnoozed = false;
+      const chkArt = document.getElementById('waitlistOriginalArtCheck');
+      if (chkArt) chkArt.checked = waitlistShowOriginalArt;
+      const chkHide = document.getElementById('waitlistHideImportedCheck');
+      if (chkHide) chkHide.checked = true;
+      const chkSnoozed = document.getElementById('waitlistShowSnoozedCheck');
+      if (chkSnoozed) chkSnoozed.checked = false;
+
+      const container = document.getElementById('waitlistCarouselWrap');
+      if (container) {
+        container.innerHTML = '<div style="text-align:center; padding: 40px; color: var(--text-muted);"><div style="font-size:2rem; margin-bottom:8px;">⏳</div>Loading WaitList items...</div>';
+      }
+      modal.style.display = 'flex';
+
+      try {
+        await loadGlobalBlacklist();
+
+        if (!allWorks || allWorks.length === 0) {
+          try {
+            const works = await apiFetchJson('/api/library');
+            if (Array.isArray(works)) allWorks = works;
+          } catch(e) {}
+        }
+        const data = await apiFetchJson('/api/waitlist');
+        const list = Array.isArray(data) ? data : [];
+        updateWaitlistBadge(list.length);
+
+        const libraryRjSet = new Set();
+        (allWorks || []).forEach(function(w) {
+          const raw = (w.rj || w.id || w.rjCode || '').toUpperCase().trim();
+          if (raw) {
+            libraryRjSet.add(raw);
+            libraryRjSet.add(normRjKey(raw));
+          }
+        });
+
+        waitlistItems = list.map(item => {
+          const cleanRj = (item.rjCode || item.rj || '').toUpperCase().trim();
+          const inLib = libraryRjSet.has(cleanRj) || libraryRjSet.has(normRjKey(cleanRj));
+          const isSnoozed = globalBlacklistMap.has(cleanRj) || globalBlacklistMap.has(normRjKey(cleanRj));
+          return {
+            rj: cleanRj,
+            rjCode: cleanRj,
+            title: item.title || ('Work ' + cleanRj),
+            circle: item.circle || '',
+            cv: item.cv || '',
+            coverUrl: item.coverUrl || '',
+            source: item.source || 'hentaiasmr.moe',
+            postId: item.postId || 0,
+            postLink: item.postLink || '',
+            addedAt: item.addedAt || null,
+            inLibrary: inLib,
+            isBlacklisted: isSnoozed,
+            selected: !inLib && !isSnoozed
+          };
+        });
+
+        const initialMode = (window.innerWidth < 768) ? 'carousel' : 'grid';
+        setWaitlistViewMode(initialMode);
+      } catch (err) {
+        if (container) {
+          container.innerHTML = '<div style="text-align:center; padding:40px; color:#ef4444;">Failed to load WaitList: ' + (err.message || '').replace(/</g, '&lt;') + '</div>';
+        }
+      }
+    }
+
+    function closeWaitlistModal() {
+      const modal = document.getElementById('waitlistModal');
+      if (modal) modal.style.display = 'none';
+    }
+
+    function toggleWaitlistOriginalArt(checked) {
+      waitlistShowOriginalArt = !!checked;
+      renderWaitlistPreview();
+    }
+
+    function toggleWaitlistHideImported(checked) {
+      waitlistHideImported = !!checked;
+      renderWaitlistPreview();
+    }
+
+    function slideWaitlistCarousel(direction) {
+      const wrap = document.getElementById('waitlistCarouselWrap');
+      if (!wrap) return;
+      const scrollAmount = (direction > 0 ? 1 : -1) * Math.max(260, wrap.clientWidth * 0.75);
+      wrap.scrollBy({ left: scrollAmount, behavior: 'smooth' });
+    }
+
+    function setWaitlistViewMode(mode) {
+      waitlistViewMode = mode;
+      const btnCarousel = document.getElementById('btnWaitlistViewCarousel');
+      const btnGrid = document.getElementById('btnWaitlistViewGrid');
+      const btnLeft = document.getElementById('btnWaitlistSlideLeft');
+      const btnRight = document.getElementById('btnWaitlistSlideRight');
+
+      if (btnCarousel && btnGrid) {
+        if (mode === 'carousel') {
+          btnCarousel.classList.add('active');
+          btnGrid.classList.remove('active');
+          if (btnLeft) btnLeft.style.display = 'flex';
+          if (btnRight) btnRight.style.display = 'flex';
+        } else {
+          btnCarousel.classList.remove('active');
+          btnGrid.classList.add('active');
+          if (btnLeft) btnLeft.style.display = 'none';
+          if (btnRight) btnRight.style.display = 'none';
+        }
+      }
+      renderWaitlistPreview();
+    }
+
+    function renderWaitlistPreview() {
+      const container = document.getElementById('waitlistCarouselWrap');
+      if (!container) return;
+
+      const total = waitlistItems.length;
+      const visibleItems = waitlistItems.filter(function(x) {
+        if (waitlistHideImported && x.inLibrary) return false;
+        if (!waitlistShowSnoozed && x.isBlacklisted) return false;
+        return true;
+      });
+      const selectedCount = waitlistItems.filter(function(x) { return x.selected; }).length;
+
+      const countBadge = document.getElementById('waitlistSelectionCount');
+      if (countBadge) {
+        const hiddenCount = total - visibleItems.length;
+        let badgeNotes = [];
+        if (waitlistHideImported) {
+          const inLibCount = waitlistItems.filter(x => x.inLibrary).length;
+          if (inLibCount > 0) badgeNotes.push(inLibCount + ' library');
+        }
+        if (!waitlistShowSnoozed) {
+          const snoozedCount = waitlistItems.filter(x => x.isBlacklisted && (!waitlistHideImported || !x.inLibrary)).length;
+          if (snoozedCount > 0) badgeNotes.push(snoozedCount + ' snoozed');
+        }
+        const noteStr = badgeNotes.length > 0 ? ' (' + badgeNotes.join(', ') + ' hidden)' : '';
+        countBadge.innerText = selectedCount + '/' + total + ' works selected' + noteStr;
+      }
+
+      const finalBtnCount = document.getElementById('waitlistFinalBtnCount');
+      if (finalBtnCount) {
+        finalBtnCount.innerText = selectedCount;
+      }
+
+      const finishBtn = document.getElementById('btnFinishWaitlistImport');
+      if (finishBtn) {
+        finishBtn.disabled = (selectedCount === 0);
+      }
+
+      if (total === 0) {
+        container.innerHTML = '<div style="text-align: center; color: var(--text-muted); padding: 40px; background: rgba(56, 189, 248, 0.04); border: 1px dashed rgba(56, 189, 248, 0.25); border-radius: 12px; margin: 20px;"><div style="font-size: 2.5rem; margin-bottom: 10px;">📑</div><div style="font-weight: 700; color: #fff; font-size: 1.05rem; margin-bottom: 6px;">WaitList is currently empty</div><div style="font-size: 0.85rem; color: #94a3b8; max-width: 480px; margin: 0 auto 16px;">Scheduled scrapers run twice a day to discover works, or you can run an instant frontpage scan right now.</div><button class="btn-primary" onclick="triggerWaitlistScanNow()" style="background: linear-gradient(135deg, #0284c7, #38bdf8); border: none;">🔄 Scan hentaiasmr.moe Now</button></div>';
+        return;
+      }
+
+      if (visibleItems.length === 0) {
+        container.innerHTML = '<div style="text-align: center; color: var(--text-muted); padding: 40px; background: rgba(16,185,129,0.06); border: 1px solid rgba(16,185,129,0.25); border-radius: 12px; margin: 20px;"><div style="font-size: 2rem; margin-bottom: 8px;">📚</div><div style="font-weight: 700; color: #fff; font-size: 1rem; margin-bottom: 6px;">All ' + total + ' WaitList works are filtered (in library or snoozed)!</div><div style="font-size: 0.85rem; color: #94a3b8;">Toggle "✨ Unimported Only" or "💤 Show Snoozed" above to review them.</div></div>';
+        return;
+      }
+
+      const isCarousel = (waitlistViewMode === 'carousel');
+      container.className = isCarousel ? 'page-import-carousel' : 'page-import-grid';
+
+      function safeAttr(str) {
+        if (!str) return '';
+        return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+      }
+
+      let html = '';
+      visibleItems.forEach(function(item) {
+        const isExcluded = !item.selected;
+        const rawCoverUrl = item.coverUrl || ('/image-proxy?rj=' + item.rj);
+        let finalCover = rawCoverUrl;
+        let isDisguised = false;
+        if (!waitlistShowOriginalArt && (contentMode === 'PSFW' || contentMode === 'SFW')) {
+          const dummyWork = { id: item.rj, rjCode: item.rj, coverUrl: rawCoverUrl, title: item.title, isNsfw: true };
+          const coverObj = (typeof getDisplayCover === 'function') ? getDisplayCover(dummyWork) : { coverUrl: rawCoverUrl };
+          finalCover = coverObj.coverUrl;
+          isDisguised = !!coverObj.isDisguised;
+        }
+
+        html += '<div class="page-import-card ' + (isExcluded ? 'excluded' : '') + '" data-rj="' + item.rj + '" onclick="toggleWaitlistItem(this.dataset.rj)" title="' + (isExcluded ? 'Click to Pick for Import' : 'Click to Exclude') + '">';
+        html += '  <div class="import-check-overlay">' + (item.selected ? '✓' : '✕') + '</div>';
+        html += '  <div style="position: relative; width: 100%; aspect-ratio: 1; border-radius: 10px; overflow: hidden; background: #0c0d12; margin-bottom: 10px;">';
+        html += '    <img src="' + finalCover + '" data-rj="' + item.rj + '" onerror="handleImgError(this, this.dataset.rj)" loading="lazy" style="width: 100%; height: 100%; object-fit: cover; transition: transform 0.2s;" alt="' + safeAttr(item.rj) + '">';
+        if (isDisguised) {
+          html += '    <div class="disguised-overlay" style="top:6px; left:6px;"><span class="disguised-badge" style="font-size:0.65rem; padding:1px 5px;">🎭 SFW</span></div>';
+        }
+        if (item.inLibrary) {
+          html += '    <div style="position: absolute; bottom: 6px; left: 6px; background: rgba(16, 185, 129, 0.9); color: #fff; font-size: 0.68rem; font-weight: 800; padding: 2px 7px; border-radius: 4px; box-shadow: 0 2px 6px rgba(0,0,0,0.5); backdrop-filter: blur(4px);">📚 In Library</div>';
+        } else if (item.isBlacklisted) {
+          html += '    <div style="position: absolute; bottom: 6px; left: 6px; background: rgba(245, 158, 11, 0.9); color: #000; font-size: 0.68rem; font-weight: 800; padding: 2px 7px; border-radius: 4px; box-shadow: 0 2px 6px rgba(0,0,0,0.5); backdrop-filter: blur(4px);">💤 Snoozed</div>';
+        } else {
+          html += '    <div style="position: absolute; bottom: 6px; left: 6px; background: rgba(56, 189, 248, 0.9); color: #000; font-size: 0.68rem; font-weight: 800; padding: 2px 7px; border-radius: 4px; box-shadow: 0 2px 6px rgba(0,0,0,0.5); backdrop-filter: blur(4px);">✨ Scraped</div>';
+        }
+        html += '  </div>';
+        html += '  <div style="display: flex; flex-direction: column; gap: 4px; flex: 1;">';
+        html += '    <div style="display: flex; align-items: center; justify-content: space-between; gap: 6px;">';
+        html += '      <span style="font-family: monospace; font-size: 0.78rem; font-weight: 800; color: #38bdf8; background: rgba(56, 189, 248, 0.12); padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(56,189,248,0.25);">' + item.rj + '</span>';
+        if (item.circle) {
+          html += '      <span style="font-size: 0.7rem; color: #94a3b8; max-width: 110px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="' + safeAttr(item.circle) + '">🏛️ ' + safeAttr(item.circle) + '</span>';
+        }
+        html += '    </div>';
+        html += '    <div style="font-size: 0.82rem; font-weight: 700; color: #fff; line-height: 1.35; max-height: 2.7em; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; margin-top: 2px;" title="' + safeAttr(item.title) + '">' + safeAttr(item.title) + '</div>';
+        if (item.cv) {
+          html += '    <div style="font-size: 0.72rem; color: #38bdf8; margin-top: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="' + safeAttr(item.cv) + '">🎙️ ' + safeAttr(item.cv) + '</div>';
+        }
+        html += '    <div style="margin-top: 6px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,0.08); font-size: 0.7rem; color: ' + (item.selected ? '#38bdf8' : '#ef4444') + '; font-weight: 700; text-align: center;">' + (item.selected ? '✓ Will Import' : '✕ Excluded') + '</div>';
+        html += '  </div>';
+        html += '</div>';
+      });
+
+      container.innerHTML = html;
+    }
+
+    function toggleWaitlistItem(rj) {
+      const item = waitlistItems.find(x => x.rj === rj);
+      if (item) {
+        item.selected = !item.selected;
+        renderWaitlistPreview();
+      }
+    }
+
+    function waitlistSelectAll(selectVal) {
+      waitlistItems.forEach(function(x) {
+        if (!waitlistHideImported || !x.inLibrary) {
+          if (waitlistShowSnoozed || !x.isBlacklisted) {
+            x.selected = !!selectVal;
+          }
+        }
+      });
+      renderWaitlistPreview();
+    }
+
+    async function triggerWaitlistScanNow() {
+      if (!isAdmin) {
+        openAdminModal('Please unlock Admin access first.');
+        return;
+      }
+      const btn = document.getElementById('btnWaitlistScanNow');
+      if (btn) { btn.innerText = '⏳ Scanning...'; btn.disabled = true; }
+      showToast('🔄 Scanning hentaiasmr.moe frontpage for new releases...');
+      try {
+        const res = await apiFetch('/api/waitlist/scan', { method: 'POST' });
+        const data = await res.json().catch(() => ({}));
+        showToast('✨ Scan complete! Discovered ' + (data.discoveredCount || 0) + ' works (' + (data.addedCount || 0) + ' new added to WaitList).');
+        await openWaitlistModal();
+      } catch (err) {
+        alert('Frontpage scan failed: ' + err.message);
+      } finally {
+        if (btn) { btn.innerText = '🔄 Scan Now'; btn.disabled = false; }
+      }
+    }
+
+    async function discardSelectedWaitlist() {
+      if (!isAdmin) {
+        openAdminModal('Please unlock Admin access first.');
+        return;
+      }
+      const selected = waitlistItems.filter(x => x.selected);
+      if (selected.length === 0) {
+        alert('Please select at least 1 work to discard.');
+        return;
+      }
+      if (!confirm('Discard ' + selected.length + ' selected work(s) from WaitList?')) return;
+      showToast('🗑️ Discarding ' + selected.length + ' works from WaitList...');
+      try {
+        for (const item of selected) {
+          await apiFetch('/api/waitlist/' + encodeURIComponent(item.rj), { method: 'DELETE' });
+        }
+        showToast('✨ Removed selected works from WaitList.');
+        await openWaitlistModal();
+      } catch (err) {
+        alert('Failed to discard works: ' + err.message);
+      }
+    }
+
+    async function clearAllWaitlistItems() {
+      if (!isAdmin) {
+        openAdminModal('Please unlock Admin access first.');
+        return;
+      }
+      if (!confirm('Are you sure you want to completely clear the WaitList?')) return;
+      try {
+        await apiFetch('/api/waitlist/CLEAR_ALL', { method: 'DELETE' });
+        showToast('✨ Cleared WaitList.');
+        await openWaitlistModal();
+      } catch (err) {
+        alert('Failed to clear WaitList: ' + err.message);
+      }
+    }
+
+    async function startWaitlistExecution() {
+      if (!isAdmin) {
+        openAdminModal('Please unlock Admin access first to import works.');
+        return;
+      }
+      const selectedItems = waitlistItems.filter(x => x.selected);
+      if (selectedItems.length === 0) {
+        alert('Please select at least 1 work to import.');
+        return;
+      }
+
+      // Short-Term Blacklist: Unchecked visible works in WaitList get snoozed and evicted from WaitList
+      const uncheckedItems = waitlistItems.filter(x => !x.selected && !x.inLibrary);
+      if (uncheckedItems.length > 0) {
+        await snoozeUncheckedWorks(uncheckedItems, 'WaitList Import');
+        // Delete unchecked snoozed works from active WaitList in ONE batch request
+        await apiFetch('/api/waitlist/remove', {
+          method: 'POST',
+          body: JSON.stringify({ rjCodes: uncheckedItems.map(it => it.rj) })
+        }).catch(() => {});
+      }
+
+      closeWaitlistModal();
+
+      // Launch batch import queue
+      await executeBatchImportRjList(selectedItems, 'WaitList Import (' + selectedItems.length + ' works)', { keepModalOpen: false, rawItems: selectedItems });
+
+      // Automatically remove picked works from WaitList after initiating import (single batch request)
+      await apiFetch('/api/waitlist/remove', {
+        method: 'POST',
+        body: JSON.stringify({ rjCodes: selectedItems.map(it => it.rj) })
+      }).catch(() => {});
+      updateWaitlistBadge();
     }
 
     async function executeBatchImportRjList(rjList, batchLabel, options = {}) {
@@ -12310,6 +14695,17 @@ const INDEX_HTML = `<!DOCTYPE html>
       }
       if (!rjList || rjList.length === 0) return;
       const cleanList = [...new Set((rjList || []).map(extractRj).filter(Boolean))];
+
+      // Known facts per work (post id / link / source) so the resolver can skip rediscovery
+      const jobHints = {};
+      if (options.rawItems && Array.isArray(options.rawItems)) {
+        options.rawItems.forEach(it => {
+          if (it && typeof it === 'object' && it.postId) {
+            const k = extractRj(it.rj || it.rjCode || '');
+            if (k) jobHints[k] = { postId: it.postId, postLink: it.postLink || '', source: it.source || 'hentaiasmr.moe' };
+          }
+        });
+      }
 
       if (cleanList.length === 0) {
         alert('No valid RJ/VJ/BJ codes found to import.');
@@ -12346,6 +14742,7 @@ const INDEX_HTML = `<!DOCTYPE html>
         id: nextBatchId++,
         name: batchLabel || ('Batch #' + (importBatchQueue.length + 1) + ' (' + cleanList.length + ' works)'),
         rjList: cleanList,
+        hints: jobHints,
         total: cleanList.length,
         current: 0,
         succeeded: 0,
@@ -12450,7 +14847,7 @@ const INDEX_HTML = `<!DOCTYPE html>
             try {
               const res = await apiFetch('/api/library/resolve', {
                 method: 'POST',
-                body: JSON.stringify({ rjCode: rj, saveImmediately: false })
+                body: JSON.stringify({ rjCode: rj, saveImmediately: false, hints: (activeJob.hints && activeJob.hints[rj]) || undefined })
               });
 
               let data = null;

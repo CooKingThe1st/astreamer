@@ -1,5 +1,22 @@
 # 📜 aStreamer Release Notes
 
+## 🚀 Version 2.5.1 — Dual-Deck Mobile Positioning & Floating Corner Player Polish
+
+### 📱 1. Adaptive Mobile Scroll Jump Widget (`#scrollTopBottomWidget`)
+- **Dual-Deck Stack Clearance**: Dynamically elevated bottom offset from 154px (single deck) to `264px` in dual-deck mode (`body.has-deck-b`), guaranteeing unobstructed clearance above stacked playback control tiers on mobile displays.
+- **Single-Deck Refinement**: Anchored to `154px` on mobile screens, perfectly balancing visibility between the single bottom playback bar and view content.
+
+### 🎛️ 2. Dual-Deck Mobile Tier Display Isolation
+- **Eliminated Phantom Slot B**: Added explicit `.player-tier-b { display: none !important; }` and `body.has-deck-b .player-tier-b { display: grid !important; }` under `@media (max-width: 768px)`, preventing empty Deck B tiers from rendering on mobile when only Deck A is active.
+
+### 🎨 3. Floating Corner Player & Audio Mixer Polish
+- **Full-Width Edge-to-Edge Spacing**: Refactored `.mixer-nav-tabs` and `.popup-secondary-actions` with flexible auto-expanding items (`flex: 1`), removing awkward gaps and stretching buttons evenly across the top header and action row.
+- **Deck B Action Parity**: Added the missing CV voice actor filter button and shuffle button to Deck B's popup tab for full feature parity with Deck A.
+- **Streamlined UI Clutter**: Cleaned up redundant labels (`Direct Audio`, `audio deck`, redundant detail jump buttons) and evenly balanced the 50/50 split between Mixer Mode and Dual Deck playback controls.
+- **Corner Anchor Fix**: Repositioned the floating player to sit cleanly at the lower right corner (`bottom: 16px; right: 16px`).
+
+---
+
 ## 🌟 Version 2.1.0 (Stable) — Major Milestone Release
 
 ### 🖼️ 1. Multi-Source Bonus Illustration & Gallery Architecture
