@@ -948,7 +948,28 @@ async function fetchDlsiteMetadata(rjCode) {
         }
       }
 
-      let imgUrl = dlsiteMeta?.rawCoverUrl || (typeof item.image_main === 'string' ? item.image_main : (item.image_main?.url || item.work_image || ''));
+      let dlsiteCover = '';
+      if (item.image_main) {
+        if (typeof item.image_main === 'string') dlsiteCover = item.image_main;
+        else if (item.image_main.relative_url) dlsiteCover = 'https://img.dlsite.jp/' + item.image_main.relative_url;
+        else if (item.image_main.url) dlsiteCover = item.image_main.url;
+      }
+      if (!dlsiteCover && item.work_image) dlsiteCover = item.work_image;
+
+      let parentRj = dlsiteMeta?.parentRj || '';
+      if (!parentRj && Array.isArray(item.language_editions)) {
+        const jpn = item.language_editions.find(e => e && (e.lang === 'JPN' || e.label === '日本語'));
+        if (jpn && jpn.workno && jpn.workno.toUpperCase() !== cleanRj) {
+          parentRj = jpn.workno.toUpperCase();
+        }
+      }
+      if (!parentRj && item.image_main && typeof item.image_main === 'object' && item.image_main.workno) {
+        if (item.image_main.workno.toUpperCase() !== cleanRj) {
+          parentRj = item.image_main.workno.toUpperCase();
+        }
+      }
+
+      let imgUrl = dlsiteMeta?.rawCoverUrl || dlsiteCover;
       if (imgUrl.startsWith('//')) imgUrl = 'https:' + imgUrl;
 
       const isAdult = (item.age_category === 1 || item.age_category_string === 'general') ? false : true;
@@ -961,6 +982,7 @@ async function fetchDlsiteMetadata(rjCode) {
         title: item.work_name || dlsiteMeta?.title || '',
         circle: item.maker_name || dlsiteMeta?.circle || '',
         cv: cv || 'N/A',
+        parentRj: parentRj || dlsiteMeta?.parentRj || '',
         releaseDate: relDate,
         rawCoverUrl: imgUrl,
         tags: tags,

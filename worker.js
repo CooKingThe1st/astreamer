@@ -1230,6 +1230,7 @@ function normRj(code) {
 
 function getCoverCandidates(targetUrl, rjCode) {
   const candidates = [];
+  const deferredSamples = [];
   if (targetUrl) {
     let u = targetUrl.trim();
     if (u.startsWith('//')) u = 'https:' + u;
@@ -1248,20 +1249,25 @@ function getCoverCandidates(targetUrl, rjCode) {
       }
     }
     if (u.startsWith('http://') || u.startsWith('https://')) {
-      candidates.push(u);
+      const isSample = /_img_smp\d+|_smp\d+|_img_sam/i.test(u);
+      if (isSample) {
+        deferredSamples.push(u);
+      } else {
+        candidates.push(u);
+      }
       if (u.includes('api.asmr.one') || u.includes('api.asmr-200.com') || u.includes('api.asmr-300.com') || u.includes('api.asmr-100.com')) {
         const asmrHosts = ['https://api.asmr-200.com', 'https://api.asmr-300.com', 'https://api.asmr.one', 'https://api.asmr-100.com'];
         for (const h of asmrHosts) {
           const alt = u.replace(/https?:\/\/[^\/]+/, h);
-          if (!candidates.includes(alt)) candidates.push(alt);
+          if (!candidates.includes(alt) && !deferredSamples.includes(alt)) candidates.push(alt);
         }
       }
       if (u.includes('/media/download/')) {
         const alt = u.replace('/media/download/', '/media/stream/');
-        if (!candidates.includes(alt)) candidates.push(alt);
+        if (!candidates.includes(alt) && !deferredSamples.includes(alt)) candidates.push(alt);
       } else if (u.includes('/media/stream/')) {
         const alt = u.replace('/media/stream/', '/media/download/');
-        if (!candidates.includes(alt)) candidates.push(alt);
+        if (!candidates.includes(alt) && !deferredSamples.includes(alt)) candidates.push(alt);
       }
     }
   }
@@ -1295,13 +1301,25 @@ function getCoverCandidates(targetUrl, rjCode) {
       `https://img.dlsite.jp/modpub/images2/work/books/${bucket}/${canonicalRj}_img_main.jpg`,
       `https://img.dlsite.jp/modpub/images2/work/girls/${bucket}/${canonicalRj}_img_main.jpg`,
       `https://img.dlsite.jp/modpub/images2/work/bl/${bucket}/${canonicalRj}_img_main.jpg`,
-      `https://img.dlsite.jp/modpub/images2/work/ai/${bucket}/${canonicalRj}_img_main.jpg`,
+      `https://img.dlsite.jp/modpub/images2/work/ai/${bucket}/${canonicalRj}_img_main.jpg`
+    ];
+
+    for (const item of list) {
+      if (!candidates.includes(item)) candidates.push(item);
+    }
+
+    // Deferred sample slides & banners only as secondary fallback
+    const sampleFallbacks = [
+      ...deferredSamples,
       `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${canonicalRj}_img_sam.jpg`,
       `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${canonicalRj}_img_smp1.jpg`,
       `https://img.dlsite.jp/modpub/images2/work/doujin/${bucket}/${canonicalRj}_smp1.jpg`
     ];
-
-    for (const item of list) {
+    for (const item of sampleFallbacks) {
+      if (!candidates.includes(item)) candidates.push(item);
+    }
+  } else {
+    for (const item of deferredSamples) {
       if (!candidates.includes(item)) candidates.push(item);
     }
   }
@@ -1636,7 +1654,28 @@ async function fetchDlsiteMetadata(rjCode) {
         }
       }
 
-      let imgUrl = dlsiteMeta?.rawCoverUrl || (typeof item.image_main === 'string' ? item.image_main : (item.image_main?.url || item.work_image || ''));
+      let dlsiteCover = '';
+      if (item.image_main) {
+        if (typeof item.image_main === 'string') dlsiteCover = item.image_main;
+        else if (item.image_main.relative_url) dlsiteCover = 'https://img.dlsite.jp/' + item.image_main.relative_url;
+        else if (item.image_main.url) dlsiteCover = item.image_main.url;
+      }
+      if (!dlsiteCover && item.work_image) dlsiteCover = item.work_image;
+
+      let parentRj = dlsiteMeta?.parentRj || '';
+      if (!parentRj && Array.isArray(item.language_editions)) {
+        const jpn = item.language_editions.find(e => e && (e.lang === 'JPN' || e.label === '日本語'));
+        if (jpn && jpn.workno && jpn.workno.toUpperCase() !== cleanRj) {
+          parentRj = jpn.workno.toUpperCase();
+        }
+      }
+      if (!parentRj && item.image_main && typeof item.image_main === 'object' && item.image_main.workno) {
+        if (item.image_main.workno.toUpperCase() !== cleanRj) {
+          parentRj = item.image_main.workno.toUpperCase();
+        }
+      }
+
+      let imgUrl = dlsiteMeta?.rawCoverUrl || dlsiteCover;
       if (imgUrl.startsWith('//')) imgUrl = 'https:' + imgUrl;
 
       const isAdult = (item.age_category === 1 || item.age_category_string === 'general') ? false : true;
@@ -1648,6 +1687,7 @@ async function fetchDlsiteMetadata(rjCode) {
         title: item.work_name || dlsiteMeta?.title || '',
         circle: item.maker_name || dlsiteMeta?.circle || '',
         cv: cv || 'N/A',
+        parentRj: parentRj || dlsiteMeta?.parentRj || '',
         releaseDate: relDate,
         rawCoverUrl: imgUrl,
         tags: tags,
@@ -11470,20 +11510,20 @@ const INDEX_HTML = `<!DOCTYPE html>
       const isHdGlobal = (typeof getHdEverywhereSetting === 'function') ? getHdEverywhereSetting() : false;
       const allowHd = isDetailView || isHdGlobal;
 
-      let manualLock = (allowHd && typeof getManualCover === 'function' && cleanRjKey) ? getManualCover(cleanRjKey) : null;
-      let rawCover = (allowHd && (work.manualCoverUrl || work.hdCoverUrl)) || manualLock || '';
+      let manualLock = (typeof getManualCover === 'function' && cleanRjKey) ? getManualCover(cleanRjKey) : null;
+      let rawCover = (allowHd && (work.manualCoverUrl || work.hdCoverUrl)) || manualLock || work.manualCoverUrl || '';
 
       // Enrich work metadata if work is a playlist track or history entry
       if (cleanRjKey && typeof allWorks !== 'undefined' && Array.isArray(allWorks)) {
         const fullWork = allWorks.find(w => normRj(w.rjCode) === cleanRjKey);
         if (fullWork) {
-          if (!manualLock && allowHd) {
-            manualLock = fullWork.manualCoverUrl || fullWork.hdCoverUrl || null;
+          if (!manualLock) {
+            manualLock = fullWork.manualCoverUrl || (allowHd ? fullWork.hdCoverUrl : null) || null;
           }
-          if (!rawCover && allowHd) {
-            rawCover = fullWork.manualCoverUrl || fullWork.hdCoverUrl || manualLock || '';
+          if (!rawCover) {
+            rawCover = manualLock || (allowHd ? (fullWork.manualCoverUrl || fullWork.hdCoverUrl) : fullWork.manualCoverUrl) || '';
           }
-          if (allowHd && (!work.gallery || work.gallery.length === 0) && fullWork.gallery) {
+          if ((!work.gallery || work.gallery.length === 0) && fullWork.gallery) {
             work.gallery = fullWork.gallery;
           }
           if (!work.parentRj && fullWork.parentRj) {
@@ -11520,34 +11560,51 @@ const INDEX_HTML = `<!DOCTYPE html>
         }
       }
 
-      // If allowHd is active and cover is generic DLsite or missing, or if cover is completely missing/placeholder
       const isPlaceholder = !rawCover || rawCover.includes('placeholder') || rawCover.includes('no-image');
       const isDlsiteSequence = rawCover.includes('img.dlsite.jp');
+      const isSampleImage = /_img_smp\d+|_smp\d+|_img_sam/i.test(rawCover);
 
-      if (isPlaceholder || (allowHd && isDlsiteSequence && !manualLock)) {
-        if (work.parentRj) {
-          const pNum = work.parentRj.replace(/\D/g, '').replace(/^0+/, '');
-          if (pNum) {
-            return { coverUrl: '/image-proxy?url=' + encodeURIComponent('https://api.asmr-200.com/api/cover/' + pNum + '.jpg?type=main') + (work.rjCode ? '&rj=' + encodeURIComponent(work.rjCode) : ''), isDisguised: false };
+      // Check 1: Manual user lock takes absolute priority
+      if (manualLock) {
+        return { coverUrl: manualLock.startsWith('/image-proxy') ? manualLock : ('/image-proxy?url=' + encodeURIComponent(manualLock) + (work.rjCode ? '&rj=' + encodeURIComponent(work.rjCode) : '')), isDisguised: false };
+      }
+
+      // Check 2: If work has a parentRj, the parent RJ's main cover is the authentic artwork!
+      if (work.parentRj && (isPlaceholder || isDlsiteSequence || isSampleImage)) {
+        const pNum = work.parentRj.replace(/\D/g, '').replace(/^0+/, '');
+        if (pNum) {
+          return { coverUrl: '/image-proxy?url=' + encodeURIComponent('https://api.asmr-200.com/api/cover/' + pNum + '.jpg?type=main') + (work.rjCode ? '&rj=' + encodeURIComponent(work.rjCode) : ''), isDisguised: false };
+        }
+      }
+
+      // Check 3: If gallery already discovered an authentic ASMR.one / Weeab0o / non-sample cover:
+      if (Array.isArray(work.gallery) && work.gallery.length > 0 && (isPlaceholder || isDlsiteSequence || isSampleImage || allowHd)) {
+        const asmrItem = work.gallery.find(g => {
+          const u = (g.url || g.proxyUrl || (Array.isArray(g) ? g[1] : '') || '').toLowerCase();
+          const role = (g.role || '').toLowerCase();
+          return (u.includes('asmr') || u.includes('hentaiasmr') || u.includes('weeabo0')) &&
+                 !u.includes('placeholder') &&
+                 !/_img_smp\d+|_smp\d+/i.test(u) &&
+                 role !== 'sample';
+        });
+        if (asmrItem) {
+          let u = asmrItem.url || asmrItem.proxyUrl || (Array.isArray(asmrItem) ? asmrItem[1] : '');
+          u = typeof u === 'string' ? u : String(u || '');
+          if (u.startsWith('/image-proxy?url=')) {
+            try { u = decodeURIComponent(u.replace('/image-proxy?url=', '')); } catch(e) {}
+          }
+          if (u.startsWith('http')) {
+            return { coverUrl: '/image-proxy?url=' + encodeURIComponent(u) + (work.rjCode ? '&rj=' + encodeURIComponent(work.rjCode) : ''), isDisguised: false };
           }
         }
-        if (allowHd && Array.isArray(work.gallery) && work.gallery.length > 0) {
-          const asmrItem = work.gallery.find(g => {
-            const u = (g.url || g.proxyUrl || (Array.isArray(g) ? g[1] : '') || '').toLowerCase();
-            return (u.includes('asmr') || u.includes('hentaiasmr') || u.includes('weeabo0')) && !u.includes('placeholder');
-          });
-          if (asmrItem) {
-            let u = asmrItem.url || asmrItem.proxyUrl || (Array.isArray(asmrItem) ? asmrItem[1] : '');
-            u = typeof u === 'string' ? u : String(u || '');
-            if (u.startsWith('/image-proxy?url=')) {
-              try { u = decodeURIComponent(u.replace('/image-proxy?url=', '')); } catch(e) {}
-            }
-            if (u.startsWith('http')) {
-              return { coverUrl: '/image-proxy?url=' + encodeURIComponent(u) + (work.rjCode ? '&rj=' + encodeURIComponent(work.rjCode) : ''), isDisguised: false };
-            }
-          }
+      }
+
+      // Check 4: If cover is a placeholder or a DLsite sample image (_img_smp), delegate to /image-proxy?rj=...
+      // which automatically queries ASMR.one / authentic package art first!
+      if (isPlaceholder || isSampleImage) {
+        if (work.rjCode) {
+          return { coverUrl: '/image-proxy?rj=' + encodeURIComponent(work.rjCode), isDisguised: false };
         }
-        if (work.rjCode) return { coverUrl: '/image-proxy?rj=' + encodeURIComponent(work.rjCode), isDisguised: false };
       }
 
       if (rawCover && rawCover.startsWith('http')) {
