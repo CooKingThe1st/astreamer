@@ -1,5 +1,25 @@
 # 📜 aStreamer Release Notes
 
+## 🚀 Version 2.5.2 — Real-Time Upstream Network Health & Live Status LEDs
+
+### 🌐 1. Live Upstream Network Diagnostics & LED Indicator Bar
+- **Persistent Multi-Service LED Bar**: Added a sleek status bar in the desktop sidebar and mobile header featuring animated glowing LED indicators for all 4 primary network dependencies:
+  - 🟢/🔴/🟡 **DLsite & Chobit**: Official catalog metadata API & Chobit sample preview audio streaming.
+  - 🟢/🔴/🟡 **HentaiASMR Moe**: Complete audio tracks, chapter timestamps, and JWPlayer stream rips.
+  - 🟢/🔴/🟡 **JapaneseASMR (Weeab0o)**: High-speed master MP3 & HLS audio stream mirror CDN.
+  - 🟢/🔴/🟡 **ASMR.one**: Track tree illustration booklets, bilingual tag dictionary, and CGs.
+- **Color-Coded Status Thresholds**:
+  - 🟢 **Online**: Sub-3000ms response with HTTP 200 OK.
+  - 🟡 **Degraded / Challenge**: Cloudflare Turnstile/Bot Challenge (403), high latency (>3s), or endpoint redirects.
+  - 🔴 **Offline**: Connection timeout (>5s) or upstream 5xx server failure.
+
+### ⚡ 2. Instant On-Demand Connection Testing
+- **Settings Diagnostics Card**: Added a dedicated status grid at the top of `⚙️ Settings` displaying live round-trip latency (ms), HTTP status codes, and diagnostic explanations for each service.
+- **"⚡ Test Connections Now" Button**: Provides one-click verification across all 4 services with real-time UI updates and dev logging.
+- **Zero-Block Background Initialization**: Probes upstreams automatically 1.2s after app boot without delaying page render, with 60-second client-side throttling to prevent upstream rate limits.
+
+---
+
 ## 🚀 Version 2.5.1 — Dual-Deck Mobile Positioning & Floating Corner Player Polish
 
 ### 📱 1. Adaptive Mobile Scroll Jump Widget (`#scrollTopBottomWidget`)

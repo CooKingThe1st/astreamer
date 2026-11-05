@@ -358,6 +358,133 @@ app.post('/api/settings', checkAuth, (req, res) => {
   res.json({ success: true, settings: updated });
 });
 
+// ==========================================
+// UPSTREAM SERVICE HEALTH DIAGNOSTICS
+// ==========================================
+async function checkUpstreamHealth() {
+  const targets = [
+    {
+      id: 'dlsite',
+      name: 'DLsite & Chobit',
+      desc: 'Catalog metadata, tags, and Chobit preview sample audio clips',
+      url: 'https://www.dlsite.com/maniax/api/=/product.json?workno=RJ01142278',
+      chobitUrl: 'https://chobit.cc/api/v1/dlsite/embed?workno=RJ01624439',
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Referer': 'https://www.dlsite.com/' }
+    },
+    {
+      id: 'hentaiasmr',
+      name: 'HentaiASMR Moe',
+      desc: 'WordPress REST API, post pages, and JWPlayer audio stream rips',
+      url: 'https://hentaiasmr.moe/wp-json/wp/v2/posts?per_page=1',
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+    },
+    {
+      id: 'japaneseasmr',
+      name: 'JapaneseASMR (Weeab0o)',
+      desc: 'High-speed master MP3 & HLS audio stream mirror CDN',
+      url: 'https://v.weeab0o.xyz/RJ01142278.mp3',
+      method: 'HEAD',
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Referer': 'https://japaneseasmr.com/' }
+    },
+    {
+      id: 'asmrone',
+      name: 'ASMR.one Public API',
+      desc: 'Track tree illustration booklets, bilingual tag dictionary, and CGs',
+      url: 'https://api.asmr-200.com/api/work/1688885',
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Referer': 'https://www.asmr.one/' }
+    }
+  ];
+
+  const results = await Promise.all(targets.map(async (t) => {
+    const t0 = Date.now();
+    try {
+      const res = await fetch(t.url, {
+        method: t.method || 'GET',
+        headers: t.headers,
+        signal: AbortSignal.timeout(5000)
+      });
+      const latencyMs = Date.now() - t0;
+      let state = 'online';
+      let note = `${res.status} ${res.statusText || 'OK'}`;
+
+      if (res.status === 403) {
+        state = 'degraded';
+        note = '403 Forbidden (Cloudflare Bot Challenge active)';
+      } else if (res.status >= 500) {
+        state = 'offline';
+        note = `${res.status} Upstream Server Error`;
+      } else if (res.status === 404) {
+        state = 'degraded';
+        note = '404 Endpoint Not Found';
+      } else if (res.ok) {
+        state = latencyMs > 3000 ? 'degraded' : 'online';
+        if (state === 'degraded') note += ' (High Latency)';
+      }
+
+      if (t.id === 'dlsite' && t.chobitUrl) {
+        try {
+          const ct0 = Date.now();
+          const cRes = await fetch(t.chobitUrl, { headers: t.headers, signal: AbortSignal.timeout(4000) });
+          const cLat = Date.now() - ct0;
+          if (cRes.ok) {
+            note = `DLsite: ${res.status} OK (${latencyMs}ms) • Chobit Audio: 200 OK (${cLat}ms)`;
+          } else {
+            note = `DLsite: ${res.status} OK • Chobit Audio: ${cRes.status}`;
+          }
+        } catch(ce) {
+          note = `DLsite: ${res.status} OK • Chobit Audio: Timeout/Unavailable`;
+        }
+      }
+
+      return {
+        id: t.id,
+        name: t.name,
+        desc: t.desc,
+        url: t.url,
+        status: res.status,
+        ok: res.ok,
+        state: state,
+        latencyMs: latencyMs,
+        note: note,
+        checkedAt: new Date().toISOString()
+      };
+    } catch (err) {
+      const latencyMs = Date.now() - t0;
+      return {
+        id: t.id,
+        name: t.name,
+        desc: t.desc,
+        url: t.url,
+        status: 0,
+        ok: false,
+        state: 'offline',
+        latencyMs: latencyMs,
+        note: err.name === 'TimeoutError' ? 'Connection Timeout (>5s)' : (err.message || 'Network Unreachable'),
+        checkedAt: new Date().toISOString()
+      };
+    }
+  }));
+
+  const hasOffline = results.some(r => r.state === 'offline');
+  const hasDegraded = results.some(r => r.state === 'degraded');
+  const overall = hasOffline ? 'offline' : (hasDegraded ? 'degraded' : 'online');
+
+  return {
+    overall,
+    checkedAt: new Date().toISOString(),
+    services: results
+  };
+}
+
+app.get('/api/diagnostics/upstream-health', async (req, res) => {
+  try {
+    const data = await checkUpstreamHealth();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 const isAuthenticatedReq = (req) => {
   const cookies = parseCookies(req);
   const token = cookies.astreamer_session ||
@@ -2179,6 +2306,89 @@ const INDEX_HTML = `<!DOCTYPE html>
     .chapter-row.active td { font-weight: 700; }
     .timestamp-btn { background: rgba(56, 189, 248, 0.14); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.35); font-family: monospace; font-size: 0.82rem; font-weight: 700; padding: 3px 8px; border-radius: 6px; cursor: pointer; transition: 0.15s; display: inline-flex; align-items: center; gap: 4px; }
     .timestamp-btn:hover { background: #38bdf8; color: #000; box-shadow: 0 0 10px rgba(56, 189, 248, 0.4); }
+    
+    /* Upstream Network Connectivity & LED Indicators */
+    .led-indicator {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      transition: background 0.3s ease, box-shadow 0.3s ease;
+    }
+    .led-green {
+      background: #22c55e;
+      box-shadow: 0 0 8px #22c55e, 0 0 16px rgba(34, 197, 94, 0.4);
+    }
+    .led-yellow {
+      background: #f59e0b;
+      box-shadow: 0 0 8px #f59e0b, 0 0 16px rgba(245, 158, 11, 0.4);
+    }
+    .led-red {
+      background: #ef4444;
+      box-shadow: 0 0 8px #ef4444, 0 0 16px rgba(239, 68, 68, 0.4);
+    }
+    .led-gray {
+      background: #64748b;
+      box-shadow: none;
+    }
+    .led-pulsing {
+      animation: ledPulse 2s infinite ease-in-out;
+    }
+    @keyframes ledPulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.6; transform: scale(0.9); }
+    }
+
+    .sidebar-upstream-bar {
+      margin-bottom: 14px;
+      padding: 10px 12px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      cursor: pointer;
+      transition: background 0.2s, border-color 0.2s;
+    }
+    .sidebar-upstream-bar:hover {
+      background: rgba(255, 255, 255, 0.06);
+      border-color: rgba(56, 189, 248, 0.4);
+    }
+    .sidebar-upstream-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 0.76rem;
+      font-weight: 700;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+    .sidebar-upstream-leds {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 4px;
+      flex-wrap: wrap;
+    }
+    .upstream-led-item {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: var(--text-main);
+    }
+    .upstream-badge-pill {
+      font-size: 0.68rem;
+      font-weight: 800;
+      padding: 1px 6px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .badge-green { background: rgba(34, 197, 94, 0.15); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.35); }
+    .badge-yellow { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.35); }
+    .badge-red { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.35); }
+
     .nav-badge { background: #38bdf8; color: #050608; font-size: 0.65rem; font-weight: 800; padding: 1px 6px; border-radius: 10px; margin-left: auto; display: inline-block; }
     .wishlist-row { transition: 0.15s; }
     .wishlist-row:hover { background: var(--bg-card-hover); }
@@ -3684,13 +3894,18 @@ const INDEX_HTML = `<!DOCTYPE html>
           <div style="width: 36px; height: 36px; border-radius: 10px; background: var(--accent-gradient, linear-gradient(135deg, #ff7a00, #ff9500)); display: flex; align-items: center; justify-content: center; font-size: 1.3rem; box-shadow: 0 0 14px var(--accent-glow);">🚀</div>
           <div>
             <h3 style="font-size: 1.3rem; font-weight: 800;">aStreamer Release Notes</h3>
-            <span style="font-size: 0.8rem; color: var(--accent); font-weight: 700;">Version 2.5.1 Official Release (Dual-Deck Mobile &amp; Corner Player Polish)</span>
+            <span style="font-size: 0.8rem; color: var(--accent); font-weight: 700;">Version 2.5.2 Official Release (Upstream Health &amp; Live LEDs)</span>
           </div>
         </div>
         <button class="btn-outline" style="padding: 4px 10px;" onclick="closeChangelogModal()">✖</button>
       </div>
       
       <div style="color: #d1d5db; font-size: 0.9rem; line-height: 1.6; display: flex; flex-direction: column; gap: 14px;">
+        <div style="background: rgba(34, 197, 94, 0.12); border: 1px solid rgba(34, 197, 94, 0.4); padding: 14px; border-radius: 10px;">
+          <h4 style="color: #4ade80; font-weight: 700; margin-bottom: 4px;">🌐 Live Upstream Network Diagnostics &amp; Status LEDs (v2.5.2)</h4>
+          <p style="color: var(--text-muted); font-size: 0.85rem;">Added persistent real-time glowing LED indicators in sidebar &amp; mobile header for DLsite, Chobit Sample Audio, HentaiASMR Moe, JapaneseASMR, and ASMR.one. Includes on-demand 1-click test button and latency measurements in Settings.</p>
+        </div>
+
         <div style="background: rgba(56, 189, 248, 0.12); border: 1px solid rgba(56, 189, 248, 0.4); padding: 14px; border-radius: 10px;">
           <h4 style="color: #38bdf8; font-weight: 700; margin-bottom: 4px;">📱 Dual-Deck Mobile Positioning &amp; Corner Player (v2.5.1)</h4>
           <p style="color: var(--text-muted); font-size: 0.85rem;">Adaptive bottom clearance for scroll navigation widget (264px dual-deck / 154px single), strict mobile Deck B isolation, full-width edge-to-edge corner player tabs and secondary action rows, plus CV tag filter &amp; shuffle buttons on Deck B.</p>
@@ -4337,6 +4552,7 @@ const INDEX_HTML = `<!DOCTYPE html>
     <button class="mobile-pill" onclick="openImportModal()">📥 Import</button>
     <button class="mobile-pill" onclick="openPageImportModal()">📑 Page Import</button>
     <button class="mobile-pill" onclick="openDevLogModal()">🛠️ Logs</button>
+    <button class="mobile-pill" id="mobileUpstreamPill" onclick="switchView('settings')" title="Upstream Connectivity Status"><span id="mobileMiniLed" class="led-indicator led-gray" style="width:7px; height:7px;"></span> 🌐 Upstreams</button>
     <button class="mobile-pill" onclick="openChangelogModal()">📜 Notes</button>
     <a href="#/settings" class="mobile-pill" data-view="settings" onclick="if(!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0){ event.preventDefault(); switchView('settings'); }">⚙️ Settings</a>
     <button class="mobile-pill" id="mobileAdminBtn" onclick="toggleAdminModal()">🔓 Admin</button>
@@ -4373,6 +4589,21 @@ const INDEX_HTML = `<!DOCTYPE html>
 
     <!-- Sidebar Quick Add -->
     <button class="btn-primary" style="width: 100%; justify-content: center; margin-bottom: 12px; padding: 10px;" onclick="quickAddRj()">+ Add RJ Code</button>
+
+    <!-- Sidebar Upstream Live Connectivity Bar -->
+    <div id="sidebarUpstreamBar" class="sidebar-upstream-bar" onclick="switchView('settings')" title="Upstream Connection Status • Click to open Settings Diagnostics">
+      <div class="sidebar-upstream-title">
+        <span style="display:flex; align-items:center; gap:5px;">🌐 Upstreams</span>
+        <span id="sidebarUpstreamBadge" class="upstream-badge-pill badge-green">Testing...</span>
+      </div>
+      <div class="sidebar-upstream-leds">
+        <span class="upstream-led-item" title="DLsite & Chobit Preview Audio"><span id="miniLed_dlsite" class="led-indicator led-gray"></span> DLsite</span>
+        <span class="upstream-led-item" title="HentaiASMR Moe Streams"><span id="miniLed_hentaiasmr" class="led-indicator led-gray"></span> Moe</span>
+        <span class="upstream-led-item" title="JapaneseASMR Weeab0o Audio"><span id="miniLed_japaneseasmr" class="led-indicator led-gray"></span> Weeab</span>
+        <span class="upstream-led-item" title="ASMR.one Public Mirror"><span id="miniLed_asmrone" class="led-indicator led-gray"></span> ASMR.1</span>
+      </div>
+    </div>
+
 
     <!-- Sidebar Background Ingestion Widget (Top Position for Instant Visibility) -->
     <div id="sidebarImportWidget" style="display: none; margin-bottom: 16px; padding: 12px; background: rgba(56, 189, 248, 0.12); border: 1px solid rgba(56, 189, 248, 0.45); border-radius: 10px; box-shadow: 0 4px 16px rgba(0,0,0,0.6); animation: pulseWidget 2s infinite;">
@@ -6383,6 +6614,7 @@ const INDEX_HTML = `<!DOCTYPE html>
         try { history.scrollRestoration = 'manual'; } catch(e) {}
       }
       try { initAnalytics(); } catch(e) { console.error('Error initializing analytics:', e); }
+      setTimeout(() => { testUpstreamConnections(false); }, 1200);
       try { updateShuffleUI(); } catch(e) { console.error('Error updating shuffle UI:', e); }
       try { setupMediaSessionHandlers(); } catch(e) { console.error('Error setting up media session:', e); }
       try { syncTagDictionary(); } catch(e) { console.error('Error syncing tag dictionary:', e); }
@@ -6764,6 +6996,132 @@ const INDEX_HTML = `<!DOCTYPE html>
       document.querySelectorAll('.dev-log-filter-btn').forEach(b => b.classList.remove('active'));
       if (btn) btn.classList.add('active');
       renderDevLogTail();
+    }
+
+    
+    // Upstream Connectivity Live Diagnostics & Indicator LEDs
+    let cachedUpstreamHealth = null;
+    let isTestingUpstreams = false;
+
+    function renderUpstreamHealthCards(data) {
+      if (!data || !Array.isArray(data.services) || data.services.length === 0) {
+        return '<div style="grid-column: 1 / -1; padding: 24px; text-align: center; color: var(--text-muted); background: rgba(255,255,255,0.02); border-radius: 8px; border: 1px dashed rgba(255,255,255,0.1);">⏳ Testing network connections to upstream audio & metadata providers...</div>';
+      }
+
+      const stateColors = {
+        online: { led: 'led-green', badge: 'badge-green', label: 'ONLINE', icon: '🟢', border: 'rgba(34, 197, 94, 0.35)', bg: 'rgba(34, 197, 94, 0.05)' },
+        degraded: { led: 'led-yellow', badge: 'badge-yellow', label: 'DEGRADED', icon: '🟡', border: 'rgba(245, 158, 11, 0.4)', bg: 'rgba(245, 158, 11, 0.06)' },
+        offline: { led: 'led-red', badge: 'badge-red', label: 'OFFLINE', icon: '🔴', border: 'rgba(239, 68, 68, 0.4)', bg: 'rgba(239, 68, 68, 0.06)' }
+      };
+
+      let html = '';
+      data.services.forEach(function(s) {
+        const conf = stateColors[s.state] || stateColors.offline;
+        html += '<div style="background: ' + conf.bg + '; border: 1px solid ' + conf.border + '; border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.25);">';
+        html += '  <div style="display: flex; align-items: center; justify-content: space-between;">';
+        html += '    <div style="display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 0.95rem; color: #fff;">';
+        html += '      <span class="led-indicator ' + conf.led + ' led-pulsing"></span>';
+        html += '      <span>' + safeAttr(s.name) + '</span>';
+        html += '    </div>';
+        html += '    <span class="upstream-badge-pill ' + conf.badge + '">' + conf.label + '</span>';
+        html += '  </div>';
+        html += '  <div style="font-size: 0.78rem; color: #94a3b8; line-height: 1.35;">' + safeAttr(s.desc) + '</div>';
+        html += '  <div style="display: flex; align-items: center; justify-content: space-between; font-size: 0.72rem; margin-top: auto; padding-top: 6px; border-top: 1px solid rgba(255,255,255,0.06);">';
+        html += '    <span style="font-family: monospace; color: ' + (s.ok ? '#38bdf8' : (s.state === 'degraded' ? '#fbbf24' : '#ef4444')) + '; font-weight: 700;">' + safeAttr(s.note) + '</span>';
+        html += '    <span style="font-family: monospace; color: #94a3b8;">⚡ ' + s.latencyMs + 'ms</span>';
+        html += '  </div>';
+        html += '</div>';
+      });
+      return html;
+    }
+
+    async function testUpstreamConnections(force) {
+      if (isTestingUpstreams) return;
+      if (!force && cachedUpstreamHealth && (Date.now() - new Date(cachedUpstreamHealth.checkedAt).getTime() < 60000)) {
+        updateUpstreamUI(cachedUpstreamHealth);
+        return;
+      }
+
+      isTestingUpstreams = true;
+      const btn = document.getElementById('btnTestUpstreams');
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '⏳ Testing...';
+      }
+
+      const sidebarBadge = document.getElementById('sidebarUpstreamBadge');
+      if (sidebarBadge) {
+        sidebarBadge.className = 'upstream-badge-pill badge-yellow';
+        sidebarBadge.innerText = 'TESTING...';
+      }
+
+      try {
+        const res = await apiFetch('/api/diagnostics/upstream-health');
+        const data = await res.json();
+        if (data && Array.isArray(data.services)) {
+          cachedUpstreamHealth = data;
+          updateUpstreamUI(data);
+          if (force) showToast('🌐 Upstream connection health check complete!');
+        }
+      } catch (err) {
+        console.error('Failed to probe upstream health:', err);
+      } finally {
+        isTestingUpstreams = false;
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = '⚡ Test Connections Now';
+        }
+      }
+    }
+
+    function updateUpstreamUI(data) {
+      if (!data) return;
+      
+      const badgeClasses = {
+        online: 'badge-green',
+        degraded: 'badge-yellow',
+        offline: 'badge-red'
+      };
+      const badgeClass = badgeClasses[data.overall] || 'badge-yellow';
+      const badgeText = (data.overall || 'UNKNOWN').toUpperCase();
+
+      const sidebarBadge = document.getElementById('sidebarUpstreamBadge');
+      if (sidebarBadge) {
+        sidebarBadge.className = 'upstream-badge-pill ' + badgeClass;
+        sidebarBadge.innerText = badgeText;
+      }
+
+      const settingsBadge = document.getElementById('settingsOverallBadge');
+      if (settingsBadge) {
+        settingsBadge.className = 'upstream-badge-pill ' + badgeClass;
+        settingsBadge.innerText = badgeText;
+      }
+
+      const mobileLed = document.getElementById('mobileMiniLed');
+      if (mobileLed) {
+        mobileLed.className = 'led-indicator led-' + (data.overall === 'online' ? 'green' : (data.overall === 'degraded' ? 'yellow' : 'red'));
+      }
+
+      if (Array.isArray(data.services)) {
+        data.services.forEach(function(s) {
+          const ledEl = document.getElementById('miniLed_' + s.id);
+          if (ledEl) {
+            const c = (s.state === 'online') ? 'led-green' : (s.state === 'degraded' ? 'led-yellow' : 'led-red');
+            ledEl.className = 'led-indicator ' + c + ' led-pulsing';
+            ledEl.title = s.name + ': ' + s.note + ' (' + s.latencyMs + 'ms)';
+          }
+        });
+      }
+
+      const gridEl = document.getElementById('upstreamServiceGrid');
+      if (gridEl) {
+        gridEl.innerHTML = renderUpstreamHealthCards(data);
+      }
+
+      const lastCheckedEl = document.getElementById('upstreamLastCheckedText');
+      if (lastCheckedEl && data.checkedAt) {
+        lastCheckedEl.innerText = 'Last tested: ' + new Date(data.checkedAt).toLocaleTimeString();
+      }
     }
 
     function renderDevLogTail() {
@@ -9670,6 +10028,28 @@ const INDEX_HTML = `<!DOCTYPE html>
       updatePageTitle('Settings');
       const container = document.getElementById('viewContainer');
       let html = '<div class="section-header"><h1 class="section-title">⚙️ App Settings</h1></div>';
+
+      // 🌐 Upstream Connectivity & Diagnostics Card
+      html += '<div class="settings-card" id="upstreamDiagnosticsCard">';
+      html += '  <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 8px;">';
+      html += '    <div>';
+      html += '      <h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 4px; display: flex; align-items: center; gap: 8px;">';
+      html += '        <span>🌐 Upstream Connectivity &amp; Service Health</span>';
+      html += '        <span id="settingsOverallBadge" class="upstream-badge-pill badge-green">Testing...</span>';
+      html += '      </h3>';
+      html += '      <p style="color: var(--text-muted); font-size: 0.88rem; margin: 0;">Live status and latency to external catalog APIs, preview audio endpoints, and audio CDNs.</p>';
+      html += '    </div>';
+      html += '    <button class="btn-primary" id="btnTestUpstreams" onclick="testUpstreamConnections(true)" style="padding: 8px 16px; font-size: 0.85rem; font-weight: 700; display: inline-flex; align-items: center; gap: 6px;">⚡ Test Connections Now</button>';
+      html += '  </div>';
+      html += '  <div id="upstreamServiceGrid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; margin-top: 14px;">';
+      html += renderUpstreamHealthCards(cachedUpstreamHealth);
+      html += '  </div>';
+      html += '  <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; font-size: 0.75rem; color: var(--text-muted); margin-top: 14px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.06);">';
+      html += '    <span id="upstreamLastCheckedText">' + (cachedUpstreamHealth ? ('Last tested: ' + new Date(cachedUpstreamHealth.checkedAt).toLocaleTimeString()) : 'Testing upstreams...') + '</span>';
+      html += '    <span style="color: #94a3b8;">🟢 Online • 🟡 Degraded / Challenge • 🔴 Down</span>';
+      html += '  </div>';
+      html += '</div>';
+
       
       // 🎨 Theme Accent Color Card (v2.0)
       html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🎨 Theme Accent Color (v2.0)</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Customize your personal theme aesthetic across all playback controls, action buttons, and active tabs.</p>';
@@ -9781,8 +10161,8 @@ const INDEX_HTML = `<!DOCTYPE html>
       html += '</div>';
       html += '</div></div>';
 
-      html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🚀 aStreamer v2.5.1 Release</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Dual-Deck Mobile Polish, Cloudflare D1 Native SQLite Database, Sub-Millisecond Search &amp; Infinite Scaling.</p>';
-      html += '<button class="btn-outline" onclick="openChangelogModal()">📜 View Version 2.5.1 Release Notes & Architecture</button></div>';
+      html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🚀 aStreamer v2.5.2 Release</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Dual-Deck Mobile Polish, Cloudflare D1 Native SQLite Database, Sub-Millisecond Search &amp; Infinite Scaling.</p>';
+      html += '<button class="btn-outline" onclick="openChangelogModal()">📜 View Version 2.5.2 Release Notes & Architecture</button></div>';
 
       container.innerHTML = html;
     }
