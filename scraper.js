@@ -573,6 +573,9 @@ async function fetchHentaiAsmrMetadata(cleanRj, options = {}) {
     `https://cdn.hentaiasmr.moe/mf/${postId}/${cleanUpper}.mp3`,
     `https://cdn.hentaiasmr.moe/mf/${postId}/${strippedUpper}.mp3`,
     `https://cdn.hentaiasmr.moe/mf/${postId}/1.mp3`,
+    `https://cdn.hentaiasmr.moe/mf/${postId}/output.mp3`,
+    `https://cdn16.hentaiasmr.moe/mf/${postId}/output.mp3`,
+    `https://cdn-otome.hentaiasmr.moe/mf/${postId}/output.mp3`,
     `https://cdn16.hentaiasmr.moe/audio/${postId}.mp3`,
     `https://cdn.hentaiasmr.moe/audio/${postId}.mp3`,
     `https://cdn-otome.hentaiasmr.moe/audio/${postId}.mp3`,
@@ -1770,6 +1773,35 @@ function extractMoeHtmlTracks(html, postLink, coverUrl, title, rjCode = '') {
         });
       }
     }
+  }
+
+  // Pattern 4.5: Download index tracks JSON array (?tracks=[{"url":"...","name":"..."}])
+  const dlIndexMatch = html.match(/download\/index\.html\?tracks=([^"'<>]+)/i);
+  if (dlIndexMatch) {
+    try {
+      const parsedTracks = JSON.parse(decodeURIComponent(dlIndexMatch[1]));
+      if (Array.isArray(parsedTracks)) {
+        parsedTracks.forEach(pt => {
+          let fUrl = (pt.url || '').replace(/\\\//g, '/').trim();
+          if (fUrl && !isDuplicateTrack(fUrl)) {
+            const trkNum = tracks.length + 1;
+            const trkTitle = pt.name ? pt.name.replace(/\.[a-z0-9]+$/i, '').trim() : `Track ${trkNum}`;
+            tracks.push({
+              id: trkNum,
+              title: trkTitle,
+              rawUrl: fUrl,
+              streamUrl: `/stream?url=${encodeURIComponent(fUrl)}&referer=${encodeURIComponent(pageReferer)}&rj=${encodeURIComponent(cleanRj)}`,
+              category: trkNum === 1 ? 'main' : (trkNum === 2 ? 'freetalk' : 'bonus'),
+              formattedTime: '00:00:00',
+              duration: 0,
+              size: 0,
+              isHls: fUrl.toLowerCase().includes('.m3u8'),
+              poster: coverUrl ? `/image-proxy?url=${encodeURIComponent(coverUrl)}` : ''
+            });
+          }
+        });
+      }
+    } catch(e) {}
   }
 
   // Pattern 5: Direct CDN audio links in script/content (e.g. cdn.hentaiasmr.moe/mf/...)
@@ -3078,6 +3110,40 @@ async function scrapeHentaiAsmrFrontpage() {
     }
   } catch (apiErr) {
     console.error('[Waitlist Scraper] REST API failed, falling back to frontpage HTML:', apiErr.message);
+  }
+
+  // Strategy 1.5: WordPress RSS 2.0 Feed fallback (highly reliable & unblocked)
+  if (discovered.length === 0) {
+    try {
+      const feedRes = await axios.get('https://hentaiasmr.moe/feed/', {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+          'Accept': 'application/rss+xml,application/xml,text/xml,*/*;q=0.9',
+          'Referer': 'https://hentaiasmr.moe/'
+        },
+        httpsAgent,
+        timeout: 8000,
+        validateStatus: () => true
+      });
+      if (feedRes.status === 200 && typeof feedRes.data === 'string') {
+        const feedText = feedRes.data;
+        const items = [...feedText.matchAll(/<item>([\s\S]*?)<\/item>/gi)];
+        for (const it of items) {
+          const raw = it[1];
+          const title = (raw.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>/i) || raw.match(/<title>([^<]*)<\/title>/i) || [])[1] || '';
+          const link = (raw.match(/<link>([^<]*)<\/link>/i) || [])[1] || '';
+          const desc = (raw.match(/<description><!\[CDATA\[(.*?)\]\]><\/description>/i) || raw.match(/<description>([^<]*)<\/description>/i) || [])[1] || '';
+          const combined = title + ' ' + link + ' ' + desc;
+          const rjMatch = combined.match(/(?:RJ|VJ|BJ)\d{6,8}/i);
+          if (rjMatch) {
+            const cleanRj = rjMatch[0].toUpperCase();
+            addWork(cleanRj, title.trim() || `Work ${cleanRj}`, '', '');
+          }
+        }
+      }
+    } catch (feedErr) {
+      console.error('[Waitlist Scraper] RSS feed fallback failed:', feedErr.message);
+    }
   }
 
   // Strategy 2: Direct Frontpage HTML fallback

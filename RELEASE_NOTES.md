@@ -1,3 +1,16 @@
+## [2.5.4] - 2026-11-06
+
+### Fixed & Enhanced
+- **Diagnostics UI `safeAttr is not defined` Bug Fix**:
+  - Replaced undefined `safeAttr()` calls inside `renderUpstreamHealthCards()` with `escapeHtml()`.
+  - Added a globally scoped `safeAttr(str)` fallback helper in client script so background diagnostics rendering never throws a reference error.
+- **HentaiASMR Moe Multi-Layer Waitlist & Audio Pipeline**:
+  - Added an RSS 2.0 Feed fallback (`https://hentaiasmr.moe/feed/`) to `scrapeHentaiAsmrFrontpage` and worker counterpart, ensuring the waitlist continues to receive latest releases even when Cloudflare Managed Challenges block REST API endpoints.
+  - Added Pattern 4.5 support for parsing dynamic `download/index.html?tracks=` JSON arrays in page HTML.
+  - Added support for new single-track `output.mp3` audio naming patterns on CDN (`cdn.hentaiasmr.moe/mf/{postId}/output.mp3`).
+
+---
+
 ## [2.5.3] - 2026-11-06
 
 ### Added & Enhanced
