@@ -1,3 +1,16 @@
+## [2.5.3] - 2026-11-06
+
+### Added & Enhanced
+- **Deep Upstream Health Probing & Dual-Layer Detection**:
+  - Refined `checkUpstreamHealth()` for HentaiASMR Moe: if the `/wp-json/` REST endpoint encounters Cloudflare Turnstile/Bot Protection (HTTP 403), a secondary probe immediately verifies public web HTML availability (`/`).
+  - Annotates status cleanly as `WP REST API: 403 (CF Challenge) • Web Frontpage: 200 OK (<latency>ms)` with degraded (Yellow LED) classification.
+- **Dev Activity & Error Log Integration**:
+  - Testing upstream connectivity from the Settings modal, sidebar bar, or mobile pill now automatically dispatches full diagnostic trace entries to the **Dev Activity Log** (`devLog`).
+  - Logs overall health severity (`INFO`/`WARN`/`ERROR`) alongside individual latency, HTTP codes, and upstream server notes.
+  - Linked `UPSTREAM` log module directly into the **API** filter tab in the Dev Activity Log modal.
+
+---
+
 # 📜 aStreamer Release Notes
 
 ## 🚀 Version 2.5.2 — Real-Time Upstream Network Health & Live Status LEDs

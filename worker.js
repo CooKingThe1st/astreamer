@@ -4202,6 +4202,27 @@ async function checkUpstreamHealth() {
         }
       }
 
+      if (t.id === 'hentaiasmr' && res.status === 403) {
+        try {
+          const ht0 = Date.now();
+          const hRes = await fetcher('https://hentaiasmr.moe/', {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+              'Accept-Language': 'en-US,en;q=0.9'
+            }
+          }, 4000);
+          const hLat = Date.now() - ht0;
+          if (hRes.ok) {
+            note = 'WP REST API: 403 (CF Challenge) • Web Frontpage: 200 OK (' + hLat + 'ms)';
+          } else {
+            note = 'WP-JSON: 403 • Web Frontpage: ' + hRes.status;
+          }
+        } catch(he) {
+          note = 'WP-JSON: 403 (CF Challenge) • Frontpage: Timeout';
+        }
+      }
+
       return {
         id: t.id,
         name: t.name,
@@ -9127,7 +9148,7 @@ const INDEX_HTML = `<!DOCTYPE html>
           <div style="width: 36px; height: 36px; border-radius: 10px; background: var(--accent-gradient, linear-gradient(135deg, #ff7a00, #ff9500)); display: flex; align-items: center; justify-content: center; font-size: 1.3rem; box-shadow: 0 0 14px var(--accent-glow);">🚀</div>
           <div>
             <h3 style="font-size: 1.3rem; font-weight: 800;">aStreamer Release Notes</h3>
-            <span style="font-size: 0.8rem; color: var(--accent); font-weight: 700;">Version 2.5.2 Official Release (Upstream Health &amp; Live LEDs)</span>
+            <span style="font-size: 0.8rem; color: var(--accent); font-weight: 700;">Version 2.5.3 Official Release (Upstream Health &amp; Live LEDs)</span>
           </div>
         </div>
         <button class="btn-outline" style="padding: 4px 10px;" onclick="closeChangelogModal()">✖</button>
@@ -9135,7 +9156,7 @@ const INDEX_HTML = `<!DOCTYPE html>
       
       <div style="color: #d1d5db; font-size: 0.9rem; line-height: 1.6; display: flex; flex-direction: column; gap: 14px;">
         <div style="background: rgba(34, 197, 94, 0.12); border: 1px solid rgba(34, 197, 94, 0.4); padding: 14px; border-radius: 10px;">
-          <h4 style="color: #4ade80; font-weight: 700; margin-bottom: 4px;">🌐 Live Upstream Network Diagnostics &amp; Status LEDs (v2.5.2)</h4>
+          <h4 style="color: #4ade80; font-weight: 700; margin-bottom: 4px;">🌐 Live Upstream Network Diagnostics &amp; Status LEDs & Dev Logging (v2.5.3)</h4>
           <p style="color: var(--text-muted); font-size: 0.85rem;">Added persistent real-time glowing LED indicators in sidebar &amp; mobile header for DLsite, Chobit Sample Audio, HentaiASMR Moe, JapaneseASMR, and ASMR.one. Includes on-demand 1-click test button and latency measurements in Settings.</p>
         </div>
 
@@ -12290,15 +12311,29 @@ const INDEX_HTML = `<!DOCTYPE html>
       }
 
       try {
+        if (typeof devLog === 'function' && force) {
+          devLog('INFO', 'UPSTREAM', 'Initiating upstream network connectivity diagnostics...');
+        }
         const res = await apiFetch('/api/diagnostics/upstream-health');
         const data = await res.json();
         if (data && Array.isArray(data.services)) {
           cachedUpstreamHealth = data;
           updateUpstreamUI(data);
+          if (typeof devLog === 'function') {
+            const overallLevel = data.overall === 'offline' ? 'ERROR' : (data.overall === 'degraded' ? 'WARN' : 'INFO');
+            devLog(overallLevel, 'UPSTREAM', 'Diagnostics check: Overall ' + data.overall.toUpperCase() + ' (' + data.services.length + ' targets probed)');
+            data.services.forEach(function(s) {
+              const sLevel = s.state === 'offline' ? 'ERROR' : (s.state === 'degraded' ? 'WARN' : 'INFO');
+              devLog(sLevel, 'UPSTREAM', '[' + s.name + '] ' + s.state.toUpperCase() + ' (' + s.status + ') • ' + s.latencyMs + 'ms • ' + s.note);
+            });
+          }
           if (force) showToast('🌐 Upstream connection health check complete!');
         }
       } catch (err) {
         console.error('Failed to probe upstream health:', err);
+        if (typeof devLog === 'function') {
+          devLog('ERROR', 'UPSTREAM', 'Failed to probe upstream health: ' + (err.message || err));
+        }
       } finally {
         isTestingUpstreams = false;
         if (btn) {
@@ -12368,7 +12403,7 @@ const INDEX_HTML = `<!DOCTYPE html>
         if (devLogFilter === 'PLAYER') return entry.module === 'PLAYER' || entry.module === 'PLAYLIST';
         if (devLogFilter === 'ERROR') return entry.level === 'ERROR';
         if (devLogFilter === 'WARN') return entry.level === 'WARN' || entry.level === 'ERROR';
-        if (devLogFilter === 'API') return entry.module === 'API';
+        if (devLogFilter === 'API') return entry.module === 'API' || entry.module === 'UPSTREAM';
         if (devLogFilter === 'REFETCH') return entry.module === 'REFETCH' || entry.module === 'SCRAPER' || entry.module === 'CLIENT_PROBE';
         if (devLogFilter === 'TRACE') return entry.level === 'TRACE' || entry.module === 'PROBE' || entry.module === 'CLIENT_PROBE';
         return true;
@@ -15395,8 +15430,8 @@ const INDEX_HTML = `<!DOCTYPE html>
       html += '</div>';
       html += '</div></div>';
 
-      html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🚀 aStreamer v2.5.2 Release</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Dual-Deck Mobile Polish, Cloudflare D1 Native SQLite Database, Sub-Millisecond Search &amp; Infinite Scaling.</p>';
-      html += '<button class="btn-outline" onclick="openChangelogModal()">📜 View Version 2.5.2 Release Notes & Architecture</button></div>';
+      html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🚀 aStreamer v2.5.3 Release</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Dual-Deck Mobile Polish, Cloudflare D1 Native SQLite Database, Sub-Millisecond Search &amp; Infinite Scaling.</p>';
+      html += '<button class="btn-outline" onclick="openChangelogModal()">📜 View Version 2.5.3 Release Notes & Architecture</button></div>';
 
       container.innerHTML = html;
     }

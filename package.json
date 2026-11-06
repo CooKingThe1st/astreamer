@@ -1,6 +1,6 @@
 {
   "name": "streasmr-proxy-poc",
-  "version": "2.5.2",
+  "version": "2.5.3",
   "description": "Minimal hotlink bypass and audio stream proxy POC",
   "main": "server.js",
   "scripts": {
