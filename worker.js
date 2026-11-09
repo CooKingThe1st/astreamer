@@ -4846,7 +4846,44 @@ async function scrapeHentaiAsmrFrontpageWorker() {
     });
   }
 
-  // Strategy 1: High-Speed RSS 2.0 JSON Gateway (Bypasses Cloudflare WAF bot challenges completely)
+  // Strategy 1: Real-Time Uncached RSS Converter (feed2json.org)
+  try {
+    const f2jUrl = 'https://feed2json.org/convert?url=' + encodeURIComponent('https://hentaiasmr.moe/feed/');
+    const res = await fetch(f2jUrl, { signal: AbortSignal.timeout(8000) });
+    if (res.ok) {
+      const data = await res.json();
+      if (data && Array.isArray(data.items) && data.items.length > 0) {
+        for (const item of data.items) {
+          const title = item.title || '';
+          const link = item.url || item.link || '';
+          const desc = item.content_html || item.summary || '';
+          const combined = `${title} ${link} ${desc}`;
+
+          const rjMatch = combined.match(/(?:RJ|VJ|BJ)\d{6,8}/i);
+          if (!rjMatch) continue;
+          const cleanRj = rjMatch[0].toUpperCase();
+
+          let cv = '';
+          let circle = '';
+          const cvMatch = desc.match(/(?:Voice|CV|CAST)[\s:：]+([^<\r\n]+)/i);
+          if (cvMatch) cv = cvMatch[1].replace(/&nbsp;/g, ' ').replace(/Age Ratings.*$/i, '').trim();
+
+          const circleMatch = desc.match(/(?:Circle|サークル|Studio|Maker)[\s:：]+([^<\r\n]+)/i);
+          if (circleMatch) circle = circleMatch[1].replace(/&nbsp;/g, ' ').replace(/Release.*$/i, '').trim();
+
+          const postIdMatch = (item.guid || '').match(/[?&]p=(\d+)/) || link.match(/(\d+)\.html/);
+          const postId = postIdMatch ? parseInt(postIdMatch[1], 10) : 0;
+
+          addWork(cleanRj, title.trim(), circle, cv, '', { postId, postLink: link, source: 'hentaiasmr.moe (Live Feed2JSON)' });
+        }
+        if (discovered.length > 0) return discovered;
+      }
+    }
+  } catch (f2jErr) {
+    console.error('[Worker Waitlist] Real-time Feed2JSON error:', f2jErr);
+  }
+
+  // Strategy 1.5: Cached RSS Gateway Fallback (api.rss2json.com)
   try {
     const rssJsonUrl = 'https://api.rss2json.com/v1/api.json?rss_url=' + encodeURIComponent('https://hentaiasmr.moe/feed/') + '&count=40';
     const res = await fetch(rssJsonUrl, { signal: AbortSignal.timeout(8000) });
@@ -9262,7 +9299,7 @@ const INDEX_HTML = `<!DOCTYPE html>
           <div style="width: 36px; height: 36px; border-radius: 10px; background: var(--accent-gradient, linear-gradient(135deg, #ff7a00, #ff9500)); display: flex; align-items: center; justify-content: center; font-size: 1.3rem; box-shadow: 0 0 14px var(--accent-glow);">🚀</div>
           <div>
             <h3 style="font-size: 1.3rem; font-weight: 800;">aStreamer Release Notes</h3>
-            <span style="font-size: 0.8rem; color: var(--accent); font-weight: 700;">Version 2.5.5 Official Release (Upstream Health &amp; Live LEDs)</span>
+            <span style="font-size: 0.8rem; color: var(--accent); font-weight: 700;">Version 2.5.6 Official Release (Upstream Health &amp; Live LEDs)</span>
           </div>
         </div>
         <button class="btn-outline" style="padding: 4px 10px;" onclick="closeChangelogModal()">✖</button>
@@ -9270,7 +9307,7 @@ const INDEX_HTML = `<!DOCTYPE html>
       
       <div style="color: #d1d5db; font-size: 0.9rem; line-height: 1.6; display: flex; flex-direction: column; gap: 14px;">
         <div style="background: rgba(34, 197, 94, 0.12); border: 1px solid rgba(34, 197, 94, 0.4); padding: 14px; border-radius: 10px;">
-          <h4 style="color: #4ade80; font-weight: 700; margin-bottom: 4px;">🌐 Live Upstream Network Diagnostics &amp; Status LEDs & RSS WaitList Ingestion (v2.5.5)</h4>
+          <h4 style="color: #4ade80; font-weight: 700; margin-bottom: 4px;">🌐 Live Upstream Network Diagnostics &amp; Status LEDs & Live RSS Feed Sync (v2.5.6)</h4>
           <p style="color: var(--text-muted); font-size: 0.85rem;">Added persistent real-time glowing LED indicators in sidebar &amp; mobile header for DLsite, Chobit Sample Audio, HentaiASMR Moe, JapaneseASMR, and ASMR.one. Includes on-demand 1-click test button and latency measurements in Settings.</p>
         </div>
 
@@ -15545,8 +15582,8 @@ const INDEX_HTML = `<!DOCTYPE html>
       html += '</div>';
       html += '</div></div>';
 
-      html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🚀 aStreamer v2.5.5 Release</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Dual-Deck Mobile Polish, Cloudflare D1 Native SQLite Database, Sub-Millisecond Search &amp; Infinite Scaling.</p>';
-      html += '<button class="btn-outline" onclick="openChangelogModal()">📜 View Version 2.5.5 Release Notes & Architecture</button></div>';
+      html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🚀 aStreamer v2.5.6 Release</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Dual-Deck Mobile Polish, Cloudflare D1 Native SQLite Database, Sub-Millisecond Search &amp; Infinite Scaling.</p>';
+      html += '<button class="btn-outline" onclick="openChangelogModal()">📜 View Version 2.5.6 Release Notes & Architecture</button></div>';
 
       container.innerHTML = html;
     }

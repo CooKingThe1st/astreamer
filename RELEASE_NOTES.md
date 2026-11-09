@@ -1,3 +1,13 @@
+## [2.5.6] - 2026-11-09
+
+### Fixed & Enhanced
+- **Real-Time Uncached RSS Sync for WaitList**:
+  - Replaced cached third-party intermediate gateway with direct streaming on Node (`scraper.js`) and an uncached real-time converter (`feed2json.org`) on Cloudflare Workers (`worker.js`).
+  - Resolves feed latency issues where stale snapshots from previous scans delayed newly published frontpage releases (e.g., `RJ01732012`, `RJ01743178`, etc.).
+  - Guarantees immediate synchronization with current frontpage publications on every manual or automated scan.
+
+---
+
 ## [2.5.5] - 2026-11-09
 
 ### Added & Enhanced
