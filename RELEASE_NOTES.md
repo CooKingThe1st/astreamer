@@ -1,3 +1,13 @@
+## [2.6.0] - 2026-11-09
+### Added
+- **Server-Side Background Batch Import Queue**: Migrated the entire batch importing process from the client browser loop to the server and Cloudflare Worker runtime.
+- **Background Execution Resilience**: Users can start importing dozens or hundreds of works and safely close the browser, laptop, or tab. The server process / worker `waitUntil` queue continues resolving in the background.
+- **Fail-Safe Pre-Stash**: Import lists are pre-stashed into the Wishlist immediately upon starting. Any works that encounter upstream failures or interruptions remain safely queued in the Wishlist.
+- **Auto-Reconnection on Return**: When the user opens or refreshes the site, the app automatically checks the server background queue status:
+  - If a job is active, real-time docking widgets and progress bars immediately attach to the background process.
+  - If a job completed while the user was away, an announcement toast and dev activity log report total added works and any failed items.
+- **Server-Side Import Endpoints**: Added `POST /api/import/start`, `GET /api/import/status`, `POST /api/import/stop`, and `POST /api/import/dismiss`.
+
 ## [2.5.6] - 2026-11-09
 
 ### Fixed & Enhanced

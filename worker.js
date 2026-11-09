@@ -5031,6 +5031,106 @@ async function scrapeHentaiAsmrFrontpageWorker() {
 }
 
 // Main Cloudflare Worker Fetch Handler
+// --- Worker Background Import Engine ---
+async function runWorkerBackgroundImport(env, job) {
+  const startTime = Date.now();
+  const MAX_WORKER_EXEC_TIME_MS = 25000;
+
+  try {
+    for (let i = job.processed; i < job.total; i++) {
+      if (Date.now() - startTime > MAX_WORKER_EXEC_TIME_MS) {
+        const db = await getDb(env);
+        db.importJob = { ...job, updatedAt: new Date().toISOString() };
+        await saveDb(env, db);
+        return;
+      }
+
+      const db = await getDb(env);
+      if (db.importJob && db.importJob.stopRequested) {
+        job.status = 'stopped';
+        job.completedAt = new Date().toISOString();
+        job.currentStatusText = `⏹️ Stopped by user at ${i}/${job.total}`;
+        db.importJob = { ...job };
+        await saveDb(env, db);
+        return;
+      }
+
+      const rj = job.rjList[i];
+      job.processed = i + 1;
+      job.currentRj = rj;
+      job.currentStatusText = `Importing (${i + 1}/${job.total}): ${rj}...`;
+      job.updatedAt = new Date().toISOString();
+
+      let work = null;
+      let errReason = null;
+
+      if (db.works && db.works[rj]) {
+        work = db.works[rj];
+      } else {
+        const hint = (job.hints && job.hints[rj]) || {};
+        try {
+          work = await resolveRjWork(rj, {
+            postId: parseInt(hint.postId, 10) || 0,
+            postLink: String(hint.postLink || ''),
+            fastMoe: hint.source === 'hentaiasmr.moe'
+          });
+        } catch (err) {
+          errReason = err.message || 'Resolution failed';
+        }
+      }
+
+      const freshDb = await getDb(env);
+      freshDb.works = freshDb.works || {};
+      freshDb.wishlist = freshDb.wishlist || [];
+      freshDb.waitlist = freshDb.waitlist || [];
+
+      if (work) {
+        job.succeeded++;
+        job.succeededList.push({ rjCode: rj, title: work.title || `Work ${rj}` });
+        freshDb.works[rj] = work;
+        freshDb.wishlist = freshDb.wishlist.filter(w => w.rjCode !== rj);
+        freshDb.waitlist = freshDb.waitlist.filter(w => w.rjCode !== rj);
+        await saveD1Work(env, work);
+      } else {
+        job.failed++;
+        const failMsg = errReason || 'Audio stream not available';
+        job.failedList.push({ rjCode: rj, reason: failMsg });
+        const existingIdx = freshDb.wishlist.findIndex(w => w.rjCode === rj);
+        const wishItem = {
+          rjCode: rj,
+          title: `Work ${rj}`,
+          reason: failMsg,
+          addedAt: new Date().toISOString()
+        };
+        if (existingIdx >= 0) freshDb.wishlist[existingIdx] = { ...freshDb.wishlist[existingIdx], ...wishItem };
+        else freshDb.wishlist.unshift(wishItem);
+        freshDb.waitlist = freshDb.waitlist.filter(w => w.rjCode !== rj);
+      }
+
+      freshDb.importJob = { ...job };
+      await saveDb(env, freshDb);
+
+      await new Promise(r => setTimeout(r, 200));
+    }
+
+    const finalDb = await getDb(env);
+    if (finalDb.importJob && finalDb.importJob.status === 'running') {
+      job.status = 'completed';
+      job.completedAt = new Date().toISOString();
+      job.currentStatusText = `Completed! ${job.succeeded} added, ${job.failed} failed.`;
+      finalDb.importJob = { ...job };
+      await saveDb(env, finalDb);
+    }
+  } catch (fatalErr) {
+    console.error('[Worker Background Import Fatal Error]', fatalErr);
+    const errDb = await getDb(env);
+    job.status = 'failed';
+    job.currentStatusText = 'Error: ' + fatalErr.message;
+    errDb.importJob = { ...job };
+    await saveDb(env, errDb);
+  }
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -5390,6 +5490,98 @@ export default {
     }
 
     // Resolve Single Work
+        // Background Import Engine Endpoints
+    if (pathname === '/api/import/start' && request.method === 'POST') {
+      if (!isAuth()) return json({ error: 'Unauthorized' }, 401);
+      const body = await request.json().catch(() => ({}));
+      const list = Array.isArray(body.rjList) ? body.rjList : [];
+      const cleanList = [...new Set(list.map(r => String(r || '').toUpperCase().trim()).filter(r => /(?:RJ|VJ|BJ)\d+/i.test(r)))];
+
+      if (cleanList.length === 0) {
+        return json({ success: false, error: 'No valid work codes provided' }, 400);
+      }
+
+      const db = await getDb(env);
+      db.wishlist = db.wishlist || [];
+      db.works = db.works || {};
+
+      const rawItems = (Array.isArray(body.rawItems) && body.rawItems.length > 0) ? body.rawItems : cleanList;
+      for (const it of rawItems) {
+        const c = (typeof it === 'object' ? (it.rjCode || it.rj) : it);
+        const code = String(c || '').toUpperCase().trim();
+        if (!code || db.works[code]) continue;
+        const exIdx = db.wishlist.findIndex(w => w.rjCode === code);
+        if (exIdx < 0) {
+          db.wishlist.unshift({
+            rjCode: code,
+            title: (typeof it === 'object' && it.title) ? it.title : `Work ${code}`,
+            addedAt: new Date().toISOString()
+          });
+        }
+      }
+
+      const job = {
+        id: 'job_' + Date.now(),
+        name: body.name || `Batch (${cleanList.length} works)`,
+        rjList: cleanList,
+        hints: (body.hints && typeof body.hints === 'object') ? body.hints : {},
+        total: cleanList.length,
+        processed: 0,
+        succeeded: 0,
+        failed: 0,
+        succeededList: [],
+        failedList: [],
+        status: 'running',
+        currentRj: cleanList[0] || '',
+        currentStatusText: `Queued ${cleanList.length} works for background import...`,
+        stopRequested: false,
+        startedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        completedAt: null,
+        notified: false
+      };
+
+      db.importJob = job;
+      await saveDb(env, db);
+
+      ctx.waitUntil(runWorkerBackgroundImport(env, job));
+
+      return json({
+        success: true,
+        message: 'Background import queued successfully. You can safely close or navigate away from the page.',
+        job: { id: job.id, name: job.name, total: job.total, status: job.status }
+      }, 202);
+    }
+
+    if (pathname === '/api/import/status' && request.method === 'GET') {
+      const db = await getDb(env);
+      const job = db.importJob || null;
+      if (job && job.status === 'running' && job.processed < job.total) {
+        ctx.waitUntil(runWorkerBackgroundImport(env, job));
+      }
+      return json({ success: true, active: Boolean(job && job.status === 'running'), job });
+    }
+
+    if (pathname === '/api/import/stop' && request.method === 'POST') {
+      if (!isAuth()) return json({ error: 'Unauthorized' }, 401);
+      const db = await getDb(env);
+      if (db.importJob && db.importJob.status === 'running') {
+        db.importJob.stopRequested = true;
+        db.importJob.currentStatusText = 'Stop requested...';
+        await saveDb(env, db);
+      }
+      return json({ success: true, message: 'Stop requested' });
+    }
+
+    if (pathname === '/api/import/dismiss' && request.method === 'POST') {
+      const db = await getDb(env);
+      if (db.importJob) {
+        db.importJob.notified = true;
+        await saveDb(env, db);
+      }
+      return json({ success: true });
+    }
+
     if (pathname === '/api/library/resolve' && request.method === 'POST') {
       if (!isAuth()) return json({ error: 'Unauthorized' }, 401);
       const body = await request.json().catch(() => ({}));
@@ -9299,7 +9491,7 @@ const INDEX_HTML = `<!DOCTYPE html>
           <div style="width: 36px; height: 36px; border-radius: 10px; background: var(--accent-gradient, linear-gradient(135deg, #ff7a00, #ff9500)); display: flex; align-items: center; justify-content: center; font-size: 1.3rem; box-shadow: 0 0 14px var(--accent-glow);">🚀</div>
           <div>
             <h3 style="font-size: 1.3rem; font-weight: 800;">aStreamer Release Notes</h3>
-            <span style="font-size: 0.8rem; color: var(--accent); font-weight: 700;">Version 2.5.6 Official Release (Upstream Health &amp; Live LEDs)</span>
+            <span style="font-size: 0.8rem; color: var(--accent); font-weight: 700;">Version 2.6.0 Official Release (Upstream Health &amp; Live LEDs)</span>
           </div>
         </div>
         <button class="btn-outline" style="padding: 4px 10px;" onclick="closeChangelogModal()">✖</button>
@@ -9307,13 +9499,13 @@ const INDEX_HTML = `<!DOCTYPE html>
       
       <div style="color: #d1d5db; font-size: 0.9rem; line-height: 1.6; display: flex; flex-direction: column; gap: 14px;">
         <div style="background: rgba(34, 197, 94, 0.12); border: 1px solid rgba(34, 197, 94, 0.4); padding: 14px; border-radius: 10px;">
-          <h4 style="color: #4ade80; font-weight: 700; margin-bottom: 4px;">🌐 Live Upstream Network Diagnostics &amp; Status LEDs & Live RSS Feed Sync (v2.5.6)</h4>
+          <h4 style="color: #4ade80; font-weight: 700; margin-bottom: 4px;">🌐 Live Upstream Network Diagnostics &amp; Status LEDs & Live RSS Feed Sync (v2.6.0)</h4>
           <p style="color: var(--text-muted); font-size: 0.85rem;">Added persistent real-time glowing LED indicators in sidebar &amp; mobile header for DLsite, Chobit Sample Audio, HentaiASMR Moe, JapaneseASMR, and ASMR.one. Includes on-demand 1-click test button and latency measurements in Settings.</p>
         </div>
 
 
         <div style="background: rgba(56, 189, 248, 0.12); border: 1px solid rgba(56, 189, 248, 0.4); padding: 14px; border-radius: 10px;">
-          <h4 style="color: #38bdf8; font-weight: 700; margin-bottom: 4px;">📱 Dual-Deck Mobile Positioning &amp; Corner Player (v2.5.1)</h4>
+          <h4 style="color: #38bdf8; font-weight: 700; margin-bottom: 4px;">📱 Dual-Deck Mobile Positioning &amp; Corner Player (v2.6.0)</h4>
           <p style="color: var(--text-muted); font-size: 0.85rem;">Adaptive bottom clearance for scroll navigation widget (264px dual-deck / 154px single), strict mobile Deck B isolation, full-width edge-to-edge corner player tabs and secondary action rows, plus CV tag filter &amp; shuffle buttons on Deck B.</p>
         </div>
 
@@ -15582,8 +15774,8 @@ const INDEX_HTML = `<!DOCTYPE html>
       html += '</div>';
       html += '</div></div>';
 
-      html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🚀 aStreamer v2.5.6 Release</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Dual-Deck Mobile Polish, Cloudflare D1 Native SQLite Database, Sub-Millisecond Search &amp; Infinite Scaling.</p>';
-      html += '<button class="btn-outline" onclick="openChangelogModal()">📜 View Version 2.5.6 Release Notes & Architecture</button></div>';
+      html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🚀 aStreamer v2.6.0 Release</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Dual-Deck Mobile Polish, Cloudflare D1 Native SQLite Database, Sub-Millisecond Search &amp; Infinite Scaling.</p>';
+      html += '<button class="btn-outline" onclick="openChangelogModal()">📜 View Version 2.6.0 Release Notes & Architecture</button></div>';
 
       container.innerHTML = html;
     }
@@ -19660,24 +19852,22 @@ const INDEX_HTML = `<!DOCTYPE html>
       if (job) downloadMoeDiagnosticList(job);
     }
 
-    function stopImportFromDock() {
-      for (const job of importBatchQueue) {
-        if (job.status === 'queued') {
-          job.status = 'stopped';
-          job.currentStatusText = 'Canceled in queue';
-        } else if (job.status === 'running') {
-          job.stopRequested = true;
-          job.currentStatusText = 'Stopping...';
-        }
-      }
+    async function stopImportFromDock() {
       const sBtn = document.getElementById('sidebarBtnStop');
       const mBtn = document.getElementById('mobileBtnStop');
       if (sBtn) { sBtn.disabled = true; sBtn.innerText = '⏳'; }
       if (mBtn) { mBtn.disabled = true; mBtn.innerText = 'Stopping...'; }
-      renderBatchQueueUI();
+      showToast('⏳ Requesting server to stop import...');
+      try {
+        await apiFetch('/api/import/stop', { method: 'POST' });
+        showToast('⏹️ Stop requested. Server will pause after current work.');
+      } catch (e) {
+        showToast('❌ Failed to request stop: ' + e.message);
+      }
+      if (typeof pollImportStatus === 'function') pollImportStatus();
     }
 
-    function handleBeforeUnloadWarn(e) {
+    function handleBeforeUnloadWarn(e) { return; // Server handles background import seamlessly
       if (isQueueRunnerActive) {
         e.preventDefault();
         e.returnValue = 'Batch imports are currently in progress. Leaving or refreshing will stop the queue.';
@@ -20524,6 +20714,10 @@ const INDEX_HTML = `<!DOCTYPE html>
       updateWaitlistBadge();
     }
 
+        // --- Server-Side Background Import Client Monitor ---
+    let clientImportMonitorTimer = null;
+    let isClientImportMonitoring = false;
+
     async function executeBatchImportRjList(rjList, batchLabel, options = {}) {
       if (!isAdmin) {
         openAdminModal('Please unlock Admin access first to import works.');
@@ -20532,7 +20726,11 @@ const INDEX_HTML = `<!DOCTYPE html>
       if (!rjList || rjList.length === 0) return;
       const cleanList = [...new Set((rjList || []).map(extractRj).filter(Boolean))];
 
-      // Known facts per work (post id / link / source) so the resolver can skip rediscovery
+      if (cleanList.length === 0) {
+        alert('No valid RJ/VJ/BJ codes found to import.');
+        return;
+      }
+
       const jobHints = {};
       if (options.rawItems && Array.isArray(options.rawItems)) {
         options.rawItems.forEach(it => {
@@ -20543,82 +20741,124 @@ const INDEX_HTML = `<!DOCTYPE html>
         });
       }
 
-      if (cleanList.length === 0) {
-        alert('No valid RJ/VJ/BJ codes found to import.');
-        return;
-      }
+      const jobName = batchLabel || ('Batch (' + cleanList.length + ' works)');
 
-      // Pre-stash fail-safe to DB Wishlist with automatic retry
-      const preStashPayload = (options.rawItems && Array.isArray(options.rawItems)) ? options.rawItems : cleanList;
-      for (let attempt = 1; attempt <= 3; attempt++) {
-        try {
-          const preRes = await apiFetch('/api/wishlist/pre-stash', {
-            method: 'POST',
-            body: JSON.stringify({ items: preStashPayload })
-          });
-          if (preRes.ok) {
-            const preData = await preRes.json().catch(() => ({}));
-            if (preData && Array.isArray(preData.wishlist)) {
-              updateWishlistBadge(preData.wishlist.length);
-            } else {
-              await updateWishlistBadge();
-            }
-            if (window.location.hash === '#/wishlist') {
-              loadWishlist();
-            }
-            break;
-          }
-        } catch (e) {
-          console.warn('[PreStash Attempt ' + attempt + ' Failed]', e);
-          if (attempt < 3) await new Promise(r => setTimeout(r, 350 * attempt));
+      try {
+        const res = await apiFetch('/api/import/start', {
+          method: 'POST',
+          body: JSON.stringify({
+            rjList: cleanList,
+            name: jobName,
+            hints: jobHints,
+            rawItems: options.rawItems || []
+          })
+        });
+
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.success) {
+          alert('Failed to start server import: ' + (data.error || 'Server error'));
+          return;
         }
-      }
 
-      const job = {
-        id: nextBatchId++,
-        name: batchLabel || ('Batch #' + (importBatchQueue.length + 1) + ' (' + cleanList.length + ' works)'),
-        rjList: cleanList,
-        hints: jobHints,
-        total: cleanList.length,
-        current: 0,
-        succeeded: 0,
-        failed: 0,
-        failedItems: [],
-        status: 'queued',
-        currentStatusText: 'Waiting in queue...',
-        stopRequested: false
-      };
+        showToast('🚀 Server background import started for ' + cleanList.length + ' works! You can safely close or refresh this page.');
+        if (typeof devLog === 'function') {
+          devLog('INFO', 'IMPORT', 'Queued background import for ' + cleanList.length + ' works (' + jobName + ')');
+        }
 
-      importBatchQueue.push(job);
-      renderBatchQueueUI();
-
-      const keepModalOpen = options.keepModalOpen === true;
-      const modal = document.getElementById('importModal');
-
-      if (keepModalOpen) {
-        if (modal) modal.style.display = 'flex';
-      } else {
-        if (modal && !isQueueRunnerActive) modal.style.display = 'none';
         closePageImportModal();
-
-        const isMobile = window.innerWidth <= 768;
-        const sWidget = document.getElementById('sidebarImportWidget');
-        const mBanner = document.getElementById('mobileImportBanner');
-        if (isMobile) {
-          if (mBanner) mBanner.style.display = 'block';
-          if (sWidget) sWidget.style.display = 'none';
-        } else {
-          if (sWidget) sWidget.style.display = 'block';
-          if (mBanner) mBanner.style.display = 'none';
+        closeWaitlistModal();
+        if (options.keepModalOpen !== true) {
+          closeImportModal();
         }
-        updateBackgroundImportWidgets(0, '🚀 ' + job.name + ': Queued');
-      }
 
-      showToast('📥 Added ' + cleanList.length + ' works to Import Queue');
-
-      if (!isQueueRunnerActive) {
-        await processImportQueue();
+        startClientImportMonitor();
+      } catch (err) {
+        alert('Network error starting background import: ' + err.message);
       }
+    }
+
+    function startClientImportMonitor() {
+      if (isClientImportMonitoring) return;
+      isClientImportMonitoring = true;
+
+      pollImportStatus();
+      if (clientImportMonitorTimer) clearInterval(clientImportMonitorTimer);
+      clientImportMonitorTimer = setInterval(pollImportStatus, 2500);
+    }
+
+    async function pollImportStatus() {
+      try {
+        const res = await apiFetch('/api/import/status');
+        if (!res.ok) return;
+        const data = await res.json().catch(() => ({}));
+        const job = data.job;
+
+        if (!job) {
+          stopClientImportMonitor();
+          return;
+        }
+
+        if (job.status === 'running') {
+          const pct = job.total > 0 ? Math.round((job.processed / job.total) * 100) : 0;
+          const statusText = job.currentStatusText || (job.name + ': ' + job.processed + '/' + job.total + ' (' + pct + '%)');
+          updateBackgroundImportWidgets(pct, statusText, true);
+        } else if (job.status === 'completed') {
+          stopClientImportMonitor();
+          updateBackgroundImportWidgets(100, '✅ Done! ' + job.succeeded + ' added, ' + job.failed + ' failed.', true);
+          setTimeout(() => { updateBackgroundImportWidgets(0, '', false); }, 5000);
+
+          showToast('✅ Background import finished! ' + job.succeeded + ' added, ' + job.failed + ' failed.');
+          if (typeof devLog === 'function') {
+            devLog('INFO', 'IMPORT', 'Background import finished: ' + job.succeeded + ' added, ' + job.failed + ' failed');
+          }
+          apiFetch('/api/import/dismiss', { method: 'POST' }).catch(() => {});
+          try { updateWishlistBadge(); } catch(e) {}
+          try { updateWaitlistBadge(); } catch(e) {}
+          try { loadWorks(); } catch(e) {}
+          if (window.location.hash === '#/wishlist') {
+            try { loadWishlist(); } catch(e) {}
+          }
+        } else if (job.status === 'stopped' || job.status === 'failed') {
+          stopClientImportMonitor();
+          updateBackgroundImportWidgets(0, '', false);
+          showToast('⏹️ Background import ' + job.status + '. ' + (job.currentStatusText || ''));
+          apiFetch('/api/import/dismiss', { method: 'POST' }).catch(() => {});
+          try { updateWishlistBadge(); } catch(e) {}
+          try { updateWaitlistBadge(); } catch(e) {}
+        }
+      } catch (e) {}
+    }
+
+    function stopClientImportMonitor() {
+      isClientImportMonitoring = false;
+      if (clientImportMonitorTimer) {
+        clearInterval(clientImportMonitorTimer);
+        clientImportMonitorTimer = null;
+      }
+    }
+
+    async function checkServerImportStatusOnBoot() {
+      try {
+        const res = await apiFetch('/api/import/status');
+        if (!res.ok) return;
+        const data = await res.json().catch(() => ({}));
+        const job = data.job;
+        if (!job) return;
+
+        if (job.status === 'running') {
+          showToast('ℹ️ Server import in progress: ' + job.processed + '/' + job.total + ' works (' + (job.name || 'Batch') + ')');
+          startClientImportMonitor();
+        } else if (job.status === 'completed' && !job.notified) {
+          showToast('✅ Background import finished while away: ' + job.succeeded + ' added, ' + job.failed + ' failed (in Wishlist).');
+          apiFetch('/api/import/dismiss', { method: 'POST' }).catch(() => {});
+          try { updateWishlistBadge(); } catch(e) {}
+          try { updateWaitlistBadge(); } catch(e) {}
+          try { loadWorks(); } catch(e) {}
+        } else if (job.status === 'stopped' && !job.notified) {
+          showToast('⏹️ Background import was stopped: ' + job.succeeded + ' added, ' + job.failed + ' failed.');
+          apiFetch('/api/import/dismiss', { method: 'POST' }).catch(() => {});
+        }
+      } catch(e) {}
     }
 
     async function processImportQueue() {

@@ -1054,6 +1054,25 @@ function clearHistory() {
   return [];
 }
 
+function getImportJob() {
+  const db = readDb();
+  return db.importJob || null;
+}
+
+function saveImportJob(job) {
+  const db = readDb();
+  db.importJob = job ? { ...job } : null;
+  writeDb(db);
+  return db.importJob;
+}
+
+function clearImportJob() {
+  const db = readDb();
+  db.importJob = null;
+  writeDb(db);
+  return true;
+}
+
 function getWishlist() {
   const db = readDb();
   return db.wishlist || [];
@@ -1373,6 +1392,9 @@ module.exports = {
   getHistory,
   addHistoryEntry,
   clearHistory,
+  getImportJob,
+  saveImportJob,
+  clearImportJob,
   getWishlist,
   saveWishlistItem,
   preStashWishlistItems,
