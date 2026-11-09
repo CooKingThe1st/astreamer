@@ -3052,7 +3052,7 @@ async function scrapeHentaiAsmrFrontpage() {
   const discovered = [];
   const seenRj = new Set();
 
-  function addWork(rj, title, circle, cv, rawCoverUrl) {
+  function addWork(rj, title, circle, cv, rawCoverUrl, extra = {}) {
     if (!rj) return;
     const cleanRj = rj.toUpperCase().trim();
     if (seenRj.has(cleanRj)) return;
@@ -3063,12 +3063,94 @@ async function scrapeHentaiAsmrFrontpage() {
       circle: circle || '',
       cv: cv || '',
       coverUrl: rawCoverUrl || `/image-proxy?rj=${cleanRj}`,
-      source: 'hentaiasmr.moe',
+      postId: extra.postId || 0,
+      postLink: extra.postLink || '',
+      source: extra.source || 'hentaiasmr.moe (RSS 2.0)',
       addedAt: new Date().toISOString()
     });
   }
 
-  // Strategy 1: WordPress REST API (Structured & Rich)
+  // Strategy 1: High-Speed RSS 2.0 JSON Gateway (Bypasses Cloudflare WAF bot challenges completely)
+  try {
+    const rssJsonUrl = 'https://api.rss2json.com/v1/api.json?rss_url=' + encodeURIComponent('https://hentaiasmr.moe/feed/') + '&count=40';
+    const res = await axios.get(rssJsonUrl, { timeout: 8000, validateStatus: () => true });
+    if (res.status === 200 && res.data && Array.isArray(res.data.items) && res.data.items.length > 0) {
+      for (const item of res.data.items) {
+        const title = item.title || '';
+        const link = item.link || '';
+        const desc = item.description || item.content || '';
+        const combined = `${title} ${link} ${desc}`;
+
+        const rjMatch = combined.match(/(?:RJ|VJ|BJ)\d{6,8}/i);
+        if (!rjMatch) continue;
+        const cleanRj = rjMatch[0].toUpperCase();
+
+        let cv = '';
+        let circle = '';
+        const cvMatch = desc.match(/(?:Voice|CV|CAST)[\s:：]+([^<\r\n]+)/i);
+        if (cvMatch) {
+          cv = cvMatch[1].replace(/&nbsp;/g, ' ').replace(/Age Ratings.*$/i, '').trim();
+        }
+
+        const circleMatch = desc.match(/(?:Circle|サークル|Studio|Maker)[\s:：]+([^<\r\n]+)/i);
+        if (circleMatch) {
+          circle = circleMatch[1].replace(/&nbsp;/g, ' ').replace(/Release.*$/i, '').trim();
+        }
+
+        const postIdMatch = (item.guid || '').match(/[?&]p=(\d+)/) || link.match(/(\d+)\.html/);
+        const postId = postIdMatch ? parseInt(postIdMatch[1], 10) : 0;
+
+        addWork(cleanRj, title.trim(), circle, cv, '', { postId, postLink: link, source: 'hentaiasmr.moe (RSS 2.0 Gateway)' });
+      }
+      if (discovered.length > 0) return discovered;
+    }
+  } catch (rssGatewayErr) {
+    console.error('[Waitlist Scraper] RSS JSON Gateway failed, trying direct RSS feed:', rssGatewayErr.message);
+  }
+
+  // Strategy 2: Direct RSS 2.0 XML Feed Fetch
+  try {
+    const feedRes = await axios.get('https://hentaiasmr.moe/feed/', {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+        'Accept': 'application/rss+xml,application/xml,text/xml,*/*;q=0.9',
+        'Referer': 'https://hentaiasmr.moe/'
+      },
+      httpsAgent,
+      timeout: 8000,
+      validateStatus: () => true
+    });
+    if (feedRes.status === 200 && typeof feedRes.data === 'string') {
+      const feedText = feedRes.data;
+      const items = [...feedText.matchAll(/<item>([\s\S]*?)<\/item>/gi)];
+      for (const it of items) {
+        const raw = it[1];
+        const title = (raw.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>/i) || raw.match(/<title>([^<]*)<\/title>/i) || [])[1] || '';
+        const link = (raw.match(/<link>([^<]*)<\/link>/i) || [])[1] || '';
+        const desc = (raw.match(/<description><!\[CDATA\[(.*?)\]\]><\/description>/i) || raw.match(/<description>([^<]*)<\/description>/i) || [])[1] || '';
+        const combined = title + ' ' + link + ' ' + desc;
+        const rjMatch = combined.match(/(?:RJ|VJ|BJ)\d{6,8}/i);
+        if (rjMatch) {
+          const cleanRj = rjMatch[0].toUpperCase();
+          let cv = '';
+          let circle = '';
+          const cvMatch = desc.match(/(?:Voice|CV|CAST)[\s:：]+([^<\r\n]+)/i);
+          if (cvMatch) cv = cvMatch[1].replace(/&nbsp;/g, ' ').replace(/Age Ratings.*$/i, '').trim();
+          const circleMatch = desc.match(/(?:Circle|サークル|Studio|Maker)[\s:：]+([^<\r\n]+)/i);
+          if (circleMatch) circle = circleMatch[1].replace(/&nbsp;/g, ' ').replace(/Release.*$/i, '').trim();
+
+          const postIdMatch = link.match(/(\d+)\.html/);
+          const postId = postIdMatch ? parseInt(postIdMatch[1], 10) : 0;
+          addWork(cleanRj, title.trim() || `Work ${cleanRj}`, circle, cv, '', { postId, postLink: link.trim(), source: 'hentaiasmr.moe (Direct RSS)' });
+        }
+      }
+      if (discovered.length > 0) return discovered;
+    }
+  } catch (feedErr) {
+    console.error('[Waitlist Scraper] Direct RSS feed fallback failed:', feedErr.message);
+  }
+
+  // Strategy 3: WordPress REST API (Structured & Rich)
   try {
     const apiUrl = 'https://hentaiasmr.moe/wp-json/wp/v2/posts?page=1&per_page=20&_embed=1';
     const res = await axios.get(apiUrl, {
@@ -3112,7 +3194,7 @@ async function scrapeHentaiAsmrFrontpage() {
     console.error('[Waitlist Scraper] REST API failed, falling back to frontpage HTML:', apiErr.message);
   }
 
-  // Strategy 1.5: WordPress RSS 2.0 Feed fallback (highly reliable & unblocked)
+  // Legacy RSS placeholder (already handled above)
   if (discovered.length === 0) {
     try {
       const feedRes = await axios.get('https://hentaiasmr.moe/feed/', {

@@ -1297,9 +1297,11 @@ app.get('/api/waitlist', (req, res) => {
 
 app.post('/api/waitlist/scan', checkAuth, async (req, res) => {
   try {
+    const beforeCount = (db.getWaitlist() || []).length;
     const discovered = await scrapeHentaiAsmrFrontpage();
     const waitlist = db.addBatchToWaitlist(discovered);
-    res.json({ success: true, count: discovered.length, waitlist });
+    const addedCount = Math.max(0, (waitlist || []).length - beforeCount);
+    res.json({ success: true, count: discovered.length, discoveredCount: discovered.length, addedCount, waitlist });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -3916,7 +3918,7 @@ const INDEX_HTML = `<!DOCTYPE html>
           <div style="width: 36px; height: 36px; border-radius: 10px; background: var(--accent-gradient, linear-gradient(135deg, #ff7a00, #ff9500)); display: flex; align-items: center; justify-content: center; font-size: 1.3rem; box-shadow: 0 0 14px var(--accent-glow);">🚀</div>
           <div>
             <h3 style="font-size: 1.3rem; font-weight: 800;">aStreamer Release Notes</h3>
-            <span style="font-size: 0.8rem; color: var(--accent); font-weight: 700;">Version 2.5.4 Official Release (Upstream Health &amp; Live LEDs)</span>
+            <span style="font-size: 0.8rem; color: var(--accent); font-weight: 700;">Version 2.5.5 Official Release (Upstream Health &amp; Live LEDs)</span>
           </div>
         </div>
         <button class="btn-outline" style="padding: 4px 10px;" onclick="closeChangelogModal()">✖</button>
@@ -3924,7 +3926,7 @@ const INDEX_HTML = `<!DOCTYPE html>
       
       <div style="color: #d1d5db; font-size: 0.9rem; line-height: 1.6; display: flex; flex-direction: column; gap: 14px;">
         <div style="background: rgba(34, 197, 94, 0.12); border: 1px solid rgba(34, 197, 94, 0.4); padding: 14px; border-radius: 10px;">
-          <h4 style="color: #4ade80; font-weight: 700; margin-bottom: 4px;">🌐 Live Upstream Network Diagnostics &amp; Status LEDs & Dev Logging (v2.5.4)</h4>
+          <h4 style="color: #4ade80; font-weight: 700; margin-bottom: 4px;">🌐 Live Upstream Network Diagnostics &amp; Status LEDs & RSS WaitList Ingestion (v2.5.5)</h4>
           <p style="color: var(--text-muted); font-size: 0.85rem;">Added persistent real-time glowing LED indicators in sidebar &amp; mobile header for DLsite, Chobit Sample Audio, HentaiASMR Moe, JapaneseASMR, and ASMR.one. Includes on-demand 1-click test button and latency measurements in Settings.</p>
         </div>
 
@@ -4148,7 +4150,8 @@ const INDEX_HTML = `<!DOCTYPE html>
           </div>
         </div>
         <div style="display: flex; align-items: center; gap: 8px;">
-          <button class="btn-outline" id="btnWaitlistScanNow" style="padding: 4px 10px; font-size: 0.78rem;" onclick="triggerWaitlistScanNow()" title="Scan frontpage now">🔄 Scan Now</button>
+          <span style="font-size: 0.72rem; padding: 2px 7px; background: rgba(56, 189, 248, 0.12); border: 1px solid rgba(56, 189, 248, 0.3); border-radius: 6px; color: #38bdf8; display: inline-flex; align-items: center; gap: 4px;" title="Active feed source: HentaiASMR Moe RSS 2.0 (40 items)">📡 RSS 2.0 Feed</span>
+          <button class="btn-outline" id="btnWaitlistScanNow" style="padding: 4px 10px; font-size: 0.78rem;" onclick="triggerWaitlistScanNow()" title="Scan latest releases via RSS 2.0 Feed">🔄 Scan RSS Feed</button>
           <button class="btn-outline" style="padding: 4px 10px;" onclick="closeWaitlistModal()">✖</button>
         </div>
       </div>
@@ -10197,8 +10200,8 @@ const INDEX_HTML = `<!DOCTYPE html>
       html += '</div>';
       html += '</div></div>';
 
-      html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🚀 aStreamer v2.5.4 Release</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Dual-Deck Mobile Polish, Cloudflare D1 Native SQLite Database, Sub-Millisecond Search &amp; Infinite Scaling.</p>';
-      html += '<button class="btn-outline" onclick="openChangelogModal()">📜 View Version 2.5.4 Release Notes & Architecture</button></div>';
+      html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🚀 aStreamer v2.5.5 Release</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Dual-Deck Mobile Polish, Cloudflare D1 Native SQLite Database, Sub-Millisecond Search &amp; Infinite Scaling.</p>';
+      html += '<button class="btn-outline" onclick="openChangelogModal()">📜 View Version 2.5.5 Release Notes & Architecture</button></div>';
 
       container.innerHTML = html;
     }
@@ -15057,17 +15060,25 @@ const INDEX_HTML = `<!DOCTYPE html>
         return;
       }
       const btn = document.getElementById('btnWaitlistScanNow');
-      if (btn) { btn.innerText = '⏳ Scanning...'; btn.disabled = true; }
-      showToast('🔄 Scanning hentaiasmr.moe frontpage for new releases...');
+      if (btn) { btn.innerText = '⏳ Scanning RSS...'; btn.disabled = true; }
+      showToast('🔄 Scanning HentaiASMR Moe RSS 2.0 feed for new releases...');
       try {
         const res = await apiFetch('/api/waitlist/scan', { method: 'POST' });
         const data = await res.json().catch(() => ({}));
-        showToast('✨ Scan complete! Discovered ' + (data.discoveredCount || 0) + ' works (' + (data.addedCount || 0) + ' new added to WaitList).');
+        const disc = (data.discoveredCount !== undefined ? data.discoveredCount : (data.count || 0));
+        const added = (data.addedCount !== undefined ? data.addedCount : 0);
+        showToast('✨ RSS Scan complete! Discovered ' + disc + ' works (' + added + ' new added to WaitList).');
+        if (typeof devLog === 'function') {
+          devLog('INFO', 'WAITLIST', 'WaitList RSS scan complete: ' + disc + ' discovered, ' + added + ' new added to WaitList');
+        }
         await openWaitlistModal();
       } catch (err) {
-        alert('Frontpage scan failed: ' + err.message);
+        alert('RSS scan failed: ' + err.message);
+        if (typeof devLog === 'function') {
+          devLog('ERROR', 'WAITLIST', 'WaitList RSS scan failed: ' + err.message);
+        }
       } finally {
-        if (btn) { btn.innerText = '🔄 Scan Now'; btn.disabled = false; }
+        if (btn) { btn.innerText = '🔄 Scan RSS Feed'; btn.disabled = false; }
       }
     }
 

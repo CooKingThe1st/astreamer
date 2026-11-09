@@ -4841,21 +4841,102 @@ async function scrapeHentaiAsmrFrontpageWorker() {
       rawCoverUrl: rawCoverUrl || '',
       postId: extra.postId || 0,
       postLink: extra.postLink || '',
-      source: 'hentaiasmr.moe',
+      source: extra.source || 'hentaiasmr.moe (RSS 2.0)',
       addedAt: new Date().toISOString()
     });
   }
 
-  // Strategy 1: WordPress REST API (Structured JSON)
+  // Strategy 1: High-Speed RSS 2.0 JSON Gateway (Bypasses Cloudflare WAF bot challenges completely)
+  try {
+    const rssJsonUrl = 'https://api.rss2json.com/v1/api.json?rss_url=' + encodeURIComponent('https://hentaiasmr.moe/feed/') + '&count=40';
+    const res = await fetch(rssJsonUrl, { signal: AbortSignal.timeout(8000) });
+    if (res.ok) {
+      const data = await res.json();
+      if (data && Array.isArray(data.items) && data.items.length > 0) {
+        for (const item of data.items) {
+          const title = item.title || '';
+          const link = item.link || '';
+          const desc = item.description || item.content || '';
+          const combined = `${title} ${link} ${desc}`;
+
+          const rjMatch = combined.match(/(?:RJ|VJ|BJ)\d{6,8}/i);
+          if (!rjMatch) continue;
+          const cleanRj = rjMatch[0].toUpperCase();
+
+          let cv = '';
+          let circle = '';
+          const cvMatch = desc.match(/(?:Voice|CV|CAST)[\s:：]+([^<\r\n]+)/i);
+          if (cvMatch) {
+            cv = cvMatch[1].replace(/&nbsp;/g, ' ').replace(/Age Ratings.*$/i, '').trim();
+          }
+
+          const circleMatch = desc.match(/(?:Circle|サークル|Studio|Maker)[\s:：]+([^<\r\n]+)/i);
+          if (circleMatch) {
+            circle = circleMatch[1].replace(/&nbsp;/g, ' ').replace(/Release.*$/i, '').trim();
+          }
+
+          const postIdMatch = (item.guid || '').match(/[?&]p=(\d+)/) || link.match(/(\d+)\.html/);
+          const postId = postIdMatch ? parseInt(postIdMatch[1], 10) : 0;
+
+          addWork(cleanRj, title.trim(), circle, cv, '', { postId, postLink: link, source: 'hentaiasmr.moe (RSS 2.0 Gateway)' });
+        }
+        if (discovered.length > 0) return discovered;
+      }
+    }
+  } catch (rssGatewayErr) {
+    console.error('[Worker Waitlist] RSS JSON Gateway failed, trying direct RSS feed:', rssGatewayErr);
+  }
+
+  // Strategy 2: Direct RSS 2.0 XML Feed Fetch
+  try {
+    const feedRes = await fetch('https://hentaiasmr.moe/feed/', {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+        'Accept': 'application/rss+xml,application/xml,text/xml,*/*;q=0.9',
+        'Referer': 'https://hentaiasmr.moe/'
+      },
+      signal: AbortSignal.timeout(6000)
+    });
+    if (feedRes.ok) {
+      const feedText = await feedRes.text();
+      const items = [...feedText.matchAll(/<item>([\s\S]*?)<\/item>/gi)];
+      for (const it of items) {
+        const raw = it[1];
+        const title = (raw.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>/i) || raw.match(/<title>([^<]*)<\/title>/i) || [])[1] || '';
+        const link = (raw.match(/<link>([^<]*)<\/link>/i) || [])[1] || '';
+        const desc = (raw.match(/<description><!\[CDATA\[(.*?)\]\]><\/description>/i) || raw.match(/<description>([^<]*)<\/description>/i) || [])[1] || '';
+        const combined = title + ' ' + link + ' ' + desc;
+        const rjMatch = combined.match(/(?:RJ|VJ|BJ)\d{6,8}/i);
+        if (rjMatch) {
+          const cleanRj = rjMatch[0].toUpperCase();
+          let cv = '';
+          let circle = '';
+          const cvMatch = desc.match(/(?:Voice|CV|CAST)[\s:：]+([^<\r\n]+)/i);
+          if (cvMatch) cv = cvMatch[1].replace(/&nbsp;/g, ' ').replace(/Age Ratings.*$/i, '').trim();
+          const circleMatch = desc.match(/(?:Circle|サークル|Studio|Maker)[\s:：]+([^<\r\n]+)/i);
+          if (circleMatch) circle = circleMatch[1].replace(/&nbsp;/g, ' ').replace(/Release.*$/i, '').trim();
+
+          const postIdMatch = link.match(/(\d+)\.html/);
+          const postId = postIdMatch ? parseInt(postIdMatch[1], 10) : 0;
+          addWork(cleanRj, title.trim() || `Work ${cleanRj}`, circle, cv, '', { postId, postLink: link.trim(), source: 'hentaiasmr.moe (Direct RSS)' });
+        }
+      }
+      if (discovered.length > 0) return discovered;
+    }
+  } catch (feedErr) {
+    console.error('[Worker Waitlist] Direct RSS feed error:', feedErr);
+  }
+
+  // Strategy 3: WordPress REST API fallback
   try {
     const res = await fetch('https://hentaiasmr.moe/wp-json/wp/v2/posts?page=1&per_page=20&_embed=1', {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
         'Accept': 'application/json',
         'Referer': 'https://hentaiasmr.moe/'
-      }
+      },
+      signal: AbortSignal.timeout(5000)
     });
-
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data) && data.length > 0) {
@@ -4867,7 +4948,7 @@ async function scrapeHentaiAsmrFrontpageWorker() {
 
           const rjMatch = combinedText.match(/(?:RJ|VJ|BJ)\d{6,8}/i);
           if (!rjMatch) continue;
-          const rjCode = rjMatch[0].toUpperCase();
+          const cleanRj = rjMatch[0].toUpperCase();
 
           let cv = '';
           let circle = '';
@@ -4879,60 +4960,30 @@ async function scrapeHentaiAsmrFrontpageWorker() {
 
           const featured = p._embedded && p._embedded['wp:featuredmedia'] && p._embedded['wp:featuredmedia'][0];
           const coverSrc = (featured && (featured.source_url || featured.media_details?.sizes?.full?.source_url)) || '';
-          addWork(rjCode, titleRendered, circle, cv, coverSrc, { postId: p.id || 0, postLink: p.link || '' });
+          addWork(cleanRj, titleRendered, circle, cv, coverSrc, { postId: p.id || 0, postLink: p.link || '', source: 'hentaiasmr.moe (REST API)' });
         }
         if (discovered.length > 0) return discovered;
       }
     }
   } catch (apiErr) {
-    console.error('[Worker Waitlist Scraper] REST API error, falling back to HTML:', apiErr);
+    console.error('[Worker Waitlist] REST API error:', apiErr);
   }
 
-  // Strategy 1.5: WordPress RSS 2.0 Feed fallback (highly reliable & unblocked)
-  if (discovered.length === 0) {
-    try {
-      const feedRes = await fetch('https://hentaiasmr.moe/feed/', {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
-          'Accept': 'application/rss+xml,application/xml,text/xml,*/*;q=0.9',
-          'Referer': 'https://hentaiasmr.moe/'
-        }
-      });
-      if (feedRes.ok) {
-        const feedText = await feedRes.text();
-        const items = [...feedText.matchAll(/<item>([\s\S]*?)<\/item>/gi)];
-        for (const it of items) {
-          const raw = it[1];
-          const title = (raw.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>/i) || raw.match(/<title>([^<]*)<\/title>/i) || [])[1] || '';
-          const link = (raw.match(/<link>([^<]*)<\/link>/i) || [])[1] || '';
-          const desc = (raw.match(/<description><!\[CDATA\[(.*?)\]\]><\/description>/i) || raw.match(/<description>([^<]*)<\/description>/i) || [])[1] || '';
-          const combined = title + ' ' + link + ' ' + desc;
-          const rjMatch = combined.match(/(?:RJ|VJ|BJ)\d{6,8}/i);
-          if (rjMatch) {
-            const cleanRj = rjMatch[0].toUpperCase();
-            addWork(cleanRj, title.trim() || `Work ${cleanRj}`, '', '', '', { postLink: link.trim() });
-          }
-        }
-      }
-    } catch (feedErr) {
-      console.error('[Worker Waitlist Scraper] RSS feed fallback failed:', feedErr);
-    }
-  }
-
-  // Strategy 2: Direct Frontpage HTML fallback
+  // Strategy 4: Direct Frontpage HTML fallback
   try {
     const res = await fetch('https://hentaiasmr.moe/', {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Referer': 'https://hentaiasmr.moe/'
-      }
+      },
+      signal: AbortSignal.timeout(5000)
     });
     if (res.ok) {
       const html = await res.text();
       const rjMatches = html.match(/(?:RJ|VJ|BJ)\d{6,8}/gi) || [];
       for (const rj of rjMatches) {
-        addWork(rj, `Work ${rj.toUpperCase()}`, '', '');
+        addWork(rj, `Work ${rj.toUpperCase()}`, '', '', '', { source: 'hentaiasmr.moe (HTML Frontpage)' });
       }
     }
   } catch (htmlErr) {
@@ -9211,7 +9262,7 @@ const INDEX_HTML = `<!DOCTYPE html>
           <div style="width: 36px; height: 36px; border-radius: 10px; background: var(--accent-gradient, linear-gradient(135deg, #ff7a00, #ff9500)); display: flex; align-items: center; justify-content: center; font-size: 1.3rem; box-shadow: 0 0 14px var(--accent-glow);">🚀</div>
           <div>
             <h3 style="font-size: 1.3rem; font-weight: 800;">aStreamer Release Notes</h3>
-            <span style="font-size: 0.8rem; color: var(--accent); font-weight: 700;">Version 2.5.4 Official Release (Upstream Health &amp; Live LEDs)</span>
+            <span style="font-size: 0.8rem; color: var(--accent); font-weight: 700;">Version 2.5.5 Official Release (Upstream Health &amp; Live LEDs)</span>
           </div>
         </div>
         <button class="btn-outline" style="padding: 4px 10px;" onclick="closeChangelogModal()">✖</button>
@@ -9219,7 +9270,7 @@ const INDEX_HTML = `<!DOCTYPE html>
       
       <div style="color: #d1d5db; font-size: 0.9rem; line-height: 1.6; display: flex; flex-direction: column; gap: 14px;">
         <div style="background: rgba(34, 197, 94, 0.12); border: 1px solid rgba(34, 197, 94, 0.4); padding: 14px; border-radius: 10px;">
-          <h4 style="color: #4ade80; font-weight: 700; margin-bottom: 4px;">🌐 Live Upstream Network Diagnostics &amp; Status LEDs & Dev Logging (v2.5.4)</h4>
+          <h4 style="color: #4ade80; font-weight: 700; margin-bottom: 4px;">🌐 Live Upstream Network Diagnostics &amp; Status LEDs & RSS WaitList Ingestion (v2.5.5)</h4>
           <p style="color: var(--text-muted); font-size: 0.85rem;">Added persistent real-time glowing LED indicators in sidebar &amp; mobile header for DLsite, Chobit Sample Audio, HentaiASMR Moe, JapaneseASMR, and ASMR.one. Includes on-demand 1-click test button and latency measurements in Settings.</p>
         </div>
 
@@ -9444,7 +9495,8 @@ const INDEX_HTML = `<!DOCTYPE html>
           </div>
         </div>
         <div style="display: flex; align-items: center; gap: 8px;">
-          <button class="btn-outline" id="btnWaitlistScanNow" style="padding: 4px 10px; font-size: 0.78rem;" onclick="triggerWaitlistScanNow()" title="Scan frontpage now">🔄 Scan Now</button>
+          <span style="font-size: 0.72rem; padding: 2px 7px; background: rgba(56, 189, 248, 0.12); border: 1px solid rgba(56, 189, 248, 0.3); border-radius: 6px; color: #38bdf8; display: inline-flex; align-items: center; gap: 4px;" title="Active feed source: HentaiASMR Moe RSS 2.0 (40 items)">📡 RSS 2.0 Feed</span>
+          <button class="btn-outline" id="btnWaitlistScanNow" style="padding: 4px 10px; font-size: 0.78rem;" onclick="triggerWaitlistScanNow()" title="Scan latest releases via RSS 2.0 Feed">🔄 Scan RSS Feed</button>
           <button class="btn-outline" style="padding: 4px 10px;" onclick="closeWaitlistModal()">✖</button>
         </div>
       </div>
@@ -15493,8 +15545,8 @@ const INDEX_HTML = `<!DOCTYPE html>
       html += '</div>';
       html += '</div></div>';
 
-      html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🚀 aStreamer v2.5.4 Release</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Dual-Deck Mobile Polish, Cloudflare D1 Native SQLite Database, Sub-Millisecond Search &amp; Infinite Scaling.</p>';
-      html += '<button class="btn-outline" onclick="openChangelogModal()">📜 View Version 2.5.4 Release Notes & Architecture</button></div>';
+      html += '<div class="settings-card"><h3 style="font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;">🚀 aStreamer v2.5.5 Release</h3><p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 16px;">Dual-Deck Mobile Polish, Cloudflare D1 Native SQLite Database, Sub-Millisecond Search &amp; Infinite Scaling.</p>';
+      html += '<button class="btn-outline" onclick="openChangelogModal()">📜 View Version 2.5.5 Release Notes & Architecture</button></div>';
 
       container.innerHTML = html;
     }
@@ -20340,17 +20392,25 @@ const INDEX_HTML = `<!DOCTYPE html>
         return;
       }
       const btn = document.getElementById('btnWaitlistScanNow');
-      if (btn) { btn.innerText = '⏳ Scanning...'; btn.disabled = true; }
-      showToast('🔄 Scanning hentaiasmr.moe frontpage for new releases...');
+      if (btn) { btn.innerText = '⏳ Scanning RSS...'; btn.disabled = true; }
+      showToast('🔄 Scanning HentaiASMR Moe RSS 2.0 feed for new releases...');
       try {
         const res = await apiFetch('/api/waitlist/scan', { method: 'POST' });
         const data = await res.json().catch(() => ({}));
-        showToast('✨ Scan complete! Discovered ' + (data.discoveredCount || 0) + ' works (' + (data.addedCount || 0) + ' new added to WaitList).');
+        const disc = (data.discoveredCount !== undefined ? data.discoveredCount : (data.count || 0));
+        const added = (data.addedCount !== undefined ? data.addedCount : 0);
+        showToast('✨ RSS Scan complete! Discovered ' + disc + ' works (' + added + ' new added to WaitList).');
+        if (typeof devLog === 'function') {
+          devLog('INFO', 'WAITLIST', 'WaitList RSS scan complete: ' + disc + ' discovered, ' + added + ' new added to WaitList');
+        }
         await openWaitlistModal();
       } catch (err) {
-        alert('Frontpage scan failed: ' + err.message);
+        alert('RSS scan failed: ' + err.message);
+        if (typeof devLog === 'function') {
+          devLog('ERROR', 'WAITLIST', 'WaitList RSS scan failed: ' + err.message);
+        }
       } finally {
-        if (btn) { btn.innerText = '🔄 Scan Now'; btn.disabled = false; }
+        if (btn) { btn.innerText = '🔄 Scan RSS Feed'; btn.disabled = false; }
       }
     }
 

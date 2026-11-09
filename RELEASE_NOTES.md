@@ -1,3 +1,16 @@
+## [2.5.5] - 2026-11-09
+
+### Added & Enhanced
+- **First-Class RSS 2.0 Feed WaitList Pipeline**:
+  - Upgraded `scrapeHentaiAsmrFrontpageWorker()` (Cloudflare Worker) and `scrapeHentaiAsmrFrontpage()` (Express) to prioritize the **HentaiASMR Moe RSS 2.0 Feed** via high-speed JSON gateways (`api.rss2json.com`) and direct XML feed streaming.
+  - Completely circumvents Cloudflare Bot Fight Mode / Turnstile 403 blocks that previously hindered automated REST API waitlist discovery.
+  - Extracts 40 latest releases per scan with parsed RJ codes, circle names, voice actors (CV), release dates, and post links.
+- **Interactive WaitList RSS Ingestion UI**:
+  - Added a dedicated `📡 RSS 2.0 Feed` active source indicator badge inside the WaitList modal.
+  - Updated the scan trigger button to **"🔄 Scan RSS Feed"** with rich feedback toasts and Dev Activity Log telemetry (`[WAITLIST]`).
+
+---
+
 ## [2.5.4] - 2026-11-06
 
 ### Fixed & Enhanced
